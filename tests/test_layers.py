@@ -20,11 +20,17 @@ from hypothesis import strategies as st
 
 from nzcvm.components import Component
 from nzcvm.config.layers.clamp import Bound, ClampLayerConfig
+from nzcvm.config.layers.offshore import (
+    DepthModel,
+    OffshoreBasinConfig,
+    VelocityModel1D,
+)
+from nzcvm.coordinates import Coordinate
 from nzcvm.grids.grid import Grid
 from nzcvm.layers.clamp import ClampLayer
 from nzcvm.layers.core import Layer
 from nzcvm.layers.dummy import ConstantLayer, CountingLayer, RecordingLayer
-from nzcvm.layers.offshore import step_interpolator
+from nzcvm.layers.offshore import OffshoreBasinLayer, step_interpolator
 from nzcvm.qualities import Qualities
 from nzcvm.query import ModelRange
 from tests.conftest import make_grid
@@ -462,3 +468,113 @@ def test_adhoc_functional_layer_deserialises(isolated_layer_registry: None) -> N
     result = layer(make_grid())
     assert float(result.vp.max()) == pytest.approx(0.0)
     assert float(result.vs.max()) == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# OffshoreBasinLayer: a basin outcropping at the surface vetoes the column
+# ---------------------------------------------------------------------------
+
+BASIN_BOTTOM_DEPTH = 50.0
+BASIN_VS = 111.0
+TOMO_VS = 3333.0
+OFFSHORE_VS = 777.0
+
+
+class _OutcroppingBasinLayer(Layer):
+    """Terminal stub: a basin outcrops over ``i == 0`` but bottoms out at 50 m.
+
+    This is precisely the case the lateral veto exists for.  Below the basin
+    bottom the basin is absent (``alpha == 0``), so alpha compositing on its
+    own would happily let the offshore profile through.
+    """
+
+    def __init__(self, geometry) -> None:
+        from nzcvm.layers.dummy import _NullConfig
+
+        super().__init__(_NullConfig(), geometry, None)
+
+    def __call__(
+        self, grid: Grid, model_range: ModelRange = ModelRange.ALL
+    ) -> Qualities:
+        from nzcvm.qualities import QualitiesSchema
+
+        shape = grid.x.shape
+        in_basin = np.zeros(shape, dtype=bool)
+        in_basin[0] = True
+        in_basin &= grid.depth.values < BASIN_BOTTOM_DEPTH
+
+        background = 0.0 if model_range == ModelRange.BASINS else TOMO_VS
+        vs = np.where(in_basin, BASIN_VS, background).astype(np.float32)
+        ones = np.ones(shape, dtype=np.float32)
+        return QualitiesSchema.new(
+            rho=ones * 2000.0,
+            vp=ones * 6000.0,
+            vs=vs,
+            qp=ones * 100.0,
+            qs=ones * 50.0,
+            alpha=in_basin.astype(np.float32),
+        )
+
+
+def _offshore_config() -> OffshoreBasinConfig:
+    """Offshore profile with one distinctive velocity over the top 1000 m."""
+    return OffshoreBasinConfig(
+        basin_depth=[
+            DepthModel(distance=0.0, bottom_depth=1000.0),
+            DepthModel(distance=50_000.0, bottom_depth=1000.0),
+        ],
+        # ``_build_model_interpolator`` keeps only layers shallower than the
+        # deepest basin_depth entry, so the first must sit above 1000 m.
+        model=[
+            VelocityModel1D(
+                bottom_depth=500.0,
+                rho=1810.0,
+                vp=1800.0,
+                vs=OFFSHORE_VS,
+                qp=100.0,
+                qs=50.0,
+                alpha=1.0,
+            ),
+            VelocityModel1D(
+                bottom_depth=5000.0,
+                rho=1810.0,
+                vp=1800.0,
+                vs=OFFSHORE_VS,
+                qp=100.0,
+                qs=50.0,
+                alpha=1.0,
+            ),
+        ],
+    )
+
+
+def _run_offshore(depth0: float) -> Qualities:
+    """Run the offshore layer over an entirely-offshore grid at *depth0*."""
+    grid = make_grid(nx=2, ny=2, nz=2, depth0=depth0)
+    grid[Coordinate.COASTLINE] = (
+        (Coordinate.I, Coordinate.J),
+        np.full((2, 2), 5_000.0, dtype=np.float32),  # 5 km offshore everywhere
+    )
+    layer = OffshoreBasinLayer(_offshore_config(), GEOM, _OutcroppingBasinLayer(GEOM))
+    return layer(grid)
+
+
+def test_offshore_suppressed_under_a_basin_that_reaches_the_surface() -> None:
+    """A surface basin disables the offshore profile for the whole column."""
+    vs = _run_offshore(depth0=100.0).vs.values
+
+    # i == 0 outcrops a basin.  The basin has bottomed out well above 100 m,
+    # but the offshore profile must still stay out of the column.
+    assert np.all(np.isclose(vs[0], TOMO_VS))
+
+    # i == 1 is basin-free and offshore, so the profile applies.
+    assert np.all(np.isclose(vs[1], OFFSHORE_VS))
+
+
+@pytest.mark.parametrize("depth0", [100.0, 500.0, 900.0])
+def test_offshore_veto_holds_below_the_basin_bottom(depth0: float) -> None:
+    """The veto is column-wide: it does not lapse below the basin surface."""
+    vs = _run_offshore(depth0=depth0).vs.values
+
+    assert not np.any(np.isclose(vs[0], OFFSHORE_VS))
+    assert np.all(np.isclose(vs[1], OFFSHORE_VS))

@@ -28,6 +28,7 @@ from nzcvm.config.layers.offshore import (
     VelocityModel1D,
 )
 from nzcvm.coordinates import Coordinate
+from nzcvm.grids.grid import grid_like_at_depth
 from nzcvm.layers.core import Layer
 from nzcvm.qualities import QualitiesSchema
 from nzcvm.query import ModelRange
@@ -165,12 +166,6 @@ class OffshoreBasinLayer(Layer[OffshoreBasinConfig], config_cls=OffshoreBasinCon
             logger.debug("Chunk below maximum basin depth, skipping calculation.")
             return self.next_layer(grid, model_range=model_range)
 
-        basins = self.next_layer(grid, model_range=ModelRange.BASINS)
-
-        if np.allclose(basins.alpha, 1.0):
-            logger.debug("Chunk inside modelled basin, skipping offshore calculation.")
-            return basins
-
         logger.debug("Calculating offshore distances")
         offshore_distance = grid[Coordinate.COASTLINE]
         logger.debug("Offshore distances calculated")
@@ -188,6 +183,28 @@ class OffshoreBasinLayer(Layer[OffshoreBasinConfig], config_cls=OffshoreBasinCon
             logger.debug("Chunk below basin surface, skipping calculation.")
             return self.next_layer(grid, model_range=model_range)
 
+        # A basin that reaches the surface owns the whole column beneath it, so
+        # the offshore profile is suppressed there. This mirrors the Ely GTL
+        # taper, and restores the lateral basin veto the pre-nzcvm NZVM code
+        # applied via `in_any_basin_lat_lon`.
+        surface_layer = grid_like_at_depth(grid, 0.0)
+        basin_at_surface = self.next_layer(
+            surface_layer, model_range=ModelRange.BASINS
+        ).squeeze()
+        in_basin = xr.apply_ufunc(np.isclose, basin_at_surface.alpha, 1.0)
+
+        if in_basin.all():
+            logger.debug(
+                "Chunk inside basin at surface, skipping offshore calculation."
+            )
+            return self.next_layer(grid, model_range=model_range)
+
+        basins = self.next_layer(grid, model_range=ModelRange.BASINS)
+
+        if np.allclose(basins.alpha, 1.0):
+            logger.debug("Chunk inside modelled basin, skipping offshore calculation.")
+            return basins
+
         background = self.next_layer(grid, model_range=model_range)
         offshore_qualities = self.model.qualities(grid.depth)
 
@@ -195,7 +212,7 @@ class OffshoreBasinLayer(Layer[OffshoreBasinConfig], config_cls=OffshoreBasinCon
         # where the point is offshore and above the modelled basin surface.
         # Equivalent to xr.where(mask, blend(basins, offshore), background) but
         # avoids allocating a new result array.
-        mask = is_above_basin & is_offshore
+        mask = is_above_basin & is_offshore & ~in_basin
         qualities.blend(basins, offshore_qualities, out=background, where=mask)
 
         return background
