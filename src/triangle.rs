@@ -244,7 +244,10 @@ mod tests {
             let got = [b.x, b.y, b.z];
             for (j, g) in got.iter().enumerate() {
                 let want = if i == j { 1.0 } else { 0.0 };
-                assert!((g - want).abs() < 1e-5, "vertex {i} coord {j}: {g} != {want}");
+                assert!(
+                    (g - want).abs() < 1e-5,
+                    "vertex {i} coord {j}: {g} != {want}"
+                );
             }
         }
     }

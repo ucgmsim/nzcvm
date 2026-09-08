@@ -1,5 +1,5 @@
 use criterion::{
-    criterion_group, criterion_main, AxisScale, BenchmarkId, Criterion, PlotConfiguration,
+    AxisScale, BenchmarkId, Criterion, PlotConfiguration, criterion_group, criterion_main,
 };
 use nalgebra::Point3;
 use nzcvm::mesh::MeshModel;

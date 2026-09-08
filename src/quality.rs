@@ -167,10 +167,20 @@ mod tests {
     fn test_blend_commutative_alpha() {
         // Alpha composition is always commutative regardless of alpha values
         let a = Quality {
-            rho: 2700.0, vp: 6000.0, vs: 3500.0, qp: 200.0, qs: 100.0, alpha: 0.6,
+            rho: 2700.0,
+            vp: 6000.0,
+            vs: 3500.0,
+            qp: 200.0,
+            qs: 100.0,
+            alpha: 0.6,
         };
         let b = Quality {
-            rho: 1000.0, vp: 1500.0, vs: 0.0, qp: 50.0, qs: 25.0, alpha: 0.4,
+            rho: 1000.0,
+            vp: 1500.0,
+            vs: 0.0,
+            qp: 50.0,
+            qs: 25.0,
+            alpha: 0.4,
         };
         let ab = a.blend(&b);
         let ba = b.blend(&a);
@@ -181,10 +191,20 @@ mod tests {
     fn test_blend_non_commutative_materials() {
         // With different materials and alphas, blend order changes result
         let a = Quality {
-            rho: 2700.0, vp: 6000.0, vs: 3500.0, qp: 200.0, qs: 100.0, alpha: 0.6,
+            rho: 2700.0,
+            vp: 6000.0,
+            vs: 3500.0,
+            qp: 200.0,
+            qs: 100.0,
+            alpha: 0.6,
         };
         let b = Quality {
-            rho: 1000.0, vp: 1500.0, vs: 0.0, qp: 50.0, qs: 25.0, alpha: 0.4,
+            rho: 1000.0,
+            vp: 1500.0,
+            vs: 0.0,
+            qp: 50.0,
+            qs: 25.0,
+            alpha: 0.4,
         };
         let ab = a.blend(&b);
         let ba = b.blend(&a);
@@ -197,10 +217,20 @@ mod tests {
     #[test]
     fn test_blend_epsilon_shortcut_transparent_self() {
         let a = Quality {
-            rho: 1.0, vp: 1.0, vs: 1.0, qp: 0.0, qs: 1.0, alpha: 0.0,
+            rho: 1.0,
+            vp: 1.0,
+            vs: 1.0,
+            qp: 0.0,
+            qs: 1.0,
+            alpha: 0.0,
         };
         let b = Quality {
-            rho: 99.0, vp: 99.0, vs: 99.0, qp: 99.0, qs: 99.0, alpha: 0.5,
+            rho: 99.0,
+            vp: 99.0,
+            vs: 99.0,
+            qp: 99.0,
+            qs: 99.0,
+            alpha: 0.5,
         };
         let blended = a.blend(&b);
         assert_relative_eq!(blended.rho, b.rho, epsilon = 1e-5);
@@ -210,10 +240,20 @@ mod tests {
     #[test]
     fn test_blend_epsilon_shortcut_transparent_rhs() {
         let a = Quality {
-            rho: 10.0, vp: 10.0, vs: 10.0, qp: 10.0, qs: 10.0, alpha: 0.5,
+            rho: 10.0,
+            vp: 10.0,
+            vs: 10.0,
+            qp: 10.0,
+            qs: 10.0,
+            alpha: 0.5,
         };
         let b = Quality {
-            rho: 99.0, vp: 99.0, vs: 99.0, qp: 0.0, qs: 99.0, alpha: 0.0,
+            rho: 99.0,
+            vp: 99.0,
+            vs: 99.0,
+            qp: 0.0,
+            qs: 99.0,
+            alpha: 0.0,
         };
         let blended = a.blend(&b);
         assert_relative_eq!(blended.rho, a.rho, epsilon = 1e-5);
@@ -225,10 +265,20 @@ mod tests {
         // alpha_a=0.5, alpha_b=0.5 → a0=2/3, a1=1/3, qp 100/300 → harmonic 900/7
         // Arithmetic mean would give 500/3 ≈ 166.667
         let a = Quality {
-            rho: 1.0, vp: 1.0, vs: 1.0, qp: 100.0, qs: 1.0, alpha: 0.5,
+            rho: 1.0,
+            vp: 1.0,
+            vs: 1.0,
+            qp: 100.0,
+            qs: 1.0,
+            alpha: 0.5,
         };
         let b = Quality {
-            rho: 1.0, vp: 1.0, vs: 1.0, qp: 300.0, qs: 1.0, alpha: 0.5,
+            rho: 1.0,
+            vp: 1.0,
+            vs: 1.0,
+            qp: 300.0,
+            qs: 1.0,
+            alpha: 0.5,
         };
         let blended = a.blend(&b);
         assert_relative_eq!(blended.qp, 900.0 / 7.0, epsilon = 1e-3);

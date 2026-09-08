@@ -227,9 +227,10 @@ mod tests {
             5.0,
             epsilon = 1e-4
         );
-        assert!(tree
-            .query(Point3::new(10.0, 10.0, 10.0), None, 0, 255)
-            .is_none());
+        assert!(
+            tree.query(Point3::new(10.0, 10.0, 10.0), None, 0, 255)
+                .is_none()
+        );
     }
 
     #[test]
@@ -287,7 +288,11 @@ mod tests {
             epsilon = 1e-4
         );
         // hi == priority
-        assert_relative_eq!(tree.query(PT, None, 0, 10).unwrap().rho, 5.0, epsilon = 1e-4);
+        assert_relative_eq!(
+            tree.query(PT, None, 0, 10).unwrap().rho,
+            5.0,
+            epsilon = 1e-4
+        );
 
         // Just outside on either side must miss entirely.
         assert!(tree.query(PT, None, 11, 20).is_none());

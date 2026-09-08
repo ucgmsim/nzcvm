@@ -59,7 +59,12 @@ impl Simplex {
     /// queries.
     ///
     /// Returns `None` if the four vertices are coplanar (degenerate simplex).
-    pub fn new(c0: Point3<Real>, c1: Point3<Real>, c2: Point3<Real>, c3: Point3<Real>) -> Option<Self> {
+    pub fn new(
+        c0: Point3<Real>,
+        c1: Point3<Real>,
+        c2: Point3<Real>,
+        c3: Point3<Real>,
+    ) -> Option<Self> {
         let m = Matrix3::from_columns(&[c0 - c3, c1 - c3, c2 - c3]);
         let inv_matrix = m.try_inverse()?;
 

@@ -1,4 +1,4 @@
-use crate::quality::{barycentric_interpolate, Quality};
+use crate::quality::{Quality, barycentric_interpolate};
 use crate::real::Real;
 use crate::simplex::Simplex;
 use deepsize::{Context, DeepSizeOf};
@@ -11,7 +11,7 @@ pub trait Queryable {
     /// Return the quality at `point` inside `simplex`, looking up vertex
     /// properties from the qualities slice.
     fn quality_at(&self, qualities: &[Quality], simplex: &Simplex, point: &Point3<Real>)
-        -> Quality;
+    -> Quality;
 }
 
 /// Per-simplex model variant: either constant or barycentric interpolation.
@@ -92,10 +92,7 @@ impl ModelMap {
     /// Build a map from a list of per-simplex models, collapsing to a
     /// homogeneous representation when possible.
     pub fn from_models(models: Vec<Model>) -> Self {
-        if models
-            .iter()
-            .all(|m| matches!(m, Model::Interpolate(_)))
-        {
+        if models.iter().all(|m| matches!(m, Model::Interpolate(_))) {
             ModelMap::Interpolate(
                 models
                     .into_iter()
