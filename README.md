@@ -1,9 +1,9 @@
 # NZCVM
 
-New Zealand Community Velocity Model — tools for building and querying
+New Zealand Community Velocity Model: tools for building and querying
 tetrahedral velocity models.
 
-A **velocity model** is a collection of tetrahedral meshes. Each mesh carries
+A velocity model is a collection of tetrahedral meshes. Each mesh carries
 seismic velocity (Vp, Vs), density (rho) and quality-factor (Qp, Qs) cell data,
 plus a priority that controls blending where meshes overlap. `nzcvm generate`
 samples those meshes onto a structured 3-D grid, pushes the result through a
@@ -23,7 +23,7 @@ section is the Banks Peninsula volcanics.*
 ## Build
 
 The core query engine is a Rust extension built with
-[maturin](https://github.com/PyO3/maturin). Python ≥ 3.13 is required.
+[maturin](https://github.com/PyO3/maturin). Requires Python 3.13 or newer.
 
 `uv` is the preferred build tool for this repo:
 
@@ -31,7 +31,7 @@ The core query engine is a Rust extension built with
 uv sync   # creates a venv and builds the Rust extension
 ```
 
-Alternatively, build and install the wheel by hand:
+Or build and install the wheel by hand:
 
 ```sh
 pip install maturin
@@ -44,9 +44,9 @@ pip install target/wheels/*.whl --force-reinstall
 | Dependency              | Purpose                                           |
 |-------------------------|---------------------------------------------------|
 | Rust toolchain (stable) | Compiling the extension (if building from source) |
-| HDF5 ≥ 1.12             | Runtime requirement of h5py                       |
+| HDF5 ≥ 1.12             | Needed at runtime by h5py                         |
 
-All Python dependencies are declared in `pyproject.toml`. PyVista is an
+`pyproject.toml` declares the Python dependencies. PyVista is an
 optional visualisation dependency, needed only for `nzcvm view`:
 
 ```sh
@@ -98,9 +98,8 @@ Useful `generate` options:
 
 A config is a TOML, YAML or JSON file with three sections: `metadata`, `grid`,
 and an ordered list of `layers`. Config objects are plain dataclasses
-deserialised by mashumaro, so they can equally be built in pure Python. They
-carry lightweight validation — bounds checks, layer ordering, and layer
-dependencies.
+deserialised by mashumaro, so you can also build them in pure Python. They
+validate bounds, layer ordering and layer dependencies.
 
 ### Grid types
 
@@ -130,11 +129,11 @@ j = 256
 
 ### Layers
 
-Layers are listed in order, outermost first: the first entry is called first
-and delegates down the chain, so the **last** entry must be `query`. Some
-layers declare dependencies — `ely` and `offshore` both require the
-`coastline` coordinate, so a `coastline` layer must appear before them. The
-config raises a validation error if a requirement is unmet.
+Layers run in the order listed, outermost first. Each one delegates down the
+chain, so the **last** entry must be `query`. Some layers declare
+dependencies: `ely` and `offshore` both need the `coastline` coordinate, so a
+`coastline` layer has to appear before them. The config raises a validation
+error if a dependency is missing.
 
 | Type        | Description                                                             |
 |-------------|--------------------------------------------------------------------------|
@@ -143,7 +142,7 @@ config raises a validation error if a requirement is unmet.
 | `offshore`  | 1-D offshore/coastal velocity profile (requires `coastline`)            |
 | `coastline` | Computes signed distance to the coastline, provides `coastline`         |
 | `clamp`     | Clamps components and the Vp/Vs ratio to physical bounds                |
-| `backus`    | Backus averaging — alpha-weighted super-sampling over each depth cell   |
+| `backus`    | Alpha-weighted super-sampling over each depth cell                     |
 | custom      | Any layer registered with `@functional_layer` or as a `Layer` subclass  |
 
 ### Output formats
@@ -165,7 +164,7 @@ See `examples/` for complete, working configs:
 |-------------------------------|-----------------------------------------------------|
 | `2014p240655.toml`            | SW4 grid, full layer chain                          |
 | `2014p240655_emod3d.toml`     | The same domain as an EMOD3D grid                   |
-| `whole_country.toml`          | `regular` grid over all of New Zealand              |
+| `whole_country.toml`          | `regular` grid over New Zealand                     |
 | `near_fault_config.toml`      | A custom layer (`examples/near_fault.py`) in a config |
 
 ```toml
@@ -242,9 +241,9 @@ plt.pcolormesh(grid.x[:, 100, :], -grid.z[:, 100, :], qual.vs[:, 100, :])
 
 This block generates a depth slice and a cross-section through an 80 × 80 × 20
 km Wellington domain at 400 m horizontal resolution. Both sit high in the
-section on purpose: the Wellington basins are shallow, with a low-velocity cap
-only 100–400 m thick over most of the domain, so a slice at 500 m would cut
-almost entirely below them.
+section because the Wellington basins are shallow: the low-velocity cap runs
+100 to 400 m thick over most of the domain, so a slice at 500 m cuts almost
+entirely below it.
 
 ![Vs through a generated Wellington-region velocity model: a map slice 200 m below the surface and a west–east cross-section](docs/images/wellington_vs.png)
 
@@ -272,12 +271,12 @@ quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0)
 print(quality.vp, quality.vs)   # None if the point is outside every mesh
 ```
 
-`load_models` takes an iterable of mesh paths — anything `xarray` can open
+`load_models` takes an iterable of mesh paths, anything `xarray` can open
 (the meshes shipped in `models/` are Zarr). Coordinates are in the model's
 projected CRS with `z` positive downwards.
 
 `query_many` is the vectorised form and returns a `Qualities` dataset.
-`explain` shows how the blend was arrived at:
+`explain` shows which models contributed to the blend:
 
 ```python
 >>> tree.explain(1_749_150.0, 5_428_150.0, 100.0)
@@ -289,7 +288,7 @@ projected CRS with `z` positive downwards.
 ```
 
 Lower priority numbers win. Overlapping models are alpha-composited until the
-cumulative alpha reaches 1.0. `ModelRange` restricts a query by priority band —
+cumulative alpha reaches 1.0. `ModelRange` restricts a query by priority band:
 `BASINS` is 0–127, `TOMOGRAPHY` is 128–255, `ALL` is both.
 
 ---
@@ -309,8 +308,7 @@ Tests marked `real_data` need a model directory supplied via `MODEL_PATH`.
 
 ## Code architecture
 
-The package is structured in four subpackages, each with a narrowly defined
-responsibility.
+Four subpackages, each with a narrow responsibility.
 
 ### `nzcvm.models`
 
@@ -324,7 +322,7 @@ the tetrahedral and structured mesh dataclasses and their I/O.
 
 A `Layer` accepts a `Grid` (an xarray Dataset of 3-D coordinates) and a
 `ModelRange`, and returns `Qualities`. Layers chain via constructor injection
-(`next_layer`). Layers register themselves against a config class through an
+(`next_layer`), and register themselves against a config class through an
 `__init_subclass__` hook on `Layer`.
 
 Built-in layers: `QueryLayer`, `ElyLayer`, `OffshoreBasinLayer`,
@@ -355,7 +353,7 @@ typed velocity, density and quality-factor arrays returned by every layer.
 
 ## Extending with custom grids and layers
 
-The package is designed for plug-and-play extension of both grids and layers.
+Both grids and layers are extension points.
 
 ### Functional layers (simple case)
 
@@ -398,7 +396,7 @@ mask to perturb Vs near a fault zone.
 
 For layers that need state, caching, or a non-trivial config, subclass `Layer`
 and pass a matching `LayerConfig` via the `config_cls` keyword. A layer's
-`__init__` receives `(config, geometry, next_layer)` — `geometry` is the
+`__init__` receives `(config, geometry, next_layer)`. The `geometry` is the
 domain footprint, useful for pruning resources at construction time.
 
 ```python
@@ -447,8 +445,8 @@ surface_floor = 500.0
 gradient = 0.05
 ```
 
-Importing the module is what registers the layer, so make sure it is imported
-before the config is decoded.
+Importing the module registers the layer, so import it before decoding the
+config.
 
 ### Custom grid types
 
@@ -505,8 +503,8 @@ print(qualities.vs.values.ravel())
 
 To drive a grid from a config file, register a builder against a `GridConfig`
 subclass. `build_grids_from_config` is a `functools.singledispatch` function
-returning a `dict[str, Grid]`. One entry per grid, since SW4 domains produce
-several refinement meshes.
+returning a `dict[str, Grid]`. One entry per grid, since an SW4 domain
+produces one mesh per refinement level.
 
 ```python
 from dataclasses import dataclass
