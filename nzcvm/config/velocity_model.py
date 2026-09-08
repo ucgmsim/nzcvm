@@ -113,6 +113,7 @@ class VelocityModelConfig(ConfigObject):
         Returns
         -------
         VelocityModelConfig
+            The parsed configuration.
         """
         config_path = Path(config_path)
         decoder = (

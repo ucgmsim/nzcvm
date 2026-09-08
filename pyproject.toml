@@ -13,13 +13,15 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
   "dask[array,diagnostics,distributed]>=2026.3.0",
+  "distributed>=2026.3.0",
   "geopandas>=1.1.3",
   "gmsh>=4.15.2",
   "h5py>=3.16.0",
   "hdf5plugin>=6.0.0",
+  "joblib>=1.5.3",
   "mashumaro[toml,yaml]>=3.20",
-  "meshio>=5.3.5",
   "numba>=0.65.0",
+  "numcodecs>=0.16.5",
   "numpy>=2.4.4",
   "pandas[parquet]>=2.0",
   "platformdirs>=4.9.6",
@@ -27,14 +29,12 @@ dependencies = [
   "pyproj>=3.7.2",
   "rich>=14.3.3",
   "rioxarray>=0.22.0",
-  "scikit-learn>=1.8.0",
   "scipy>=1.17.1",
   "shapely>=2.1.2",
   "tqdm>=4.67.3",
   "typer>=0.24.2",
   "xarray-dataclasses>=1.10.0",
   "xarray[io]>=2026.2.0",
-  "xoak>=0.2.0",
   "zarr>=3.1.6",
   "zfpy>=1.0.1",
 ]
@@ -42,6 +42,21 @@ dependencies = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["nzcvm"]
+
+[tool.numpydoc_validation]
+# The subset the package currently satisfies. The remaining numpydoc codes are
+# a docstring-writing backlog, not a CI change: as of this commit nzcvm/ has
+# ~470 outstanding violations of GL08 (missing docstring), PR04 (missing
+# parameter type), PR01 (undocumented parameter) and RT01 (no Returns section).
+# Add them here as they are worked through.
+checks = ["GL05", "GL10", "PR02", "PR07", "RT03", "YD01"]
+
+[tool.deptry.per_rule_ignores]
+# Both are used through a plugin registry rather than an import: rioxarray
+# registers the xarray `engine="rasterio"` backend used by
+# nzcvm/scripts/convert_tiff.py, and zfpy backs the numcodecs ZFPY codec used
+# by nzcvm/formats/datatree.py.
+DEP002 = ["rioxarray", "zfpy"]
 
 [project.optional-dependencies]
 vis = ["pyvista>=0.47.2"]
@@ -58,6 +73,7 @@ cache-keys = [
 
 [dependency-groups]
 dev = [
+  "deptry>=0.23.1",
   "hypothesis>=6.0.0",
   "ipython>=9.12.0",
   "numpydoc>=1.10.0",

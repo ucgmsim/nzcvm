@@ -38,7 +38,7 @@ class DepthModel(ConfigObject):
 class OffshoreBasinConfig(LayerConfig):
     """Configuration DTO for an :class:`~nzcvm.layers.offshore.OffshoreBasinLayer`.
 
-    Parameters
+    Attributes
     ----------
     basin_depth :
         List of :class:`DepthModel` entries mapping offshore distance (m) to

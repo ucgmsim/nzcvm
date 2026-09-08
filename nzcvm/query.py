@@ -10,7 +10,7 @@ class ModelRange(Enum):
     * ``0–127``   — basin models (higher priority, evaluated first).
     * ``128–255`` — tomography models (lower priority, blended in afterwards).
 
-    Parameters
+    Attributes
     ----------
     value :
         A ``(priority_lo, priority_hi)`` tuple (both inclusive) passed to

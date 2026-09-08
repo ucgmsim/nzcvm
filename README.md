@@ -266,9 +266,11 @@ Query a model tree directly, without building a grid:
 from pathlib import Path
 from nzcvm.models.model import ModelTree
 
-tree = ModelTree.load_models([Path("models/ep2020.zarr"), Path("models/Wellington.zarr")])
+tree = ModelTree.load_models(
+    [Path("models/ep2020.zarr"), Path("models/Wellington.zarr")]
+)
 quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0)
-print(quality.vp, quality.vs)   # None if the point is outside every mesh
+print(quality.vp, quality.vs)  # None if the point is outside every mesh
 ```
 
 `load_models` takes an iterable of mesh paths, anything `xarray` can open
@@ -417,7 +419,7 @@ class DepthFloorConfig(LayerConfig):
     """Raise Vs to a floor that grows linearly with depth."""
 
     surface_floor: float = 500.0
-    gradient: float = 0.05          # m/s of floor per metre of depth
+    gradient: float = 0.05  # m/s of floor per metre of depth
     type: str = "depth_floor"
 
 

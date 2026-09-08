@@ -65,13 +65,13 @@ class Surface:
 
         Parameters
         ----------
-        surface_path :
-
+        path :
+            Path to the surface mesh file.
 
         Returns
         -------
         Surface
-
+            The loaded surface, ready to interpolate.
         """
         with xr.open_dataset(path) as dset:
             mesh = StructuredMeshSchema.from_dataset(dset)
@@ -113,7 +113,13 @@ class Surface:
     def __rich_console__(
         self, _console: Console, _options: ConsoleOptions
     ) -> RenderResult:
-        """Render surface metadata as a rich tree."""
+        """Render surface metadata as a rich tree.
+
+        Yields
+        ------
+        rich.tree.Tree
+            The metadata tree rich should display for this surface.
+        """
         tree = Tree("Surface Interpolation")
         tree.add("Kind: Linear/Sample")
         tree.add(

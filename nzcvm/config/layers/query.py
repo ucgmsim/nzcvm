@@ -13,7 +13,7 @@ class QueryLayerConfig(LayerConfig):
     Specifies where to find the velocity-model mesh files.  *model_path*
     and *model_globs* together identify the set of ``*.vtkhdf`` files to load.
 
-    Parameters
+    Attributes
     ----------
     model_path :
         Directory containing the mesh files.

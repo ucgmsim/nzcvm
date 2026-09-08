@@ -165,23 +165,26 @@ def make_mesh(
 
     Parameters
     ----------
-    points:
-        ``(N, 3)`` float32 array of vertex coordinates.
-    connectivity:
-        ``(M, 4)`` integer array of tetrahedral cell vertex indices.
-    cell_data:
-        Per-cell arrays (e.g. ``model_type``, ``models``).
-    field_data:
-        Per-model arrays (e.g. ``rho``, ``vp``, ``vs``, ``qp``, ``qs``,
-        ``alpha``, ``priority``).
-    name:
+    name :
         Optional human-readable name for the model.  Stored in
         ``field_data["name"]`` when provided so it survives VTKHDF
         round-trips and is picked up by :func:`~nzcvm.model.MeshModel`.
+    points :
+        ``(N, 3)`` float32 array of vertex coordinates.
+    connectivity :
+        ``(M, 4)`` integer array of tetrahedral cell vertex indices.
+    cell_data :
+        Per-cell arrays (e.g. ``model_type``, ``models``).
+    field_data :
+        Per-model arrays (e.g. ``rho``, ``vp``, ``vs``, ``qp``, ``qs``,
+        ``alpha``, ``priority``).
+    geometry :
+        Optional footprint of the mesh, stored alongside the mesh data.
 
     Returns
     -------
     TetrahedralMesh
+        The assembled mesh.
     """
     i = np.arange(len(points))
     nj, nk = connectivity.shape
