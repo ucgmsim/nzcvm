@@ -68,6 +68,6 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "--strict-markers"
+testpaths = ["tests", "nzcvm"]
+addopts = "--strict-markers --doctest-modules"
 markers = ["real_data: requires a real model directory supplied via MODEL_PATH"]
