@@ -3,11 +3,20 @@
 New Zealand Community Velocity Model — tools for building and querying
 tetrahedral velocity models.
 
-A velocity model is a collection of tetrahedral meshes stored in VTKHDF
-format. Each mesh carries seismic velocity (Vp, Vs), density (rho), and
-quality-factor (Qp, Qs) cell data, plus a priority value that controls
-blending when meshes overlap. Queries return alpha-composited properties at
-arbitrary 3-D coordinates.
+A **velocity model** is a collection of tetrahedral meshes. Each mesh carries
+seismic velocity (Vp, Vs), density (rho) and quality-factor (Qp, Qs) cell data,
+plus a priority that controls blending where meshes overlap. `nzcvm generate`
+samples those meshes onto a structured 3-D grid, pushes the result through a
+chain of layers, and writes it in a format a simulation code can read.
+
+![Fence diagram of shear-wave velocity through four west–east sections of a generated Canterbury velocity model, standing on shaded relief](docs/images/canterbury_fence.png)
+
+*One `nzcvm generate` run over a 260 × 200 km Canterbury domain: EP2020
+tomography blended with fourteen basin and volcanic models, a 1-D offshore
+profile, the Ely Vs30 taper, a Vp/Vs clamp, and Backus averaging over each
+depth cell. The low-velocity wedge thickening eastward is the Canterbury
+Plains sediment sequence. The high-Vs lens interrupting it on the second
+section is the Banks Peninsula volcanics.*
 
 ---
 
@@ -16,16 +25,18 @@ arbitrary 3-D coordinates.
 The core query engine is a Rust extension built with
 [maturin](https://github.com/PyO3/maturin). Python ≥ 3.13 is required.
 
+`uv` is the preferred build tool for this repo:
+
 ```sh
-pip install maturin
-python3.13 -m maturin build --release --interpreter python3.13
-pip install target/wheels/*.whl --force-reinstall
+uv sync   # creates a venv and builds the Rust extension
 ```
 
-Alternatively, `uv` is the preferred build tool for this repo
+Alternatively, build and install the wheel by hand:
 
-``` sh
-uv sync # Creates a venv and builds the rust extension
+```sh
+pip install maturin
+python -m maturin build --release
+pip install target/wheels/*.whl --force-reinstall
 ```
 
 ### Non-pip dependencies
@@ -35,8 +46,8 @@ uv sync # Creates a venv and builds the rust extension
 | Rust toolchain (stable) | Compiling the extension (if building from source) |
 | HDF5 ≥ 1.12             | Runtime requirement of h5py                       |
 
-All Python dependencies are declared in `pyproject.toml` and installed via
-pip. PyVista is an optional visualisation dependency:
+All Python dependencies are declared in `pyproject.toml`. PyVista is an
+optional visualisation dependency, needed only for `nzcvm view`:
 
 ```sh
 pip install nzcvm[vis]   # also installs pyvista
@@ -44,228 +55,327 @@ pip install nzcvm[vis]   # also installs pyvista
 
 ---
 
-## Usage
-
-### Python API
-
-```python
-from nzcvm.model import ModelTree
-
-tree = ModelTree.load_models("/path/to/models")
-quality = tree.query(x=1_000.0, y=2_000.0, z=-500.0)
-print(quality.vp, quality.vs)
-```
-
-### CLI — generating a velocity grid
+## Quick start
 
 ```sh
-nzcvm generate config.toml output/
+uv run nzcvm generate examples/2014p240655.toml output.zarr
 ```
 
-### Supported grid formats
+The config selects the grid, the layer chain, and the models to query; the
+output extension selects the writer. The example above needs `resources/`
+(DEM, Vs30, coastline) and `models/` to be present.
 
-| Format          | `type` value | Key parameters                              |
-|-----------------|--------------|---------------------------------------------|
-| SW4 curvilinear | `"sw4"`      | `extent_x/y`, `orientation`, `refinements`  |
-| EMOD3D          | `"emod3d"`   | `nx`, `ny`, `nz`, `resolution`, `topo_type` |
+---
 
-Both grids are specified under the `[grid]` section of a TOML config file.
+## CLI
 
-### Supported layers
+| Command              | Purpose                                                       |
+|----------------------|---------------------------------------------------------------|
+| `nzcvm generate`     | Generate a velocity model from a config file                  |
+| `nzcvm view`         | Interactive 3-D PyVista viewer for model output               |
+| `nzcvm basin`        | Construct a tetrahedral mesh for a basin model                |
+| `nzcvm tomography`   | Convert a CSV-like tomography model to a tetrahedral mesh     |
+| `nzcvm surface`      | Convert an HDF5 topography surface to a VTK unstructured grid |
+| `nzcvm convert-tiff` | Convert a GeoTIFF raster to a surface                         |
+| `nzcvm tree-stats`   | Benchmark BVH query performance                               |
 
-Layers are processed in the order they appear in the config. Each layer
-wraps the next, so the first listed layer runs last (outermost wrapper).
+Useful `generate` options:
 
-| Type        | Description                                                            |
-|-------------|------------------------------------------------------------------------|
-| `query`     | Queries the tetrahedral model tree (always required)                   |
-| `ely`       | Ely et al. (2010) near-surface Vs taper using a Vs30 map               |
-| `offshore`  | 1-D offshore/coastal velocity profile                                  |
-| `coastline` | Coastline-distance fill for offshore grid cells                        |
-| `clamp`     | Clamps Vp, Vs, and Vp/Vs ratios to physical bounds                     |
-| custom      | Any layer registered with `@functional_layer` or as a `Layer` subclass |
+| Option           | Effect                                                          |
+|------------------|-----------------------------------------------------------------|
+| `--n-threads`    | Query threads (defaults to the process CPU affinity)            |
+| `--format`       | Force an output format instead of inferring it from the path    |
+| `--config-format`| Force `toml` / `yaml` / `json` instead of inferring             |
+| `--quantise`     | ZFP-compress the arrays in NetCDF/Zarr output                   |
+| `--distributed`  | Run on a local Dask distributed cluster                         |
+| `--progress`     | tqdm progress bar (not compatible with `--distributed`)         |
+| `--monitor`      | Log CPU/memory usage while running                              |
+| `--log-level`    | `DEBUG` / `INFO` / `WARNING` (default `WARNING`)                |
 
-### Supported output formats
+---
 
-| Format   | Description                                                               |
-|----------|---------------------------------------------------------------------------|
-| `zarr`   | Chunked array store (Useful for debugging outputs, contains all metadata) |
-| `netcdf` | NetCDF4/HDF5 via xarray                                                   |
-| `sfile`  | NZVM sfile binary format                                                  |
-| `emod3d` | EMOD3D binary velocity model directory                                    |
+## Configuration
 
-### Example configuration
+A config is a TOML, YAML or JSON file with three sections: `metadata`, `grid`,
+and an ordered list of `layers`. Config objects are plain dataclasses
+deserialised by mashumaro, so they can equally be built in pure Python. They
+carry lightweight validation — bounds checks, layer ordering, and layer
+dependencies.
 
-The following config generates a ~50 km SW4 grid centred near Wellington,
-queries the EP2020 tomography model, and applies the Ely GTL taper on top.
+### Grid types
+
+Set by `grid.type`. All three are topography-following and chunked lazily with
+Dask.
+
+| Type      | Key parameters                                                              |
+|-----------|------------------------------------------------------------------------------|
+| `sw4`     | `extent_x/y`, `refinements` (2:1 nested resolutions, ordered automatically)  |
+| `regular` | `extent_x/y`, `thickness`, `resolution_x/y/z` (fixed vertical resolution)    |
+| `emod3d`  | `nx`, `ny`, `nz`, `resolution`, `topo_type`                                  |
+
+Every grid also takes `surface` (path to a DEM), an `[grid.orientation]` block,
+and optional `[grid.chunks]`:
 
 ```toml
-[metadata]
-title = "Wellington domain"
-
-[grid]
-type = "sw4"
-surface = "./resources/dem.vtkhdf"
-extent_x = 50000.0
-extent_y = 50000.0
-
 [grid.orientation]
-azimuth = 39.0
-origin_crs = 2193
-origin_x = 1749030.0
-origin_y = 5428152.0
-
-[grid.refinements.surface_layer]
-resolution = 100.0
-bottom = 3500.0
-
-[grid.refinements.deep_layer]
-resolution = 400.0
-bottom = 42000.0
+crs = 'EPSG:2193'     # target projected CRS
+azimuth = 39.0        # clockwise from north, degrees
+origin_lon = 176.00145
+origin_lat = -39.65225
 
 [grid.chunks]
 i = 256
 j = 256
+```
+
+### Layers
+
+Layers are listed in order, outermost first: the first entry is called first
+and delegates down the chain, so the **last** entry must be `query`. Some
+layers declare dependencies — `ely` and `offshore` both require the
+`coastline` coordinate, so a `coastline` layer must appear before them. The
+config raises a validation error if a requirement is unmet.
+
+| Type        | Description                                                             |
+|-------------|--------------------------------------------------------------------------|
+| `query`     | Queries the tetrahedral model tree (always required, always last)       |
+| `ely`       | Ely et al. (2010) near-surface Vs taper from a Vs30 map                 |
+| `offshore`  | 1-D offshore/coastal velocity profile (requires `coastline`)            |
+| `coastline` | Computes signed distance to the coastline, provides `coastline`         |
+| `clamp`     | Clamps components and the Vp/Vs ratio to physical bounds                |
+| `backus`    | Backus averaging — alpha-weighted super-sampling over each depth cell   |
+| custom      | Any layer registered with `@functional_layer` or as a `Layer` subclass  |
+
+### Output formats
+
+Inferred from the output path, or forced with `--format`.
+
+| Format   | Path      | Description                                                     |
+|----------|-----------|-----------------------------------------------------------------|
+| `zarr`   | `*.zarr`  | Chunked array store; keeps all metadata, good for debugging     |
+| `netcdf` | `*.h5`    | NetCDF4/HDF5 via xarray                                         |
+| `sfile`  | `*.sfile` | sfile HDF5 format for driving [SW4](github.com/geodynamics/sw4) |
+| `emod3d` | directory | `rho3dfile.d`, `vp3dfile.p`, `vs3dfile.s` binaries suitable for driving [EMOD3D](https://doi.org/10.1785/BSSA0860041091)              |
+
+### Example configuration
+
+See `examples/` for complete, working configs:
+
+| File                          | Shows                                              |
+|-------------------------------|-----------------------------------------------------|
+| `2014p240655.toml`            | SW4 grid, full layer chain                          |
+| `2014p240655_emod3d.toml`     | The same domain as an EMOD3D grid                   |
+| `whole_country.toml`          | `regular` grid over all of New Zealand              |
+| `near_fault_config.toml`      | A custom layer (`examples/near_fault.py`) in a config |
+
+```toml
+[metadata]
+title = "Domain for geonet event 2014p240655"
+
+[grid]
+type = "sw4"
+surface = "./resources/dem.zarr"
+extent_x = 210000.0
+extent_y = 330000.0
+
+[grid.orientation]
+crs = 'EPSG:2193'
+azimuth = 39.0
+origin_lon = 176.00145
+origin_lat = -39.65225
+
+[grid.refinements.top_layer]
+resolution = 200.0
+bottom = 5000.0     # bottom elevation, +z down
 
 [[layers]]
 type = "clamp"
 min_vp_vs_ratio = 1.73
 max_vp_vs_ratio = 4.0
 
-[layers.clamps.vs]
-min = 500.0
+[[layers]]
+type = "coastline"
+coastline = "resources/coastline.wkb.gz"
 
 [[layers]]
 type = "ely"
-vs30 = "./resources/vs30.vtkhdf"
+vs30 = "./resources/vs30.zarr"
 depth_t = 450.0
 
 [[layers]]
 type = "query"
 model_path = "./models"
-model_globs = ["ep2020.vtkhdf"]
+model_globs = ["*.zarr"]
 ```
 
 ---
 
-## Visualisation
+## Reading the output
 
-Model output in Zarr or NetCDF format is a standard xarray DataTree. Each
-grid is a Dataset with coordinates `x`, `y`, `z` and data variables `vp`,
-`vs`, `rho`, `qp`, `qs`, `alpha`.
+Zarr and NetCDF output is a standard xarray `DataTree` with two top-level
+groups, each holding one node per grid:
+
+```
+/
+├── grids/<name>       x, y, z, depth   (i, j, k)
+└── qualities/<name>   vp, vs, rho, qp, qs, alpha   (i, j, k)
+```
+
+`x`, `y`, `z` and `depth` are *data variables* on the logical `(i, j, k)`
+index, not dimension coordinates. The grid is curvilinear, so every point
+carries its own position.
 
 ```python
-import xarray as xr
 import matplotlib.pyplot as plt
+import xarray as xr
 
-# Open the output DataTree
 dt = xr.open_datatree("output.zarr", engine="zarr")
+grid = dt["grids/grid"].ds
+qual = dt["qualities/grid"].ds
 
-# Select the first grid
-ds = dt["surface_layer"].ds
+# Horizontal Vs slice 200 m down (k = 2 at 100 m vertical spacing)
+plt.pcolormesh(grid.x[:, :, 2], grid.y[:, :, 2], qual.vs[:, :, 2])
 
-# Plot a horizontal Vs slice at depth index 10
-ds["vs"].isel(k=10).plot(x="x", y="y", cmap="viridis")
-plt.title("Vs at k=10")
-plt.show()
+# West–east vertical cross-section at j = 100
+plt.pcolormesh(grid.x[:, 100, :], -grid.z[:, 100, :], qual.vs[:, 100, :])
 ```
 
-Depth slices along any axis:
+This block generates a depth slice and a cross-section through an 80 × 80 × 20
+km Wellington domain at 400 m horizontal resolution. Both sit high in the
+section on purpose: the Wellington basins are shallow, with a low-velocity cap
+only 100–400 m thick over most of the domain, so a slice at 500 m would cut
+almost entirely below them.
 
-```python
-# Vertical cross-section along j = 128
-ds["vs"].isel(j=128).plot(x="x", y="z", cmap="viridis", yincrease=False)
-plt.title("Vs — N–S vertical cross-section")
-plt.show()
-```
+![Vs through a generated Wellington-region velocity model: a map slice 200 m below the surface and a west–east cross-section](docs/images/wellington_vs.png)
 
-For interactive 3-D visualisation with PyVista (requires `nzcvm[visualization]`):
+For interactive 3-D visualisation with PyVista (requires `nzcvm[vis]`):
 
 ```sh
-nzcvm view output.zarr --scalar vs
+nzcvm view model output.zarr --scalar vs --coastline resources/coastline.wkb.gz
 ```
+
+`nzcvm view model` also diffs two models (`--compare-to`, `--diff-mode`) and
+can render off-screen to a PNG (`--off-screen --screenshot out.png`).
+
+---
+
+## Python API
+
+Query a model tree directly, without building a grid:
+
+```python
+from pathlib import Path
+from nzcvm.models.model import ModelTree
+
+tree = ModelTree.load_models([Path("models/ep2020.zarr"), Path("models/Wellington.zarr")])
+quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0)
+print(quality.vp, quality.vs)   # None if the point is outside every mesh
+```
+
+`load_models` takes an iterable of mesh paths — anything `xarray` can open
+(the meshes shipped in `models/` are Zarr). Coordinates are in the model's
+projected CRS with `z` positive downwards.
+
+`query_many` is the vectorised form and returns a `Qualities` dataset.
+`explain` shows how the blend was arrived at:
+
+```python
+>>> tree.explain(1_749_150.0, 5_428_150.0, 100.0)
+(ρ=1810.00, Vp=1800.00, Vs=580.00, Qp=58.00, Qs=29.00, ɑ=1.00)
+├── Model 0 (priority = 38)
+│   └── Quality: (ρ=1810.00, Vp=1800.00, Vs=580.00, ...)
+└── Model 1 (priority = 255)
+    └── Quality: (ρ=2539.03, Vp=4564.84, Vs=2630.92, ...)
+```
+
+Lower priority numbers win. Overlapping models are alpha-composited until the
+cumulative alpha reaches 1.0. `ModelRange` restricts a query by priority band —
+`BASINS` is 0–127, `TOMOGRAPHY` is 128–255, `ALL` is both.
 
 ---
 
 ## Testing
 
 ```sh
-python3.13 -m pytest tests/
-python3.13 -m pytest --doctest-modules nzcvm/   # doctests
-python3.13 -m ruff check nzcvm/ tests/          # linting
-python3.13 -m ty check nzcvm/                   # type checking
+uv run pytest tests/
+uv run pytest --doctest-modules nzcvm/   # doctests
+uv run ruff check nzcvm/ tests/          # linting
+uv run ty check nzcvm/                   # type checking
 ```
+
+Tests marked `real_data` need a model directory supplied via `MODEL_PATH`.
 
 ---
 
 ## Code architecture
 
 The package is structured in four subpackages, each with a narrowly defined
-responsibility:
+responsibility.
 
-### **`nzcvm.model`** 
-Contains geospatial rust wrappers. `MeshModel` holds a single tetrahedral mesh;
-`ModelTree` combines many meshes into a priority-ordered BVH tree and handles
-alpha-composited queries. The `Surface` class interpolates values from a 2d
-triangular surface mesh.
+### `nzcvm.models`
 
-### **`nzcvm.layers`**.
-A `Layer` is a composable unit that accepts a `Grid` (xarray
-Dataset of 3-D coordinates) and a `ModelRange` and returns a `Qualities`
-dataset. Layers chain via constructor injection (`next_layer`), so each layer
-wraps the next without coupling them. Layers are registered by subclass hooks
-into the `Layer` superclass.
+Geospatial Rust wrappers and mesh I/O. `MeshModel` holds a single tetrahedral
+mesh. `ModelTree` combines many meshes into a priority-ordered BVH tree and
+handles alpha-composited queries. `Surface` interpolates values from a 2-D
+triangular surface mesh (used for the DEM and the Vs30 map). `mesh` provides
+the tetrahedral and structured mesh dataclasses and their I/O.
 
-Built-in layers:
+### `nzcvm.layers`
 
-- `QueryLayer` performs the actual model queries against a `ModelTree`.
-- `ElyLayer` applies the Ely et al. (2010) near-surface GTL taper.
-- `OffshoreBasinLayer` fills offshore and coastal regions with a 1-D
-  velocity profile.
-- `ClampLayer` clamps velocity components to physical bounds.
+A `Layer` accepts a `Grid` (an xarray Dataset of 3-D coordinates) and a
+`ModelRange`, and returns `Qualities`. Layers chain via constructor injection
+(`next_layer`). Layers register themselves against a config class through an
+`__init_subclass__` hook on `Layer`.
 
-### **`nzcvm.config`** 
-Contains grid and layer configuration. Every layer has a companion
-**`LayerConfig`** dataclass that carries its parameters. Every grid has a
-companion **`GridConfig`** dataclass. Config objects are plain dataclasses
-deserialised from TOML, JSON or YAML by mashumaro. Being dataclasses, they can
-also be instantiated in pure Python. Configuration objects contain lightweight
-schema validation for things like: `float` bounds checking, layer order and
-requirements.
+Built-in layers: `QueryLayer`, `ElyLayer`, `OffshoreBasinLayer`,
+`CoastlineLayer`, `ClampLayer`, `BackusAveragedLayer`.
 
-### **`nzcvm.grids`** 
-Defines meshgrids for interpolation. Builds 3-D curvilinear
-meshes (SW4 or EMOD3D format) as xarray DataTrees. Grids are chunked lazily with
-Dask and assembled from a `GridConfig`.
+`build_pipeline` assembles the chain from a config list, and
+`execute_model_pipeline` applies it to every grid with one `map_blocks` per
+grid. That hoists the chunked dispatch out of the layers: each layer always
+receives a fully concrete chunk and can use plain NumPy.
 
-`Qualities` (in `nzcvm.qualities`) is an `xr.Dataset` subclass that carries
-the typed velocity, density, and quality-factor arrays returned by every layer.
+### `nzcvm.config`
+
+Grid and layer configuration. Every layer has a companion `LayerConfig`
+dataclass and every grid a companion `GridConfig`, dispatched on the `type`
+discriminator. `VelocityModelConfig` is the top-level object and validates
+layer ordering and dependencies.
+
+### `nzcvm.grids`
+
+Builds 3-D curvilinear meshes (`sw4`, `regular` or `emod3d`) as xarray
+`DataTree` nodes, chunked lazily with Dask and assembled from a `GridConfig`
+by the `build_grids_from_config` single-dispatch function.
+
+`Qualities` (in `nzcvm.qualities`) is an `xr.Dataset` subclass carrying the
+typed velocity, density and quality-factor arrays returned by every layer.
+
+---
 
 ## Extending with custom grids and layers
 
-This package is designed to make extension easy. To do this, the code is
-carefully designed to allow plug-and-play of both 3rd party grids and layers.
+The package is designed for plug-and-play extension of both grids and layers.
 
 ### Functional layers (simple case)
 
 The `@functional_layer` decorator turns a plain function into a registered
-layer. The function receives the current `Grid` and the `next_layer`
-callable, applies its transformation, and returns `Qualities`.
+layer, generating a matching `LayerConfig` from its keyword parameters.
 
 ```python
-from nzcvm.layers.functional import functional_layer
-from nzcvm.grids import Grid
+from nzcvm.grids.grid import Grid
 from nzcvm.layers.core import Layer
+from nzcvm.layers.functional import functional_layer
 from nzcvm.query import ModelRange
 
 
 @functional_layer
 def scale_vs(
     grid: Grid,
-    model_range: ModelRange,
+    model_range: ModelRange = ModelRange.ALL,
     *,
     next_layer: Layer,
-    factor: float,
+    factor: float = 1.0,
 ):
     """Multiply Vs throughout the model by *factor*."""
     qualities = next_layer(grid, model_range)
@@ -281,56 +391,50 @@ type = "scale_vs"
 factor = 0.9
 ```
 
-See `examples/near_fault.py` for a more complete example that uses a spatial
-distance mask to perturb Vs near a fault zone.
+See `examples/near_fault.py` for a fuller example that uses a spatial distance
+mask to perturb Vs near a fault zone.
 
 ### Class-based layers
 
 For layers that need state, caching, or a non-trivial config, subclass `Layer`
-and provide a matching `LayerConfig`.
+and pass a matching `LayerConfig` via the `config_cls` keyword. A layer's
+`__init__` receives `(config, geometry, next_layer)` — `geometry` is the
+domain footprint, useful for pruning resources at construction time.
 
 ```python
 from dataclasses import dataclass
+
 import numpy as np
-from nzcvm.layers.core import Layer
+from shapely import Geometry
+
 from nzcvm.config.layers.core import LayerConfig
-from nzcvm.grids import Grid
+from nzcvm.grids.grid import Grid
+from nzcvm.layers.core import Layer
 from nzcvm.qualities import Qualities
 from nzcvm.query import ModelRange
 
 
 @dataclass
-class BackusAveragingConfig(LayerConfig):
-    type: str = "backus_averaging"
-    window_size: int = 5
+class DepthFloorConfig(LayerConfig):
+    """Raise Vs to a floor that grows linearly with depth."""
+
+    surface_floor: float = 500.0
+    gradient: float = 0.05          # m/s of floor per metre of depth
+    type: str = "depth_floor"
 
 
-class BackusAveragingLayer(Layer, config_cls=BackusAveragingConfig):
-    """Backus averaging: a moving-window harmonic mean over depth slices.
-
-    This smooths the model's velocity structure over a sliding window of
-    *window_size* depth cells, reducing the effective resolution to improve
-    waveform accuracy for long-period simulations.
-    """
-
-    def __init__(self, config: BackusAveragingConfig, next_layer: Layer):
-        self._window = config.window_size
-        self._next = next_layer
+class DepthFloorLayer(Layer[DepthFloorConfig], config_cls=DepthFloorConfig):
+    def __init__(
+        self, config: DepthFloorConfig, geometry: Geometry, next_layer: Layer
+    ) -> None:
+        super().__init__(config, geometry, next_layer)
 
     def __call__(
         self, grid: Grid, model_range: ModelRange = ModelRange.ALL
     ) -> Qualities:
-        qualities = self._next(grid, model_range)
-        w = self._window
-        for comp in ("vp", "vs"):
-            arr = qualities[comp].values
-            # Harmonic mean along the k (depth) axis using a sliding window
-            slow = 1.0 / np.maximum(arr, 1e-6)
-            kernel = np.ones(w) / w
-            smoothed_slow = np.apply_along_axis(
-                lambda x: np.convolve(x, kernel, mode="same"), axis=-1, arr=slow
-            )
-            qualities[comp] = qualities[comp].copy(data=1.0 / smoothed_slow)
+        qualities = self.next_layer(grid, model_range)
+        floor = self.config.surface_floor + self.config.gradient * grid.depth
+        qualities["vs"] = np.maximum(qualities["vs"], floor)
         return qualities
 ```
 
@@ -338,104 +442,102 @@ Use it in TOML:
 
 ```toml
 [[layers]]
-type = "backus_averaging"
-window_size = 7
+type = "depth_floor"
+surface_floor = 500.0
+gradient = 0.05
 ```
+
+Importing the module is what registers the layer, so make sure it is imported
+before the config is decoded.
 
 ### Custom grid types
 
-A grid is any xarray Dataset with coordinates `x`, `y`, `z` (in metres,
-projected CRS). Implement `build_grid(spec, surface)` and register it via
-`GridSchema`.
-
-The simplest custom grid is a borehole — a single vertical column of points:
+A grid is an xarray Dataset built through `GridSchema`, which fixes the
+contract every layer relies on: `x`, `y`, `z` and `depth` on the logical
+`(i, j, k)` index (metres, projected CRS, `z` positive down), plus the
+attributes below. The smallest useful grid is a borehole, a single vertical
+column, shaped `(1, 1, nk)`:
 
 ```python
 import numpy as np
-import xarray as xr
+import shapely
+
 from nzcvm.grids.grid import Grid, GridSchema
 
 
-def borehole_grid(
-    x: float,
-    y: float,
-    z_top: float,
-    z_bottom: float,
-    dz: float,
-) -> Grid:
-    """A single vertical column of query points (a synthetic borehole).
-
-    Parameters
-    ----------
-    x, y:
-        Horizontal position in the model CRS (metres).
-    z_top:
-        Elevation of the top of the borehole (metres, negative = below sea level).
-    z_bottom:
-        Elevation of the base of the borehole (metres).
-    dz:
-        Vertical sample spacing (metres).
-    """
-    z = np.arange(z_top, z_bottom, -dz, dtype=np.float32)
+def borehole_grid(x: float, y: float, bottom: float, dz: float) -> Grid:
+    """A single vertical column of query points (a synthetic borehole)."""
+    depth = np.arange(0.0, bottom, dz, dtype=np.float32).reshape(1, 1, -1)
     return GridSchema.new(
-        x=("k", np.full_like(z, x)), y=("k", np.full_like(z, y)), z=("k", z)
+        x=np.full_like(depth, x),
+        y=np.full_like(depth, y),
+        z=depth,
+        depth=depth,
+        name="borehole",
+        resolution=dz,
+        geometry=shapely.Point(x, y),
+        origin_lon=np.float32(174.7762),
+        origin_lat=np.float32(-41.2865),
+        azimuth=np.float32(0.0),
+        grid_azimuth=np.float32(0.0),
+        bottom_left_lon=np.float32(174.7762),
+        bottom_left_lat=np.float32(-41.2865),
     )
 ```
 
-Pass the resulting Dataset directly to any layer pipeline:
+Pass the result straight to a pipeline:
 
 ```python
-grid = borehole_grid(x=1_749_030, y=5_428_152, z_top=0.0, z_bottom=-5000.0, dz=50.0)
+from pathlib import Path
+
+from nzcvm.config.layers.query import QueryLayerConfig
+from nzcvm.layers.pipeline import build_pipeline
+
+grid = borehole_grid(x=1_749_150.0, y=5_428_150.0, bottom=500.0, dz=100.0)
+pipeline = build_pipeline(
+    grid.geometry,
+    [QueryLayerConfig(model_path=Path("models"), model_globs=["*.zarr"])],
+)
 qualities = pipeline(grid)
+print(qualities.vs.values.ravel())
+# [ 380.  580. 2643.6 2647.6 2651.6]
 ```
 
-Grids can be registered with a configuration using `@build_grids_from_config.register` and creating a `GridConfig` dataclass for configuration. 
+To drive a grid from a config file, register a builder against a `GridConfig`
+subclass. `build_grids_from_config` is a `functools.singledispatch` function
+returning a `dict[str, Grid]`. One entry per grid, since SW4 domains produce
+several refinement meshes.
 
-``` python
-import numpy as np
+```python
+from dataclasses import dataclass
+from typing import Literal
+
 from nzcvm.config.grids import GridConfig
-from nzcvm.grids.grid import Grid, GridSchema
-from nzcvm.grids import build_grid_from_config
+from nzcvm.grids.builder import build_grids_from_config
+from nzcvm.grids.grid import Grid
 
 
+@dataclass
 class BoreholeConfig(GridConfig):
     x: float
     y: float
-    z_top: float
-    z_bottom: float
+    bottom: float
     dz: float
     type: Literal["borehole"] = "borehole"
 
 
-@build_grid_from_config.register
-def borehole_grid(config: BoreholeConfig) -> Grid:
-    """A single vertical column of query points (a synthetic borehole).
-
-    Parameters
-    ----------
-    x, y:
-        Horizontal position in the model CRS (metres).
-    z_top:
-        Elevation of the top of the borehole (metres, negative = below sea level).
-    z_bottom:
-        Elevation of the base of the borehole (metres).
-    dz:
-        Vertical sample spacing (metres).
-    """
-    z = np.arange(config.z_top, config.z_bottom, -config.dz, dtype=np.float32)
-    return GridSchema.new(
-        x=("k", np.full_like(z, x)), y=("k", np.full_like(z, y)), z=("k", z)
-    )
+@build_grids_from_config.register
+def _(config: BoreholeConfig) -> dict[str, Grid]:
+    return {"borehole": borehole_grid(config.x, config.y, config.bottom, config.dz)}
 ```
 
-Now these grids can be included in code like so:
+Which makes this config valid:
 
-``` toml
+```toml
 [grid]
 type = "borehole"
-x = 0.0
-y = 0.0
-z_top = 0.0
-z_bottom = 100.0
+x = 1749150.0
+y = 5428150.0
+bottom = 500.0
+dz = 100.0
 ```
-
