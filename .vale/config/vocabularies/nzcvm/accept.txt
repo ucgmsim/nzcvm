@@ -1,0 +1,79 @@
+# Project vocabulary for Vale's spell checker. One term per line, treated as a
+# regex. Capitalisation is enforced, so alternations spell out every form the
+# docs actually use.
+
+# Domain terms
+NZCVM
+[Gg]eospatial
+[Tt]omograph(?:y|ic)
+[Bb]athymetr(?:y|ic)
+[Vv]olcanics
+[Cc]oastlines?
+[Aa]zimuths?
+[Cc]urvilinear
+[Tt]etrahedra(?:l|ns?)?
+[Tt]etrahedron
+[Ss]ubduction
+[Ee]levations?
+[Bb]ackus
+DEM
+GTL
+CRS
+EPSG
+NZTM2000
+NZTM
+WGS
+WKB
+BVH
+DTO
+UUID
+ZFP
+VTK
+
+# Quality symbols
+[QqVv][psPS]
+[Vv]s30
+[Rr]ho
+
+# Formats, libraries and tools
+[Dd]ask
+[Xx]array
+[Zz]arr
+[Mm]aturin
+[Mm]ashumaro
+[Nn]umpydoc
+NetCDF4?
+HDF5
+[Hh]5py
+[Ss]hapely
+[Pp]yproj
+[Gg]msh
+[Tt]qdm
+[Zz]fpy
+[Nn]umba
+[Nn]umcodecs
+[Rr]ioxarray
+[Ss]files?
+EMOD3D
+SW4
+TOML
+YAML
+[Pp]y[Vv]ista
+[Gg]eo[Tt]IFF
+[Rr]uff
+
+# Ordinary technical English that Vale's dictionary lacks
+[Cc]onfigs?
+[Dd]ataclass(?:es)?
+[Ss]ubpackages?
+[Tt]oolchain
+[Rr]epo
+[Ii]terable
+[Bb]roadcastable
+[Dd]eserialise[ds]?
+[Dd]eserialisation
+[Ss]erialise[ds]?
+[Ss]erialisation
+[Nn]eighbour
+[Nn]earest-neighbour
+[Vv]isualisations?
