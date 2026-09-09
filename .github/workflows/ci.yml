@@ -7,9 +7,12 @@ jobs:
     uses: ucgmsim/meta-ci-action/.github/workflows/ci.yml@main
     with:
       package-dir: nzcvm
-      # The crate is built by every Python job; without --profile=dev they each
-      # pay for the release profile's lto/codegen-units=1.
-      uv-extra-args: "--all-extras --dev -C build-args=--profile=dev"
+      # The crate is built by every Python job, and each pays for the release
+      # profile's lto/codegen-units=1. Under maturin this was avoided with
+      # `-C build-args=--profile=dev`; setuptools-rust takes the profile from
+      # SETUPTOOLS_RUST_CARGO_PROFILE instead, which the reusable workflow has
+      # no input for.
+      uv-extra-args: "--all-extras --dev"
       # Empty: defer to [tool.pytest.ini_options] testpaths, which covers both
       # tests/ and the doctests in nzcvm/.
       pytest-paths: ""

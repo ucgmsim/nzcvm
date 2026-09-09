@@ -1,14 +1,18 @@
 [build-system]
-requires = ["maturin>=1.12,<2.0", "cffi"] # Maturin requires cffi to build with!
-build-backend = "maturin"
+requires = ["setuptools>=64", "setuptools-scm>=8", "setuptools-rust>=1.11"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "nzcvm"
+authors = [{ name = "ucgmsim" }]
+description = "New Zealand Community Velocity Model"
+readme = "README.md"
 requires-python = ">=3.13"
+# No PyPy: the extension is built against the CPython API without abi3, so
+# every wheel is CPython- and version-specific.
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
 dependencies = [
@@ -59,6 +63,21 @@ vis = ["pyvista>=0.47.2"]
 [project.scripts]
 nzcvm = "nzcvm.scripts.nzcvm_cli:app"
 
+# The Rust extension lands at nzcvm/nzcvm.<abi>.so; the Python half is a plain
+# package tree alongside it.
+[tool.setuptools.packages.find]
+include = ["nzcvm*"]
+
+[tool.setuptools_scm]
+
+# `nzcvm.nzcvm` matches `#[pymodule] mod nzcvm` in src/lib.rs. `path` defaults
+# to Cargo.toml. Not abi3, so one wheel is produced per Python version.
+[[tool.setuptools-rust.ext-modules]]
+target = "nzcvm.nzcvm"
+binding = "PyO3"
+# Release unless SETUPTOOLS_RUST_CARGO_PROFILE overrides it.
+debug = false
+
 [tool.uv]
 cache-keys = [
   { file = "pyproject.toml" },
@@ -79,6 +98,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# The setuptools editable install exposes only the `nzcvm` package, so the repo
+# root has to be added explicitly for `tests.conftest` to be importable.
+pythonpath = ["."]
 testpaths = ["tests", "nzcvm"]
 addopts = "--strict-markers --doctest-modules"
 markers = ["real_data: requires a real model directory supplied via MODEL_PATH"]

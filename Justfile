@@ -184,8 +184,8 @@ vs30:
     @test -f resources/vs30.zarr || {{ surface }} ${VS30_TIFF} 1 resources/vs30.zarr --downsample 3 
 
 pytest:
-    uv run --dev --config-setting 'build-args=--profile=dev' pytest -s tests
-    uv run --dev --config-setting 'build-args=--profile=dev' pytest --doctest-modules nzcvm/ -v
+    SETUPTOOLS_RUST_CARGO_PROFILE=dev uv run --dev pytest -s tests
+    SETUPTOOLS_RUST_CARGO_PROFILE=dev uv run --dev pytest --doctest-modules nzcvm/ -v
 
 cargo:
     cargo test

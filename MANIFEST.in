@@ -1,0 +1,19 @@
+# The sdist has to carry enough to run `cargo build`. benches/ is included
+# because Cargo.toml declares a [[bench]] target and cargo errors out during
+# target discovery if the file is missing.
+graft src
+graft benches
+include Cargo.toml
+include Cargo.lock
+
+prune .github
+prune .vale
+prune benchmarks
+prune docs
+prune examples
+prune proptest-regressions
+prune tests
+exclude .vale.ini
+exclude Justfile
+exclude lefthook.yml
+exclude uv.lock
