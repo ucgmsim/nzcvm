@@ -41,7 +41,7 @@ python -m build --wheel
 pip install dist/*.whl --force-reinstall
 ```
 
-The extension is compiled with the release profile by default. Set
+The extension compiles with the release profile by default. Set
 `SETUPTOOLS_RUST_CARGO_PROFILE=dev` for debug builds.
 
 ### Non-pip dependencies
