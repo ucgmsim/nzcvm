@@ -24,7 +24,8 @@ section is the Banks Peninsula volcanics.*
 ## Build
 
 The core query engine is a Rust extension built with
-[maturin](https://github.com/PyO3/maturin). Requires Python 3.13 or newer.
+[setuptools-rust](https://github.com/PyO3/setuptools-rust). Requires Python
+3.13 or newer.
 
 `uv` is the preferred build tool for this repo:
 
@@ -35,10 +36,13 @@ uv sync   # creates a venv and builds the Rust extension
 Or build and install the wheel by hand:
 
 ```sh
-pip install maturin
-python -m maturin build --release
-pip install target/wheels/*.whl --force-reinstall
+pip install build
+python -m build --wheel
+pip install dist/*.whl --force-reinstall
 ```
+
+The extension compiles with the release profile by default. Set
+`SETUPTOOLS_RUST_CARGO_PROFILE=dev` for debug builds.
 
 ### Non-pip dependencies
 
