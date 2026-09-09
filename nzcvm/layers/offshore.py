@@ -183,17 +183,14 @@ class OffshoreBasinLayer(Layer[OffshoreBasinConfig], config_cls=OffshoreBasinCon
             logger.debug("Chunk below basin surface, skipping calculation.")
             return self.next_layer(grid, model_range=model_range)
 
-        # A basin that reaches the surface owns the whole column beneath it, so
-        # the offshore profile is suppressed there. This mirrors the Ely GTL
-        # taper, and restores the lateral basin veto the pre-nzcvm NZVM code
-        # applied via `in_any_basin_lat_lon`.
         surface_layer = grid_like_at_depth(grid, 0.0)
-        basin_at_surface = self.next_layer(
-            surface_layer, model_range=ModelRange.BASINS
-        ).squeeze()
-        in_basin = xr.apply_ufunc(np.isclose, basin_at_surface.alpha, 1.0)
+        footprint = (
+            self.next_layer(surface_layer, model_range=ModelRange.BASINS)
+            .squeeze()
+            .alpha
+        )
 
-        if in_basin.all():
+        if np.allclose(footprint, 1.0):
             logger.debug(
                 "Chunk inside basin at surface, skipping offshore calculation."
             )
@@ -208,11 +205,20 @@ class OffshoreBasinLayer(Layer[OffshoreBasinConfig], config_cls=OffshoreBasinCon
         background = self.next_layer(grid, model_range=model_range)
         offshore_qualities = self.model.qualities(grid.depth)
 
-        # In-place update: write blend(basins, offshore) into background only
-        # where the point is offshore and above the modelled basin surface.
-        # Equivalent to xr.where(mask, blend(basins, offshore), background) but
-        # avoids allocating a new result array.
-        mask = is_above_basin & is_offshore & ~in_basin
-        qualities.blend(basins, offshore_qualities, out=background, where=mask)
+        # How much basin was present at the surface but has faded out at this
+        # depth: 1 below a basin's base inside its footprint, 0 above the base
+        # and outside the footprint, and a ramp across the smoothing boundary.
+        # Used to cross-fade the basin with the offshore basin.
+        faded = (footprint - basins.alpha).clip(0.0, 1.0)
+        offshore_qualities[Component.ALPHA] = offshore_qualities.alpha * (1.0 - faded)
+
+        # Composite offshore over the background, then basins over the lot, only
+        # where the offshore body exists. The background already renders basins
+        # onto tomography, but wherever the basin is present the offshore is
+        # either occluded by it or opaque itself, so re-compositing the basin on
+        # top will not double count.
+        mask = (is_above_basin & is_offshore).values
+        qualities.blend(offshore_qualities, background, out=background, where=mask)
+        qualities.blend(basins, background, out=background, where=mask)
 
         return background
