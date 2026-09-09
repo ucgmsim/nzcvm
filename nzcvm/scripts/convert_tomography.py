@@ -67,7 +67,7 @@ class TomographyModel:
     #: Explicit analytical inverse of ``affine``; avoids numerical errors from
     #: ``np.linalg.inv``.  Used to populate the ``transform`` field of the mesh.
     affine_inverse: Affine
-    # Some models don't contain a qp/qs column, so we prefill where that makes sense.
+    # Some models don't contain a qp/qs column, so prefill where that makes sense.
     qp: str = "qp"
     qs: str = "qs"
 

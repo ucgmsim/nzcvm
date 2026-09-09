@@ -2,7 +2,7 @@
 
 Each layer receives a :class:`~nzcvm.grids.grid.Grid` chunk, applies some
 transformation or query, and delegates to the next layer in the chain.
-Layers are composed into a pipeline using :func:`~nzcvm.layers.pipeline.build_pipeline`.
+:func:`~nzcvm.layers.pipeline.build_pipeline` composes layers into a pipeline.
 
 Available layers
 ----------------

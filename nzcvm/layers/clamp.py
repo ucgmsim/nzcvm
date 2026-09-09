@@ -1,10 +1,10 @@
-"""Pipeline layer for enforcing physically-consistent bounds on Components.
+"""Pipeline layer for enforcing physically consistent bounds on Components.
 
-Vs is treated as the *master* property.  When Vs is clamped, Vp and density
-are regenerated from the same Brocher (2005) / Nafe-Drake empirical relations
-used elsewhere in the pipeline (see :mod:`nzcvm.ely_taper`), so that the
-``(vs, vp, rho)`` triple stays on a physically-realisable manifold instead of
-each component being clipped independently into an inconsistent state.
+Vs acts as the *master* property.  Whenever a clamp moves Vs, the layer
+regenerates Vp and density from the same Brocher (2005) / Nafe-Drake empirical
+relations the rest of the pipeline uses (see :mod:`nzcvm.ely_taper`), keeping
+the ``(vs, vp, rho)`` triple on a physically realisable manifold rather than
+clipping each component independently into an inconsistent state.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ class ClampLayer(Layer[ClampLayerConfig], config_cls=ClampLayerConfig):
     ) -> Qualities:
         qualities = self.next_layer(grid, model_range=model_range)
 
-        # Vs is handled specially. Where it is clamped we update other
+        # Vs gets special handling. Where the clamp moves it, the layer updates other
         # properties match empirical relations based on the clamped Vs value.
         vs_bound = self.config.clamps.get(Component.VS)
         if vs_bound is not None:
@@ -70,8 +70,8 @@ class ClampLayer(Layer[ClampLayerConfig], config_cls=ClampLayerConfig):
                 guarded_vp != vp, DENSITY_RELATION(guarded_vp), qualities.rho
             )
 
-        # By topologically sorting clamps, we ensure that all bounds are
-        # consistently set when we update them.
+        # Topologically sorting the clamps keeps every bound consistently set
+        # at the point of update.
         for c, bound in self._topologically_sorted_clamps():
             if c == Component.VS:
                 continue

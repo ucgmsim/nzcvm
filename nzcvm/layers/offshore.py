@@ -1,12 +1,12 @@
 """Pipeline layer for applying the offshore taper.
 
 The offshore layer fills near-surface velocities in ocean regions and at the
-coast-to-ocean transition.  It is the seaward counterpart of the Ely GTL
-layer: rather than using a Vs30 surface, it interpolates a 1-D depth–velocity
+coast-to-ocean transition.  It's the seaward counterpart of the Ely GTL
+layer: rather than using a Vs30 surface, it interpolates a 1-D depth-velocity
 profile parametrised by horizontal distance from the coastline.
 
-Requires the ``coastline`` coordinate to be present on the grid, which is
-provided by :class:`~nzcvm.layers.coastline.CoastlineLayer`.
+Requires the ``coastline`` coordinate on the grid, which
+:class:`~nzcvm.layers.coastline.CoastlineLayer` supplies.
 """
 
 from __future__ import annotations
@@ -40,9 +40,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# TODO: An efficiency can be made by observing that exact distances don't have
-# to be calculated for segments > max distance from shoreline. Come back and
-# clean this up with a BVHTree implementation from the rust side.
+# Room to speed this up: segments beyond the maximum distance from the
+# shoreline never need an exact distance. Worth revisiting with a BVHTree from
+# the Rust side.
 
 
 def step_interpolator(
@@ -206,7 +206,7 @@ class OffshoreBasinLayer(Layer[OffshoreBasinConfig], config_cls=OffshoreBasinCon
         offshore_qualities = self.model.qualities(grid.depth)
 
         # How much basin was present at the surface but has faded out at this
-        # depth: 1 below a basin's base inside its footprint, 0 above the base
+        # depth: 1 below a basin's base inside its footprint. 0 shallower than it
         # and outside the footprint, and a ramp across the smoothing boundary.
         # Used to cross-fade the basin with the offshore basin.
         faded = (footprint - basins.alpha).clip(0.0, 1.0)
@@ -216,7 +216,7 @@ class OffshoreBasinLayer(Layer[OffshoreBasinConfig], config_cls=OffshoreBasinCon
         # where the offshore body exists. The background already renders basins
         # onto tomography, but wherever the basin is present the offshore is
         # either occluded by it or opaque itself, so re-compositing the basin on
-        # top will not double count.
+        # top doesn't double count.
         mask = (is_above_basin & is_offshore).values
         qualities.blend(offshore_qualities, background, out=background, where=mask)
         qualities.blend(basins, background, out=background, where=mask)

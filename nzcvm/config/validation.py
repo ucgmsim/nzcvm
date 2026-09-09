@@ -119,7 +119,7 @@ def min_len(length: int) -> Callable[[Collection[Any]], Collection[Any]]:
 
 
 def max_len(length: int) -> Callable[[Collection[Any]], Collection[Any]]:
-    """Ensures strings, lists, or dicts do not exceed a maximum length."""
+    """Ensures strings, lists, or dicts don't exceed a maximum length."""
 
     def validator(v: Collection[Any]) -> Collection[Any]:
         if v is not None and len(v) > length:
@@ -132,7 +132,7 @@ def max_len(length: int) -> Callable[[Collection[Any]], Collection[Any]]:
 
 
 def regex(pattern: str | re.Pattern[str]) -> Callable[[str], str]:
-    """Validates that a string matches a specific regex compiled pattern."""
+    """Validates that a string matches a compiled regular expression."""
     compiled = re.compile(pattern) if isinstance(pattern, str) else pattern
 
     def validator(v: str) -> str:
@@ -160,7 +160,7 @@ def longitude(value: float) -> None:
 
 
 def in_choices(choices: Collection[Any]) -> Callable[[Any], Any]:
-    """Ensures values fall within an allowed set of options (useful for dynamic sets)."""
+    """Ensures a value is a member of an allowed set of options."""
     allowed = set(choices)
 
     def validator(v: Any) -> Any:

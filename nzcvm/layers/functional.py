@@ -1,7 +1,7 @@
 """Decorator for constructing :class:`~nzcvm.layers.core.Layer` subclasses
 from plain functions.
 
-A *functional layer* is a Layer whose logic is expressed as a single Python
+A *functional layer* is a Layer whose whole body is one plain Python
 function.  The decorator inspects the function's keyword parameters and
 generates:
 
@@ -13,12 +13,12 @@ generates:
 
 The decorated function must accept the following positional arguments:
 
-* ``grid`` — the current :class:`~nzcvm.grids.Grid` chunk
-* ``model_range`` — the active :class:`~nzcvm.query.ModelRange`
+* ``grid``, the current :class:`~nzcvm.grids.Grid` chunk
+* ``model_range``, the active :class:`~nzcvm.query.ModelRange`
 
 and the following keyword argument:
 
-* ``next_layer`` — the downstream :class:`~nzcvm.layers.core.Layer` (or
+* ``next_layer``, the downstream :class:`~nzcvm.layers.core.Layer` (or
   ``None`` for terminal layers)
 
 All other keyword parameters become config fields on the generated
@@ -70,7 +70,7 @@ _RUNTIME_PARAMS = frozenset({"grid", "model_range", "next_layer", "return"})
 
 
 class _LayerFunc(Protocol):
-    """Protocol for functions that can be wrapped by :func:`functional_layer`."""
+    """Protocol for the functions :func:`functional_layer` accepts."""
 
     __name__: str
 
@@ -89,8 +89,8 @@ class GeneratedLayer(Protocol):
     :func:`functional_layer`.
 
     Instances accept either ``(config, geometry, next_layer)`` or
-    ``(next_layer=..., geometry=..., **config_kwargs)`` — a shape too dynamic
-    for a plain ``type[Layer]`` constructor signature to express.
+    ``(next_layer=..., geometry=..., **config_kwargs)``, a signature too
+    variable for a plain ``type[Layer]`` constructor signature to express.
     """
 
     config_cls: type[LayerConfig]
@@ -103,8 +103,8 @@ def _recompile_mashumaro_codecs(cls: type) -> None:
 
     On Python 3.14, :func:`dataclasses.make_dataclass` sets ``__annotate__``
     *after* :func:`types.new_class` returns.  Mashumaro's
-    ``__init_subclass__`` hook fires during class creation — before
-    annotations are accessible — so the generated codecs are empty.
+    ``__init_subclass__`` hook runs during class creation, before the
+    annotations are readable, so the generated codecs come out empty.
 
     This function replays the same ancestor walk that ``__init_subclass__``
     performs, picking up every mixin's builder params (dict, JSON, TOML,
@@ -151,7 +151,8 @@ def functional_layer(func: _LayerFunc) -> GeneratedLayer:
         param_names.append(name)
 
     type_tag = func.__name__
-    # Discriminator field — str so mashumaro serialises it on all Python versions.
+    # Discriminator field, kept a str so mashumaro serialises it on every
+    # Python version.
     config_fields.append(("type", str, field(default=type_tag)))
 
     config_name = func.__name__.title().replace("_", "") + "Config"
@@ -177,7 +178,7 @@ def functional_layer(func: _LayerFunc) -> GeneratedLayer:
         next_layer: Layer | None = None,
         **kwargs: Any,
     ) -> None:
-        # Two supported calling conventions:
+        # Supported calling conventions:
         #   1. LayerCls(config_obj, geometry, next_layer)
         #   2. LayerCls(next_layer=..., geometry=..., **config_kwargs)
         if isinstance(config, ConfigCls):
@@ -189,7 +190,7 @@ def functional_layer(func: _LayerFunc) -> GeneratedLayer:
             if isinstance(config, Layer):
                 next_layer = config
             # Keep only kwargs that ConfigCls.__init__ actually accepts
-            # (e.g. drop inherited base fields like 'provides'/'requires').
+            # (dropping inherited base fields like 'provides', say).
             config = ConfigCls(
                 **{k: v for k, v in kwargs.items() if k in _config_init_params}
             )

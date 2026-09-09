@@ -24,7 +24,7 @@ class MeshRefinement(ConfigObject):
     bottom :
         Bottom of this layer in elevation.  The invariant maintained is that
         the bottom surface of this layer's mesh has a minimum elevation equal
-        to this value.  When *deformation* is ``1.0`` the surface terminates
+        to this value.  When *deformation* is ``1.0`` the surface stops
         exactly at the boundary.
     name :
         Human-readable label for the refinement (useful for debugging).
@@ -56,13 +56,13 @@ class SW4GridConfig(GridConfig):
     azimuth :
         Clockwise rotation of the grid from north, in degrees.
     target_crs :
-        Target projected CRS integer code (e.g. ``2193`` for NZTM2000).
+        Target projected CRS integer code, such as ``2193`` for NZTM2000.
     origin_lon, origin_lat :
         Geographic origin of the local grid in *origin_crs* (longitude,
         latitude).
     refinements :
         Ordered list of :class:`MeshRefinement` objects.  Must contain at
-        least one entry; the *bottom* of the last entry sets the model bottom.
+        least one entry. The *bottom* of the last entry sets the model bottom.
     transpose :
         If ``True``, swap the I and J axes after applying the affine transform.
     origin_crs :
@@ -100,7 +100,7 @@ class SW4GridConfig(GridConfig):
                 raise ValueError("Refinements must follow 2:1 ratio in resolution.")
 
         coarsest_grid_resolution = refinements[-1].resolution
-        # Adjust extent x and y so it is divisible by the coarsest mesh refinement.
+        # Adjust extent x and y so it's divisible by the coarsest mesh refinement.
         self.extent_x = (
             np.round(self.extent_x / coarsest_grid_resolution)
             * coarsest_grid_resolution

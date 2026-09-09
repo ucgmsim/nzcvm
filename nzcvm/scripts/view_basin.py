@@ -1,4 +1,4 @@
-"""Visualise a basin or tomography mesh in an interactive 3-D viewer."""
+"""Visualise a basin or tomography mesh in an interactive 3D viewer."""
 
 import typer
 

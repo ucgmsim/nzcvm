@@ -35,7 +35,7 @@ def to_emod3d(velocity_model: VelocityModel, directory: Path):
     Parameters
     ----------
     directory :
-        Output directory; created if it does not exist.
+        Output directory, created if it doesn't exist.
 
     Raises
     ------
@@ -44,8 +44,8 @@ def to_emod3d(velocity_model: VelocityModel, directory: Path):
     """
 
     # The EMOD3D format expects the grid to have the form z, y, x (with y points
-    # *south*). We make the convention that i, j, k correspond to east, north,
-    # down. To correct for this difference we transpose the outputs and reverse
+    # *south*). This code takes i, j, k to mean east, north,
+    # down. To correct for the difference it transposes the outputs and reverses
     # the y-direction.
     velocity_model = velocity_model.orient(
         Coordinate.J, Coordinate.K, Coordinate.I

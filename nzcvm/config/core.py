@@ -14,15 +14,15 @@ class ConfigObject(
     """Base mixin that adds JSON, YAML, TOML, and dict serialisation.
 
     Subclasses inherit ``to_json``, ``to_yaml``, ``to_toml``, and
-    ``to_dict`` methods from mashumaro. ``None`` fields are omitted and
-    serialisation uses field aliases where defined.
+    ``to_dict`` methods from mashumaro. Serialisation drops ``None`` fields
+    and uses field aliases where defined.
     """
 
     def __post_init__(self) -> None:
 
         # Extract validation hints from the class definition. Things like
-        # Annotated[float, is_positive] are parsed and the is_positive function
-        # is then run on the values.
+        # Annotated[float, is_positive]: the hint parser pulls out is_positive
+        # and then runs it over the values.
 
         hints = get_type_hints(self.__class__, include_extras=True)
 

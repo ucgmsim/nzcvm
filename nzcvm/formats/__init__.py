@@ -1,7 +1,7 @@
 """Output format selection and velocity-model serialisation.
 
 :class:`Format` enumerates supported output formats.  :func:`from_path`
-infers a format from a file path, and :func:`write_velocity_model` dispatches
+infers a format from a path, and :func:`write_velocity_model` dispatches
 to the appropriate writer.
 """
 
@@ -33,7 +33,7 @@ class Format(StrEnum):
 
 
 def from_path(path: Path) -> Format:
-    """Infer the output :class:`Format` from a file path extension.
+    """Infer the output :class:`Format` from a path extension.
 
     Directories (and paths with no suffix) default to ``EMOD3D``.
 
@@ -50,7 +50,7 @@ def from_path(path: Path) -> Format:
     Raises
     ------
     ValueError
-        If the extension is not recognised.
+        If the extension isn't recognised.
 
     Examples
     --------
@@ -85,7 +85,7 @@ def write_velocity_model(
     path : Path
         Destination file or directory path.
     format : Format
-        Output format; use :func:`from_path` to infer from the extension.
+        Output format. Use :func:`from_path` to infer one from the extension.
     quantise : bool
         If True, quantise the velocity model output for formats that support it
     """

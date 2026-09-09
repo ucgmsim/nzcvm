@@ -3,15 +3,16 @@
 New Zealand Community Velocity Model: tools for building and querying
 tetrahedral velocity models.
 
-A velocity model is a collection of tetrahedral meshes. Each mesh carries
-seismic velocity (Vp, Vs), density (rho) and quality-factor (Qp, Qs) cell data,
-plus a priority that controls blending where meshes overlap. `nzcvm generate`
-samples those meshes onto a structured 3-D grid, pushes the result through a
-chain of layers, and writes it in a format a simulation code can read.
+A velocity model is a collection of tetrahedral meshes. Each mesh holds cell
+data for seismic velocity (Vp, Vs), density (rho) and the quality factors
+(Qp, Qs), plus a priority that controls blending where meshes overlap.
+`nzcvm generate` samples those meshes onto a structured 3D grid. It then pushes
+the result through a chain of layers and writes it in a format a simulation
+code can read.
 
-![Fence diagram of shear-wave velocity through four west–east sections of a generated Canterbury velocity model, standing on shaded relief](docs/images/canterbury_fence.png)
+![Fence diagram of shear-wave velocity through four west-east sections of a generated Canterbury velocity model, standing on shaded relief](docs/images/canterbury_fence.png)
 
-*One `nzcvm generate` run over a 260 × 200 km Canterbury domain: EP2020
+*One `nzcvm generate` run over a 260 × 200 km Canterbury domain. EP2020
 tomography blended with fourteen basin and volcanic models, a 1-D offshore
 profile, the Ely Vs30 taper, a Vp/Vs clamp, and Backus averaging over each
 depth cell. The low-velocity wedge thickening eastward is the Canterbury
@@ -61,18 +62,18 @@ pip install nzcvm[vis]   # also installs pyvista
 uv run nzcvm generate examples/2014p240655.toml output.zarr
 ```
 
-The config selects the grid, the layer chain, and the models to query; the
-output extension selects the writer. The example above needs `resources/`
+The config selects the grid, the layer chain, and the models to query. The
+output extension selects the writer. The preceding example needs `resources/`
 (DEM, Vs30, coastline) and `models/` to be present.
 
 ---
 
-## CLI
+## Command line
 
 | Command              | Purpose                                                       |
 |----------------------|---------------------------------------------------------------|
 | `nzcvm generate`     | Generate a velocity model from a config file                  |
-| `nzcvm view`         | Interactive 3-D PyVista viewer for model output               |
+| `nzcvm view`         | Interactive 3D PyVista viewer for model output               |
 | `nzcvm basin`        | Construct a tetrahedral mesh for a basin model                |
 | `nzcvm tomography`   | Convert a CSV-like tomography model to a tetrahedral mesh     |
 | `nzcvm surface`      | Convert an HDF5 topography surface to a VTK unstructured grid |
@@ -99,7 +100,7 @@ Useful `generate` options:
 A config is a TOML, YAML or JSON file with three sections: `metadata`, `grid`,
 and an ordered list of `layers`. Config objects are plain dataclasses
 deserialised by mashumaro, so you can also build them in pure Python. They
-validate bounds, layer ordering and layer dependencies.
+validate bounds, layer ordering, and layer dependencies.
 
 ### Grid types
 
@@ -137,7 +138,7 @@ error if a dependency is missing.
 
 | Type        | Description                                                             |
 |-------------|--------------------------------------------------------------------------|
-| `query`     | Queries the tetrahedral model tree (always required, always last)       |
+| `query`     | Queries the tetrahedral model tree (required, and always last)          |
 | `ely`       | Ely et al. (2010) near-surface Vs taper from a Vs30 map                 |
 | `offshore`  | 1-D offshore/coastal velocity profile (requires `coastline`)            |
 | `coastline` | Computes signed distance to the coastline, provides `coastline`         |
@@ -151,7 +152,7 @@ Inferred from the output path, or forced with `--format`.
 
 | Format   | Path      | Description                                                     |
 |----------|-----------|-----------------------------------------------------------------|
-| `zarr`   | `*.zarr`  | Chunked array store; keeps all metadata, good for debugging     |
+| `zarr`   | `*.zarr`  | Chunked array store, keeps all metadata, good for debugging     |
 | `netcdf` | `*.h5`    | NetCDF4/HDF5 via xarray                                         |
 | `sfile`  | `*.sfile` | sfile HDF5 format for driving [SW4](github.com/geodynamics/sw4) |
 | `emod3d` | directory | `rho3dfile.d`, `vp3dfile.p`, `vs3dfile.s` binaries suitable for driving [EMOD3D](https://doi.org/10.1785/BSSA0860041091)              |
@@ -212,7 +213,7 @@ model_globs = ["*.zarr"]
 ## Reading the output
 
 Zarr and NetCDF output is a standard xarray `DataTree` with two top-level
-groups, each holding one node per grid:
+groups, each with one node per grid:
 
 ```
 /
@@ -245,16 +246,16 @@ section because the Wellington basins are shallow: the low-velocity cap runs
 100 to 400 m thick over most of the domain, so a slice at 500 m cuts almost
 entirely below it.
 
-![Vs through a generated Wellington-region velocity model: a map slice 200 m below the surface and a west–east cross-section](docs/images/wellington_vs.png)
+![Vs through a generated Wellington-region velocity model: a map slice 200 m below the topography and a west-east cross-section](docs/images/wellington_vs.png)
 
-For interactive 3-D visualisation with PyVista (requires `nzcvm[vis]`):
+For interactive 3D visualisation with PyVista (requires `nzcvm[vis]`):
 
 ```sh
 nzcvm view model output.zarr --scalar vs --coastline resources/coastline.wkb.gz
 ```
 
 `nzcvm view model` also diffs two models (`--compare-to`, `--diff-mode`) and
-can render off-screen to a PNG (`--off-screen --screenshot out.png`).
+can render off-screen to an image file (`--off-screen --screenshot out.png`).
 
 ---
 
@@ -274,7 +275,7 @@ print(quality.vp, quality.vs)  # None if the point is outside every mesh
 ```
 
 `load_models` takes an iterable of mesh paths, anything `xarray` can open
-(the meshes shipped in `models/` are Zarr). Coordinates are in the model's
+(the meshes distributed in `models/` are Zarr). Coordinates are in the model's
 projected CRS with `z` positive downwards.
 
 `query_many` is the vectorised form and returns a `Qualities` dataset.
@@ -291,7 +292,7 @@ projected CRS with `z` positive downwards.
 
 Lower priority numbers win. Overlapping models are alpha-composited until the
 cumulative alpha reaches 1.0. `ModelRange` restricts a query by priority band:
-`BASINS` is 0–127, `TOMOGRAPHY` is 128–255, `ALL` is both.
+`BASINS` is 0-127, `TOMOGRAPHY` is 128-255, `ALL` is both.
 
 ---
 
@@ -314,7 +315,7 @@ Four subpackages, each with a narrow responsibility.
 
 ### `nzcvm.models`
 
-Geospatial Rust wrappers and mesh I/O. `MeshModel` holds a single tetrahedral
+Geospatial Rust wrappers and mesh I/O. `MeshModel` wraps one tetrahedral
 mesh. `ModelTree` combines many meshes into a priority-ordered BVH tree and
 handles alpha-composited queries. `Surface` interpolates values from a 2-D
 triangular surface mesh (used for the DEM and the Vs30 map). `mesh` provides
@@ -322,7 +323,7 @@ the tetrahedral and structured mesh dataclasses and their I/O.
 
 ### `nzcvm.layers`
 
-A `Layer` accepts a `Grid` (an xarray Dataset of 3-D coordinates) and a
+A `Layer` accepts a `Grid` (an xarray Dataset of 3D coordinates) and a
 `ModelRange`, and returns `Qualities`. Layers chain via constructor injection
 (`next_layer`), and register themselves against a config class through an
 `__init_subclass__` hook on `Layer`.
@@ -337,14 +338,14 @@ receives a fully concrete chunk and can use plain NumPy.
 
 ### `nzcvm.config`
 
-Grid and layer configuration. Every layer has a companion `LayerConfig`
-dataclass and every grid a companion `GridConfig`, dispatched on the `type`
+Grid and layer configuration. Each layer comes with a companion `LayerConfig`
+dataclass and each grid with a companion `GridConfig`, dispatched on the `type`
 discriminator. `VelocityModelConfig` is the top-level object and validates
 layer ordering and dependencies.
 
 ### `nzcvm.grids`
 
-Builds 3-D curvilinear meshes (`sw4`, `regular` or `emod3d`) as xarray
+Builds 3D curvilinear meshes (`sw4`, `regular` or `emod3d`) as xarray
 `DataTree` nodes, chunked lazily with Dask and assembled from a `GridConfig`
 by the `build_grids_from_config` single-dispatch function.
 
@@ -455,7 +456,7 @@ config.
 A grid is an xarray Dataset built through `GridSchema`, which fixes the
 contract every layer relies on: `x`, `y`, `z` and `depth` on the logical
 `(i, j, k)` index (metres, projected CRS, `z` positive down), plus the
-attributes below. The smallest useful grid is a borehole, a single vertical
+attributes below. The smallest useful grid is a borehole: one vertical
 column, shaped `(1, 1, nk)`:
 
 ```python

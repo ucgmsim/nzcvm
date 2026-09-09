@@ -19,8 +19,8 @@ class QueryLayerConfig(LayerConfig):
         Directory containing the mesh files.
     model_globs :
         List of glob patterns used to find mesh files under *model_path*
-        (default ``["*.vtkhdf"]``).  Files matched by any of the patterns
-        are loaded.
+        (default ``["*.vtkhdf"]``).  The layer loads every file matching any
+        of the patterns.
 
     Examples
     --------

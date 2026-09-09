@@ -1,17 +1,17 @@
 """Tests for nzcvm.coordinates affine transform factories.
 
-Two complementary layers:
+The tests come in two complementary layers.
 
-1. **Structural** — each factory produces a matrix with the correct entries in
+1. **Structural**: each factory produces a matrix with the correct entries in
    the correct cells.  Cheap, and the shape assertions are real.
-2. **Behavioural** — the matrices do the right thing to actual points when fed
+2. **Behavioural**: the matrices do the right thing to actual points when fed
    through :func:`~nzcvm.coordinates.apply_affine_transform`, which is what the
    grid builders actually call.
 
-The second layer exists because the first cannot distinguish a row-vector
-convention change that still composes correctly (all structural tests fail,
-nothing is broken) from a matrix that is structurally right but composes wrong
-(all structural tests pass, everything is broken).
+The second layer exists because structural assertions can't separate a row-vector convention
+change that still composes correctly (all structural tests fail, nothing
+actually wrong) from a matrix that's structurally right but composes wrong
+(all structural tests pass, everything actually wrong).
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from nzcvm.coordinates import apply_affine_transform, reflect_x, scale, translat
 def test_translate_2d_encodes_offsets(dx: float, dy: float) -> None:
     """translate(dx, dy) must place dx at [0,2] and dy at [1,2].
 
-    The matrix stores values as float32, so we compare against the
+    The matrix stores values as float32, so the assertion compares against the
     float32-rounded input rather than the original float64.
     """
     T = translate(dx, dy)
@@ -140,7 +140,7 @@ def test_translate_shifts_points(x: float, y: float, dx: float, dy: float) -> No
 @given(
     x=_COORD,
     y=_COORD,
-    # 0.125 rather than 0.1: `width=32` requires exactly-representable bounds.
+    # 0.125 rather than 0.1: `width=32` requires exactly representable bounds.
     sx=st.floats(0.125, 10.0, allow_nan=False, width=32),
     sy=st.floats(0.125, 10.0, allow_nan=False, width=32),
 )
@@ -184,7 +184,7 @@ def test_matrix_product_applies_right_factor_first(
     assert _apply(A @ B, x, y) == pytest.approx(
         (x * 2.0 + dx, y * 3.0 + dy), rel=1e-5, abs=1e-2
     )
-    # B @ A: translate first, then scale — the translation is scaled too.
+    # B @ A translates first and then scales, which scales the translation too.
     assert _apply(B @ A, x, y) == pytest.approx(
         ((x + dx) * 2.0, (y + dy) * 3.0), rel=1e-5, abs=1e-2
     )

@@ -1,8 +1,8 @@
 """SW4 curvilinear velocity model grid builder.
 
 Provides :func:`skeleton_velocity_model` and :func:`fill_grid` for
-constructing the 3-D curvilinear mesh defined by a
-:class:`~nzcvm.config.grids.sw4.SW4GridConfig`.  Grids are returned as
+constructing the 3D curvilinear mesh defined by a
+:class:`~nzcvm.config.grids.sw4.SW4GridConfig`.  Both return
 :class:`xarray.DataTree` nodes with chunked coordinates and topography-following
 ``z`` / ``depth`` arrays.
 
@@ -60,7 +60,7 @@ def _curvilinear_grid(
 
     nk = np.round(thickness / resolution).astype(int) + 1
     k = np.arange(nk)
-    # Chunking only ever applies to i/j; k is always kept as a single chunk.
+    # Chunking only ever applies to i/j. k always stays one chunk.
     zeta = xr.DataArray(
         np.linspace(0, 1, num=nk, dtype=np.float32),
         dims=[Coordinate.K],
@@ -71,14 +71,14 @@ def _curvilinear_grid(
 
     # HACK: If wrote this the idiomatic way like so:
     # depth = z - surface
-    # Then if z is a single dimensional variable of shape (k,) (i.e. if top and bottom and both floats), then the array has shape
+    # Then if z is a one-dimensional variable of shape (k,), which happens when top and bottom are both floats, the array has shape
     # (k, i, j)
-    # But the GridSchema will enforce
+    # But the GridSchema enforces
     # (i, j, k)
     # So ordering it as
     # depth = -surface + z
-    # will ensure that the k coordinate shows up at the end because the z is
-    # added to the surface instead of the surface subtracted from the z.
+    # puts the k coordinate at the end, because this adds z to the surface
+    # rather than subtracting the surface from z.
     depth = -surface + z
 
     x, y, z, depth = xr.broadcast(x_phys, y_phys, z, depth)

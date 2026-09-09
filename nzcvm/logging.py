@@ -30,7 +30,7 @@ class ResourceMonitor:
         self._should_run = self.logger.isEnabledFor(self.level)
 
     def __enter__(self):
-        # If the level is below what's configured, do absolutely nothing
+        # If the level is below what's configured, do nothing
         if not self._should_run:
             return self
 
@@ -103,7 +103,7 @@ class LogProgress(Callback):
 
     def __init__(self, log_interval: int = 5, level: int = logging.INFO):
         super().__init__()
-        self.log_interval = log_interval  # Log every X percent (e.g., 10%)
+        self.log_interval = log_interval  # Log every X percent, say 10%
         self.level = level
         self.last_logged = None
         self.logger = logging.getLogger("dask_progress")

@@ -1,8 +1,8 @@
 """Tests for individual pipeline layers.
 
-Layers are tested in isolation using the dummy layers from
-:mod:`nzcvm.layers.dummy` as inner stubs.  No real model files or
-surface grids are required.
+Each test exercises one layer in isolation, using the dummy layers from
+:mod:`nzcvm.layers.dummy` as inner stubs. These tests don't read a real model
+file or surface grid.
 
 Test strategy (in descending preference):
 1. Hypothesis property tests where the property is expressible symbolically.
@@ -35,12 +35,12 @@ from nzcvm.qualities import Qualities
 from nzcvm.query import ModelRange
 from tests.conftest import make_grid
 
-# Layers carry a spatial domain (``Layer.geometry``), but no layer currently
-# consults it when evaluating a grid — see
+# Layers carry a spatial domain (``Layer.geometry``), but as of writing no
+# layer consults it when evaluating a grid; see
 # ``test_layer_geometry_masks_output`` below.  Any covering geometry works.
 GEOM = shapely.box(171.9, -43.6, 172.1, -43.4)
 
-# A geometry that shares no area with the grids built by ``make_grid``.
+# A geometry that doesn't overlap the grids built by ``make_grid``.
 DISJOINT_GEOM = shapely.box(0.0, 0.0, 1.0, 1.0)
 
 # ---------------------------------------------------------------------------
@@ -83,17 +83,17 @@ def test_clamp_qs_floored_to_multiple_of_vs() -> None:
     cfg = ClampLayerConfig(
         clamps={Component.QS: Bound(min=0.05, min_ref="vs")}  # ty: ignore[invalid-argument-type]
     )
-    # Vs = 3000 m/s -> floor 0.05 * 3000 = 150; input Qs = 40 is below it.
+    # Vs = 3000 m/s -> floor 0.05 * 3000 = 150. The input Qs = 40 is below it.
     result = _clamp_over_constant(cfg, vs=3000.0, qs=40.0)
     assert float(result.qs.mean()) == pytest.approx(150.0, rel=1e-4)
 
 
 def test_clamp_qp_capped_to_multiple_of_vp() -> None:
-    """A relative max bound caps Qp at ``factor * Vp``; below the cap is untouched."""
+    """A relative max bound caps Qp at ``factor * Vp`` and leaves smaller values alone."""
     cfg = ClampLayerConfig(
         clamps={Component.QP: Bound(max=0.1, max_ref="vp")}  # ty: ignore[invalid-argument-type]
     )
-    # Vp = 5000 m/s -> cap 0.1 * 5000 = 500; input Qp = 900 is above it, 200 is not.
+    # Vp = 5000 m/s -> cap 0.1 * 5000 = 500. The input Qp = 900 exceeds it, 200 doesn't.
     capped = _clamp_over_constant(cfg, vp=5000.0, qp=900.0)
     assert float(capped.qp.mean()) == pytest.approx(500.0, rel=1e-4)
     below = _clamp_over_constant(cfg, vp=5000.0, qp=200.0)
@@ -101,7 +101,7 @@ def test_clamp_qp_capped_to_multiple_of_vp() -> None:
 
 
 def test_clamp_relative_bound_uses_clamped_vs() -> None:
-    """Qs floored to k*Vs tracks the *clamped* Vs, since Vs is finalised first."""
+    """Qs floored to k*Vs tracks the *clamped* Vs, since the clamp settles Vs first."""
     cfg = ClampLayerConfig(
         clamps={
             Component.VS: Bound(min=4000.0),  # forces Vs 3000 -> 4000
@@ -114,7 +114,7 @@ def test_clamp_relative_bound_uses_clamped_vs() -> None:
 
 
 def test_clamp_bound_rejects_unknown_ref() -> None:
-    """A ``*_ref`` naming a non-component is rejected at config time."""
+    """Config parsing rejects a ``*_ref`` pointing at a non-component."""
     from mashumaro.exceptions import InvalidFieldValue
 
     with pytest.raises(InvalidFieldValue):
@@ -137,9 +137,9 @@ def test_clamp_vs_snaps_vp_and_rho_onto_manifold(
 ) -> None:
     """Clamping Vs regenerates Vp and density from Brocher/Nafe-Drake.
 
-    Golden values are derived from Brocher (2005) eq. 9 and Nafe-Drake
-    eq. 1; the test uses hardcoded expectations so that a coefficient
-    change requires deliberate update, not silent pass-through.
+    The golden values come from Brocher (2005) eq. 9 and Nafe-Drake
+    eq. 1. The test hardcodes its expectations so that a coefficient change
+    forces a deliberate update rather than a silent pass-through.
     """
     cfg = ClampLayerConfig(clamps={Component.VS: Bound(min=vs)})
     result = _clamp_over_constant(cfg, vs=vs - 1.0, vp=1.0, rho=1.0)
@@ -148,9 +148,9 @@ def test_clamp_vs_snaps_vp_and_rho_onto_manifold(
 
 
 def test_clamp_vs_untouched_leaves_vp_rho_alone() -> None:
-    """Where Vs is not moved by the clamp, Vp and density are left as-is."""
+    """Where the clamp doesn't move Vs, Vp and density keep their input values."""
     cfg = ClampLayerConfig(clamps={Component.VS: Bound(min=1000.0)})
-    # vs 3500 already satisfies the bound, so nothing is snapped.
+    # vs 3500 already satisfies the bound, so the clamp snaps nothing.
     result = _clamp_over_constant(cfg, vs=3500.0, vp=6000.0, rho=2700.0)
     assert float(result.vp.mean()) == pytest.approx(6000.0, rel=1e-4)
     assert float(result.rho.mean()) == pytest.approx(2700.0, rel=1e-4)
@@ -161,9 +161,9 @@ def test_clamp_vs_untouched_leaves_vp_rho_alone() -> None:
 # ---------------------------------------------------------------------------
 
 
-# The two ratio bounds are the same contract with the comparison reversed, so
-# they are parametrised over ``(config field, comparison)`` rather than
-# duplicated.  Note @pytest.mark.parametrize must sit *outside* @given.
+# ``min_vp_vs_ratio`` and ``max_vp_vs_ratio`` are the same contract with the
+# comparison reversed, so the test parametrises over
+# ``(config field, comparison)`` rather than duplicating it.  Note @pytest.mark.parametrize must sit *outside* @given.
 @pytest.mark.parametrize(
     "field, compare",
     [
@@ -172,7 +172,7 @@ def test_clamp_vs_untouched_leaves_vp_rho_alone() -> None:
     ],
 )
 @given(
-    # 1.125 rather than 1.1: `width=32` requires exactly-representable bounds.
+    # 1.125 rather than 1.1: `width=32` requires exactly representable bounds.
     ratio=st.floats(min_value=1.125, max_value=3.0, allow_nan=False, width=32),
     vs=st.floats(min_value=500.0, max_value=4000.0, allow_nan=False, width=32),
     vp=st.floats(min_value=100.0, max_value=8000.0, allow_nan=False, width=32),
@@ -196,10 +196,10 @@ def test_clamp_vp_vs_ratio_enforced(
 @pytest.mark.parametrize(
     "field, ratio, vs, vp_in, vp_out",
     [
-        # vp starts inside the bound and must be left alone...
+        # vp starts inside the bound, so the clamp must leave it alone...
         ("min_vp_vs_ratio", 1.5, 2000.0, 6000.0, 6000.0),
         ("max_vp_vs_ratio", 3.0, 2000.0, 4000.0, 4000.0),
-        # ...and starts outside, so it must be moved exactly onto it.
+        # ...and starts outside, so the clamp must move it exactly onto it.
         ("min_vp_vs_ratio", 2.0, 2000.0, 1000.0, 4000.0),
         ("max_vp_vs_ratio", 2.0, 2000.0, 8000.0, 4000.0),
     ],
@@ -209,7 +209,7 @@ def test_clamp_vp_vs_ratio_moves_vp_onto_the_bound(
 ) -> None:
     """The ratio clamp is a projection: exact on the bound, identity inside it.
 
-    The property test above only pins the inequality, which a clamp that
+    The preceding property test only pins the inequality, which a clamp that
     over-corrects would also satisfy.
     """
     cfg = ClampLayerConfig(**{field: ratio})  # ty: ignore[invalid-argument-type]
@@ -233,7 +233,7 @@ def test_clamp_delegates_to_next_layer() -> None:
 
 
 def test_clamp_propagates_model_range() -> None:
-    """The model_range kwarg is forwarded to next_layer unchanged."""
+    """The clamp forwards the model_range kwarg to next_layer unchanged."""
     cfg = ClampLayerConfig()
     inner = ConstantLayer()
     recorder = RecordingLayer(GEOM, inner)
@@ -243,7 +243,7 @@ def test_clamp_propagates_model_range() -> None:
 
 
 def test_outer_clamp_applies_to_inner_layer_result() -> None:
-    """The outermost ClampLayer governs the inner ConstantLayer's output.
+    """The outermost ClampLayer bounds the inner ConstantLayer's output.
 
     Hand-assembled rather than built through ``build_pipeline``: this is a
     ``Layer`` composition contract, so it belongs here.  The equivalent
@@ -354,13 +354,13 @@ def test_step_interpolator_clip_above_last() -> None:
 # ---------------------------------------------------------------------------
 # functional_layer deserialization
 # ---------------------------------------------------------------------------
-# The @functional_layer decorator generates a LayerConfig subclass dynamically
-# via make_dataclass.  The non-trivial invariants are:
+# The @functional_layer decorator generates a LayerConfig subclass at import
+# time via make_dataclass.  The non-trivial invariants are:
 #   - the generated config has the right type tag
 #   - it round-trips through dict serialisation
 #   - mashumaro's discriminator (include_subtypes=True) finds the subclass
 #     and reconstructs the correct type from the base LayerConfig.from_dict
-#   - the layer class is registered in Layer.registry under its config class
+#   - Layer.registry holds the layer class under its config class
 #   - a layer instantiated from the reconstructed config produces correct output
 
 
@@ -432,7 +432,7 @@ def test_functional_layer_instantiation_from_deserialised_config() -> None:
 
 def test_adhoc_functional_layer_deserialises(isolated_layer_registry: None) -> None:
     """An ad-hoc @functional_layer defined inside a test must round-trip through
-    LayerConfig.from_dict — verifying that layers created outside dummy.py work."""
+    LayerConfig.from_dict, verifying that layers created outside dummy.py work."""
     from nzcvm.config.layers.core import LayerConfig
     from nzcvm.layers.core import Layer
     from nzcvm.layers.functional import functional_layer
@@ -456,7 +456,8 @@ def test_adhoc_functional_layer_deserialises(isolated_layer_registry: None) -> N
     cfg = zeros.config_cls()
     assert cfg.type == "zeros"  # ty: ignore[unresolved-attribute]
 
-    # Must survive a dict round-trip via the base LayerConfig discriminator
+    # Must come back unchanged from a dict round-trip via the base
+    # LayerConfig discriminator
     d = cfg.to_dict()
     assert d["type"] == "zeros"
     cfg2 = LayerConfig.from_dict(d)
@@ -524,7 +525,7 @@ def _offshore_config() -> OffshoreBasinConfig:
             DepthModel(distance=50_000.0, bottom_depth=1000.0),
         ],
         # ``_build_model_interpolator`` keeps only layers shallower than the
-        # deepest basin_depth entry, so the first must sit above 1000 m.
+        # deepest basin_depth entry, so the first must be shallower than 1000 m.
         model=[
             VelocityModel1D(
                 bottom_depth=500.0,
@@ -549,7 +550,7 @@ def _offshore_config() -> OffshoreBasinConfig:
 
 
 def _run_offshore(depth0: float) -> Qualities:
-    """Run the offshore layer over an entirely-offshore grid at *depth0*."""
+    """Run the offshore layer over an entirely offshore grid at *depth0*."""
     grid = make_grid(nx=2, ny=2, nz=2, depth0=depth0)
     grid[Coordinate.COASTLINE] = (
         (Coordinate.I, Coordinate.J),
@@ -563,7 +564,7 @@ def test_offshore_suppressed_under_a_basin_that_reaches_the_surface() -> None:
     """A surface basin disables the offshore profile for the whole column."""
     vs = _run_offshore(depth0=100.0).vs.values
 
-    # i == 0 outcrops a basin.  The basin has bottomed out well above 100 m,
+    # i == 0 outcrops a basin.  The basin bottoms out well shallower than 100 m,
     # but the offshore profile must still stay out of the column.
     assert np.all(np.isclose(vs[0], TOMO_VS))
 
@@ -573,7 +574,7 @@ def test_offshore_suppressed_under_a_basin_that_reaches_the_surface() -> None:
 
 @pytest.mark.parametrize("depth0", [100.0, 500.0, 900.0])
 def test_offshore_veto_holds_below_the_basin_bottom(depth0: float) -> None:
-    """The veto is column-wide: it does not lapse below the basin surface."""
+    """The veto is column-wide: it doesn't lapse below the basin surface."""
     vs = _run_offshore(depth0=depth0).vs.values
 
     assert not np.any(np.isclose(vs[0], OFFSHORE_VS))

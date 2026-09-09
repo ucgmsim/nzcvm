@@ -13,8 +13,8 @@ from enum import StrEnum, auto
 class Component(StrEnum):
     """Seismic material property label used as a dataset variable name.
 
-    Each member's string value is the variable name written into output
-    datasets, so ``Component.VP == "vp"`` and it can be used directly as
+    Each member's string value is also the variable name in output
+    datasets, so ``Component.VP == "vp"`` and a member works directly as
     an xarray coordinate or dimension name.
 
     Examples

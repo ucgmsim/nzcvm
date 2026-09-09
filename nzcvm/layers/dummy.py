@@ -1,13 +1,13 @@
 """Reusable utility layers for testing and scientific isolation.
 
-:class:`constant` is defined via the :func:`~nzcvm.layers.functional.functional_layer`
-decorator and can be used both in test code and in scientific pipelines where
-a spatially-uniform background model is needed (e.g. isolating source effects
-from path effects).
+The :func:`~nzcvm.layers.functional.functional_layer` decorator defines
+:class:`constant`, which suits both test code and scientific pipelines that
+want a spatially uniform background model, such as when isolating source
+effects from path effects.
 
 :class:`CountingLayer` and :class:`RecordingLayer` are stateful wrappers that
-track how many times they are called and what arguments they received.  They
-are most useful in test code.
+track how many times they're called and what arguments they received.  Test
+code is the place for them.
 
 Example
 -------
@@ -58,7 +58,7 @@ def constant(
     qs: float = 100.0,
     alpha: float = 1.0,
 ) -> Qualities:
-    """Return spatially-uniform constant qualities regardless of the grid.
+    """Return spatially uniform constant qualities regardless of the grid.
 
     Useful as a terminal layer in test pipelines or as a flat background model
     in scientific experiments where one wants to isolate source effects.
@@ -68,7 +68,7 @@ def constant(
     rho, vp, vs, qp, qs, alpha :
         Uniform component values broadcast to the full grid shape.
     next_layer :
-        Ignored – this is a terminal layer that never delegates downstream.
+        Ignored, because a terminal layer never delegates downstream.
     """
     shape = grid.x.shape
     ones = np.ones(shape, dtype=np.float32)
@@ -93,7 +93,7 @@ class _NullConfig(LayerConfig):
 
 
 class CountingLayer(Layer[_NullConfig]):
-    """Transparent wrapper that counts how many times the layer is called.
+    """Transparent wrapper that counts calls into the layer.
 
     Parameters
     ----------
@@ -132,5 +132,5 @@ class RecordingLayer(Layer[_NullConfig]):
         return self.next_layer(grid, model_range=model_range)
 
 
-# Keep a class alias so code that was written with ConstantLayer still works.
+# Keep a class alias so older code naming ConstantLayer still works.
 ConstantLayer = constant

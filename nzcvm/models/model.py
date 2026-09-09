@@ -1,12 +1,12 @@
 """High-level Python wrappers around the compiled Rust velocity-model backend.
 
-The primary public interfaces are :class:`MeshModel` (a single tetrahedral
-mesh) and :class:`ModelTree` (a priority-ordered collection of meshes with
-alpha-blended queries).  Both implement the :class:`QueryableModel` protocol,
-which requires a :meth:`~QueryableModel.query` method.
+The primary public interfaces are :class:`MeshModel` (one tetrahedral mesh) and
+:class:`ModelTree` (a priority-ordered collection of meshes with alpha-blended
+queries).  Both satisfy the :class:`QueryableModel` protocol, which requires a
+:meth:`~QueryableModel.query` method.
 
-:class:`Quality` and the other dataclasses mirror their Rust counterparts
-and are returned from query methods.
+:class:`Quality` and the other dataclasses mirror their Rust counterparts, and
+query methods return them.
 
 See Also
 --------
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Point(DataClassDictMixin):
-    """A 3-D point returned by some query methods.
+    """A 3D point returned by some query methods.
 
     Examples
     --------
@@ -58,13 +58,13 @@ class Point(DataClassDictMixin):
     z: float
 
     def __str__(self) -> str:
-        """Return ``(x, y, z)`` formatted to six significant figures."""
+        """Return ``(x, y, z)`` formatted to six decimal digits."""
         return f"({self.x:.6g}, {self.y:.6g}, {self.z:.6g})"
 
 
 @dataclass
 class QueryStats(DataClassDictMixin):
-    """Diagnostic counters for a single model query.
+    """Diagnostic counters for one model query.
 
     Useful for profiling BVH traversal efficiency. Returned by
     :meth:`ModelTree.query_stats`.
@@ -78,7 +78,8 @@ class QueryStats(DataClassDictMixin):
     hit_count :
         Number of simplices that contained the query point.
     output :
-        Final blended quality, or ``None`` if the point is outside the model.
+        Final blended quality, or ``None`` when the point lies outside the
+        model.
     elapsed :
         Wall-clock time for the query in nanoseconds.
     """
@@ -92,7 +93,7 @@ class QueryStats(DataClassDictMixin):
 
 @dataclass
 class ModelContribution(DataClassDictMixin):
-    """A single model's contribution to a blended quality result.
+    """One model's contribution to a blended quality result.
 
     Attributes
     ----------
@@ -112,7 +113,7 @@ class ModelContribution(DataClassDictMixin):
 
 @dataclass
 class Explanation(DataClassDictMixin):
-    """Full audit trail for how a query result was produced.
+    """Full audit trail for how :class:`ModelTree` produced a query result.
 
     Returned by :meth:`ModelTree.get_explanation`. Each element in
     ``contributions`` shows the raw quality from one model; ``output`` is
@@ -125,12 +126,12 @@ class Explanation(DataClassDictMixin):
     output :
         Final blended quality, or ``None`` if no model covered the point.
     termination :
-        Index into ``contributions`` at which alpha saturation was reached.
-        All contributions at or after this index were ignored.
+        Index into ``contributions`` at which alpha saturation occurred.
+        The query ignored every contribution at or after this index.
 
     Notes
     -----
-    If ``termination`` is ``None`` all contributions were used.
+    If ``termination`` is ``None`` the blend used every contribution.
     """
 
     contributions: list[ModelContribution]
@@ -156,14 +157,14 @@ class Explanation(DataClassDictMixin):
 
 
 class MeshModel:
-    """A single tetrahedral mesh velocity model.
+    """One tetrahedral mesh velocity model.
 
     Wraps a compiled Rust :class:`PyMeshModel` and exposes spatial quality
     queries together with a rich display interface.
 
     Notes
     -----
-    A ``MeshModel`` becomes *consumed* once it has been passed to
+    A ``MeshModel`` becomes *consumed* once you pass it to
     :class:`ModelTree`.  Calling :meth:`query` or :attr:`aabb` on a consumed
     instance raises :class:`ValueError`.
 
@@ -244,7 +245,7 @@ class MeshModel:
         return self._raw.aabb()  # type: ignore[no-any-return]
 
     def query(self, x: Any, y: Any, z: Any) -> Quality | None:
-        """Query material properties at a single point.
+        """Query material properties at one point.
 
         Parameters
         ----------
@@ -259,7 +260,7 @@ class MeshModel:
         Raises
         ------
         ValueError
-            If this ``MeshModel`` has been consumed by a :class:`ModelTree`.
+            If a :class:`ModelTree` has already consumed this ``MeshModel``.
         """
         quality_dict = self._raw.query(x, y, z)
         return Quality.from_dict(quality_dict) if quality_dict is not None else None
@@ -304,7 +305,7 @@ class ModelTree:
 
     Wraps one or more :class:`MeshModel` instances (or VTKHDF mesh files)
     into a priority-ordered spatial index.  Queries return blended
-    :class:`Quality` values at arbitrary 3-D coordinates.
+    :class:`Quality` values at arbitrary 3D coordinates.
 
     Notes
     -----
@@ -353,7 +354,7 @@ class ModelTree:
 
     @classmethod
     def from_mesh(cls, mesh_model: TetrahedralMesh) -> Self:
-        """Build a :class:`ModelTree` from a single in-memory :class:`~nzcvm.models.mesh.TetrahedralMesh`.
+        """Build a :class:`ModelTree` from one in-memory :class:`~nzcvm.models.mesh.TetrahedralMesh`.
 
         Parameters
         ----------
@@ -395,7 +396,7 @@ class ModelTree:
         *,
         model_range: ModelRange = ModelRange.ALL,
     ) -> Quality | None:
-        """Query material properties at a single point.
+        """Query material properties at one point.
 
         Parameters
         ----------
@@ -422,7 +423,7 @@ class ModelTree:
         return Quality.from_dict(quality_dict) if quality_dict is not None else None
 
     def query_stats(self, x: Any, y: Any, z: Any) -> QueryStats:
-        """Query a single point and return traversal diagnostics.
+        """Query one point and return traversal diagnostics.
 
         Parameters
         ----------
@@ -463,7 +464,7 @@ class ModelTree:
         """Pretty-print the blending explanation for a query point.
 
         Prints a rich-formatted tree to stdout showing each model's
-        contribution and whether it was included in the final blend.
+        contribution and whether the final blend used it.
 
         Parameters
         ----------
@@ -502,20 +503,20 @@ class ModelTree:
             range.  Defaults to :attr:`ModelRange.ALL`.
         out :
             Optional pre-allocated float32 array of shape ``(*x.shape, 6)``.
-            Python is responsible for allocation and zeroing.  When provided
-            the results are written into it in-place and it is returned.
+            Python is responsible for allocation and zeroing.  When provided,
+            the query fills it in place and returns it.
         where :
             Optional boolean array broadcastable to ``x.shape``.  When
-            provided, only points where the mask is ``True`` are queried;
-            other rows in ``out`` are left unchanged.
+            provided, the query visits only points where the mask is ``True``
+            and leaves the other rows of ``out`` unchanged.
 
         Returns
         -------
         numpy.ndarray
             Float32 array of shape ``(*x.shape, 6)`` with columns ordered as
-            ``[rho, vp, vs, qp, qs, alpha]``.  Rows for points outside all
-            matching models are left as zeros (or unchanged when *out* is
-            provided and *where* masks them out).
+            ``[rho, vp, vs, qp, qs, alpha]``.  Rows for points outside every
+            matching model remain zero, or keep their previous value when you
+            pass *out* and *where* masks them out.
 
         See Also
         --------
@@ -562,7 +563,7 @@ class ModelTree:
         Parameters
         ----------
         x, y, z :
-            Arrays of coordinates; broadcastable to a common shape.
+            Arrays of coordinates, broadcastable to a common shape.
         model_range :
             Restricts the query to models whose priority falls within this
             range.  Defaults to :attr:`ModelRange.ALL`.

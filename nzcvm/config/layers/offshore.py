@@ -42,11 +42,11 @@ class OffshoreBasinConfig(LayerConfig):
     ----------
     basin_depth :
         List of :class:`DepthModel` entries mapping offshore distance (m) to
-        basin bottom depth (m).  The taper depth at any given distance is
-        interpolated from this table.
+        basin bottom depth (m).  The layer interpolates the taper depth at any
+        given distance from this table.
     model :
         Ordered list of :class:`VelocityModel1D` entries defining the
-        velocity–depth profile used in the offshore region.
+        velocity-depth profile used in the offshore region.
 
     Examples
     --------

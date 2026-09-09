@@ -68,7 +68,7 @@ def _ray_cast_intersections(
         # the x-value of the intersection point with a horizontal ray (extending
         # in both the + & - directions from the test point). If that x-value is
         # greater than px then the +x ray cast from (px, py) intersects the
-        # boundary and we count it toward the intersection parity.
+        # boundary and counts toward the intersection parity.
         p_idx = ray_indices[i]
         s_idx = segment_indices[i]
 
@@ -81,14 +81,13 @@ def _ray_cast_intersections(
         By = segments[s_idx, 1, 1]
 
         # This check is another bounding box check in the y-direction only,
-        # which sounds redundant because we already check bounding box
-        # intersections with STRTree. But it serves a crucial purpose. Suppose
-        # that the ray intersects at a vertex of a polygon, then the ray would
-        # count as intersecting twice -- once on each incident segment. The
-        # point inside the polygon would be erroneously counted as *outside* the
-        # polygon in this case and hence this checks acts as a tie breaker. In
-        # the event that a ray cast passes through a polygon vertex, only one of
-        # the two incident segments would be counted.
+        # which sounds redundant given the earlier bounding box intersections
+        # with STRTree. It matters anyway. Suppose that the ray intersects at a
+        # vertex of a polygon, then the ray would count as intersecting twice
+        # -- once on each incident segment. That would put a point inside the
+        # polygon erroneously *outside* it, so this check acts as a tie
+        # breaker. In the event that a ray cast passes through a polygon
+        # vertex, the tie breaker counts only one of the two incident segments.
         if min(Ay, By) <= py < max(Ay, By):
             x_intersect = Ax + (py - Ay) * (Bx - Ax) / (By - Ay)
 
@@ -107,7 +106,7 @@ class CoastlineLayer(Layer[CoastlineConfig], config_cls=CoastlineConfig):
 
         self.segments = _extract_segments(coastline).astype(np.float32)
         # TODO: Replace with geo-index to remove overhead creating points in the _compute_chunk_dist
-        # Requires https://github.com/georust/geo-index/issues/150 to be fixed.
+        # Blocked on https://github.com/georust/geo-index/issues/150.
 
         lines = [shapely.geometry.LineString(seg) for seg in self.segments]
         self.tree = shapely.STRtree(lines)
@@ -129,12 +128,12 @@ class CoastlineLayer(Layer[CoastlineConfig], config_cls=CoastlineConfig):
             )
             distance = distance.astype(np.float32)
 
-            # The above will return the distance to the nearest segment but its
-            # sign (in or out) cannot be determined by distance alone. We need
-            # to know if points are contained in the geometry. To test this we ray
-            # cast. If the cast ray (which is arbitrary so we use a +x ray)
-            # intersects the geometry an odd number of times we know we are
-            # inside. To make this fast we employ two techniques:
+            # That returns the distance to the nearest segment, but its
+            # sign (in or out) doesn't follow from distance alone: the test
+            # needs to know whether a point lies inside the geometry. Ray
+            # casting answers that. If the cast ray (arbitrary, so a +x ray)
+            # crosses the geometry an odd number of times, it lies inside.
+            # Making that fast takes two techniques:
             #
             # 1. Reusing the STRTree to query all *possibly* intersecting
             # polygon segments by ray. Possibly intersecting is per the

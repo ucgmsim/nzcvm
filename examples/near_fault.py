@@ -13,7 +13,7 @@ from nzcvm.query import ModelRange
 from nzcvm.scripts import nzcvm_cli
 
 
-# In our example we will use a point-source for simplicity, but this could be
+# This example uses a point source for simplicity, but it could be
 # any complex geometry.
 @functional_layer
 def fault_zone(

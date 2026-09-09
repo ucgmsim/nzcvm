@@ -1,12 +1,12 @@
 """Top-level configuration for NZCVM velocity models.
 
-:class:`VelocityModelConfig` is loaded from a TOML, YAML, or JSON config file
-and passed to :class:`~nzcvm.velocity_model.VelocityModel` to build the grid
-and query pipeline.
+:class:`VelocityModelConfig` comes from a TOML, YAML, or JSON config file and
+feeds :class:`~nzcvm.velocity_model.VelocityModel`, which builds the grid and
+query pipeline.
 
-Layers are configured as an ordered list of :class:`~nzcvm.config.layers.LayerConfig`
-objects under the ``layers`` key.  The list defines the pipeline: the first
-entry is the outermost layer and the last must be a
+The ``layers`` key holds an ordered list of
+:class:`~nzcvm.config.layers.LayerConfig` objects.  The list defines the
+pipeline: the first entry is the outermost layer and the last must be a
 :class:`~nzcvm.config.layers.query.QueryLayerConfig` that performs the actual
 velocity-model queries.  A minimal TOML example::
 

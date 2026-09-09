@@ -24,7 +24,7 @@ def read_surface_file(
         scalars = np.array(f[scalar_key])
 
     if flip:
-        # Swap convention if necessary (+z above sea level)
+        # Swap convention if necessary (+z pointing up from sea level)
         scalars *= -1
 
     x_lon, x_lat = np.meshgrid(longitude, latitude)

@@ -1,7 +1,7 @@
 """Tests for EMOD3D and SW4 grid builders.
 
-All tests use a synthetic flat surface (z=0 everywhere) so no real data files
-are needed.
+Every test here builds on a synthetic flat surface, z=0 everywhere, so nothing
+reads a real data file.
 """
 
 from __future__ import annotations
@@ -28,12 +28,12 @@ from nzcvm.models.mesh import StructuredMeshSchema
 # NZ-wide bounding box in NZTM2000 (approx): roughly 1e6 m x 1.7e6 m
 _SURFACE_XMIN = 1_000_000.0
 _SURFACE_YMIN = 4_700_000.0
-_SURFACE_EXTENT = 2_000_000.0  # 2000 km side, clearly encompasses test grids
+_SURFACE_EXTENT = 2_000_000.0  # 2000 km side, wide enough to cover every test grid
 
 
 def _write_flat_surface(path: Path) -> None:
     """Write a flat z=0 StructuredMesh zarr surface to *path*."""
-    n = 8  # 8×8 grid of points — enough for interpolation
+    n = 8  # 8x8 grid of points, enough for interpolation
     xs = np.linspace(
         _SURFACE_XMIN, _SURFACE_XMIN + _SURFACE_EXTENT, n, dtype=np.float32
     )
@@ -150,7 +150,7 @@ class TestGridShape:
 
 class TestEMOD3DShape:
     def test_all_dims_chunked_according_to_config(self, flat_surface: Path) -> None:
-        """After ensure_chunks, i/j must be chunked per the config; k is always a single chunk."""
+        """After ensure_chunks, i/j follow the config chunking and k stays one chunk."""
         nx, ny, nz = 8, 8, 8
         ci, cj = 4, 4
         chunks = {Coordinate.I: ci, Coordinate.J: cj}
@@ -222,9 +222,9 @@ class TestGridRotation:
     bearing: ``grid_azimuth`` differs from ``azimuth`` by the meridian
     convergence (``config/grids/model.py``), which is constant for a fixed
     origin but depends on the pyproj version.  The *difference* between two
-    azimuths is exact, so this stays robust while still pinning the sign —
-    an assertion that the profiles merely differ would pass for a rotation in
-    the wrong direction, which is what this replaces.
+    azimuths is exact, so a pyproj upgrade can't break the comparison, which
+    still pins the sign.  An assertion that the profiles merely differ would pass
+    for a rotation in the wrong direction, which is what this replaces.
     """
 
     @pytest.mark.parametrize("azimuth", [0, 30, 90, 180, 270])
@@ -237,7 +237,7 @@ class TestGridRotation:
 
         bearing_0 = np.degrees(np.arctan2(v0[1], v0[0]))
         bearing_a = np.degrees(np.arctan2(va[1], va[0]))
-        # The rotation matrix is built from -grid_azimuth, so increasing the
+        # The rotation matrix comes from -grid_azimuth, so increasing the
         # azimuth turns the i-axis clockwise.
         assert (bearing_a - bearing_0) % 360 == pytest.approx(
             (-azimuth) % 360, abs=0.1
@@ -294,7 +294,7 @@ class TestSW4CornerRegistration:
     """SW4 is corner-registered: the first horizontal point sits at the boundary."""
 
     def test_depth_at_surface_is_zero_or_negative(self, flat_surface: Path) -> None:
-        """Top k slice depth should be >= 0 (at or above surface = 0 for flat topo)."""
+        """Top k slice depth should be >= 0 (at or shallower than surface = 0 for flat topo)."""
         grids = build_grids_from_config(_sw4_config(flat_surface))
         grid = next(iter(grids.values()))
         top_depth = float(grid.depth.isel(i=0, j=0, k=0).compute())
@@ -308,7 +308,7 @@ class TestSW4RefinementSeams:
         top_bottom = 2000.0
         cfg = _sw4_config(
             flat_surface,
-            # Shallowest refinement is finest; the deeper layer is 2x coarser.
+            # Shallowest refinement is finest, and the deeper layer 2x coarser.
             refinements={
                 "top": MeshRefinement(resolution=1000.0, bottom=top_bottom),
                 "bot": MeshRefinement(resolution=2000.0, bottom=4000.0),

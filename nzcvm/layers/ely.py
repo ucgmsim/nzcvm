@@ -70,10 +70,10 @@ class ElyLayer(Layer[ElyLayerConfig], config_cls=ElyLayerConfig):
             ).squeeze()
             in_basin = xr.apply_ufunc(np.isclose, basin_at_surface.alpha, 1.0)
             if in_basin.all():
-                # If we are below the basin in all parts of the velocity model
-                # we don't calculate Ely taper, instead we fall through to the
-                # layer underneath for all qualities to preserve the impedance
-                # contrast between the basin and tomography layers.
+                # Below the basin everywhere in the velocity model, skip the
+                # Ely taper and defer every quality to the layer underneath,
+                # preserving the impedance contrast between the basin and
+                # tomography layers.
                 logger.debug("Chunk inside basin, skipping Ely taper calculation.")
                 return self.next_layer(grid, model_range=model_range)
             else:
@@ -101,7 +101,7 @@ class ElyLayer(Layer[ElyLayerConfig], config_cls=ElyLayerConfig):
         reference_rock_layer = grid_like_at_depth(grid, depth_t)
 
         # Calculate bounding taper qualities using *only* the tomography.
-        # Calling squeeze here drops the phony K dimension we kept around to
+        # Calling squeeze here drops the phony K dimension kept around to
         # calculate the qualities at the surface layer.
         logger.debug("Calculating taper qualities")
         taper_qualities = self.next_layer(

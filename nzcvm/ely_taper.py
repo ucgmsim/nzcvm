@@ -1,6 +1,6 @@
 """Ely et al. (2010) near-surface velocity taper.
 
-This module implements the near-surface velocity taper described by Ely et al.
+This module applies the near-surface velocity taper described by Ely et al.
 (2010) to smoothly transition from a tomography-based velocity model to a
 near-surface geotechnical layer (GTL) defined by a Vs30-based relation.
 

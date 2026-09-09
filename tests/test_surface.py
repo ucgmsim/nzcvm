@@ -1,13 +1,13 @@
 """Tests for the Surface FFI boundary class.
 
-The mathematical correctness of the underlying Rust interpolator is
-covered by cargo tests.  Here we test the Python-level contract:
+Cargo tests cover the mathematical correctness of the underlying Rust
+interpolator.  These tests pin the Python-level contract:
 
 * :meth:`~nzcvm.models.surface.Surface.from_dataset` produces a
   :class:`~nzcvm.models.surface.Surface` with sensible metadata.
 * :meth:`~nzcvm.models.surface.Surface.transform` preserves the input shape
   and returns float32 values.
-* The ``bounds`` array is ordered ``[xmin, ymin, zmin, xmax, ymax, zmax]``.
+* The ``bounds`` array reads ``[xmin, ymin, zmin, xmax, ymax, zmax]``.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def _flat_surface(
     z: float = 5.0, side: float = 10.0, cx: float = 5.0, cy: float = 5.0
 ) -> Surface:
     """Flat plane at constant elevation *z* covering [cx-side/2, cx+side/2]²."""
-    n = 5  # 5×5 grid — matches pv.Plane(i_resolution=4, j_resolution=4)
+    n = 5  # 5x5 grid, matching pv.Plane(i_resolution=4, j_resolution=4)
     xs = np.linspace(cx - side / 2, cx + side / 2, n, dtype=np.float32)
     ys = np.linspace(cy - side / 2, cy + side / 2, n, dtype=np.float32)
     xx, yy = np.meshgrid(xs, ys, indexing="ij")
@@ -59,7 +59,7 @@ def test_bounds_length(flat_surface: Surface) -> None:
 
 
 def test_bounds_order_min_lt_max(flat_surface: Surface) -> None:
-    """bounds = [xmin, ymin, zmin, xmax, ymax, zmax] – mins < maxes."""
+    """bounds = [xmin, ymin, zmin, xmax, ymax, zmax], with mins < maxes."""
     b = flat_surface.bounds
     assert b[0] < b[3]
     assert b[1] < b[4]

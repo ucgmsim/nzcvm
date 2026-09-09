@@ -2,9 +2,9 @@
 
 The core building blocks are composable 3×3 affine matrices (type alias
 :data:`Affine`) for 2-D transforms plus a :func:`crs_transform` helper for
-pyproj CRS conversions.  Affine transforms are created by the factory
-functions :func:`translate`, :func:`scale`, and :func:`reflect_x` and
-composed with standard NumPy matrix multiplication (``@``).
+pyproj CRS conversions.  The factory functions :func:`translate`,
+:func:`scale` and :func:`reflect_x` build affine transforms, which compose
+with standard NumPy matrix multiplication (``@``).
 
 A typical pipeline maps local model coordinates to a projected CRS::
 
@@ -28,8 +28,8 @@ import xarray as xr
 from pyproj import Transformer
 
 #: 4×4 homogeneous affine matrix operating on (x, y, z, 1) column vectors.
-#: Compose transforms left-to-right with ``@``; the leftmost matrix is
-#: applied last (i.e. ``A @ B`` applies *B* first, then *A*).
+#: Compose transforms left-to-right with ``@``. The leftmost matrix applies
+#: last, so ``A @ B`` applies *B* first, then *A*.
 Affine = np.ndarray[tuple[int, int], np.dtype[np.float32]]
 
 
@@ -80,7 +80,7 @@ def translate(x: float = 0.0, y: float = 0.0, z: float | None = None) -> Affine:
     x, y :
         Translation offsets in the x-y plane.
     z :
-        If given, operate in 3-D and translate by this amount along z.
+        If given, operate in 3D and translate by this amount along z.
         Passing ``z=0.0`` still selects the 4×4 form.
 
     Returns
@@ -118,7 +118,7 @@ def scale(sx: float = 1.0, sy: float = 1.0, sz: float | None = None) -> Affine:
     sx, sy :
         Scale factors along x and y.
     sz :
-        If given, operate in 3-D and scale by this amount along z.
+        If given, operate in 3D and scale by this amount along z.
         Passing ``sz=1.0`` still selects the 4×4 form.
 
     Returns
@@ -154,7 +154,7 @@ def reflect_x(dims: int = 2) -> Affine:
     Parameters
     ----------
     dims :
-        ``2`` → 3×3 (default); ``3`` → 4×4.
+        ``2`` → 3×3 (default), ``3`` → 4×4.
     """
     return scale(sx=-1.0) if dims == 2 else scale(sx=-1.0, sy=1.0, sz=1.0)
 

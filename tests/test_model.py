@@ -1,6 +1,6 @@
 """Tests for the ModelTree / MeshModel FFI boundary.
 
-The Rust BVH tree and blending logic are verified by cargo tests.  These
+Cargo tests cover the Rust BVH tree and blending logic.  These
 tests focus on the Python-level contracts:
 
 * :class:`~nzcvm.models.model.ModelRange` enumeration values.
@@ -119,8 +119,8 @@ def test_query_inside_returns_quality(wrap) -> None:
 def test_query_outside_returns_none(wrap) -> None:
     """A point beyond the mesh AABB must miss for both wrapper types.
 
-    The point is derived from the AABB rather than hardcoded, so it stays
-    genuinely outside if the shared tetrahedron fixture ever changes.
+    The coordinate comes from the AABB rather than a hardcoded literal, so it
+    remains outside even if the shared tetrahedron fixture changes.
     """
     _, aabb_max = MeshModel(_mesh_model()).aabb
     outside = tuple(float(c) + 1.0 for c in aabb_max)

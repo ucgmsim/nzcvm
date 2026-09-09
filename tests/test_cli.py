@@ -1,8 +1,8 @@
-"""CLI smoke tests.
+"""Command-line smoke tests.
 
-The only guarantee tested here is that every top-level subcommand can be
-invoked with ``--help`` and exits cleanly (exit code 0).  This avoids any
-dependency on data files or model configuration.
+These tests check one thing: every top-level subcommand accepts ``--help``
+and exits cleanly (exit code 0).  These tests don't read a data file or load
+a model configuration.
 """
 
 import pytest
