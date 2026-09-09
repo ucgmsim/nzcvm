@@ -44,11 +44,6 @@ dependencies = [
 known-first-party = ["nzcvm"]
 
 [tool.numpydoc_validation]
-# The subset the package currently satisfies. The remaining numpydoc codes are
-# a docstring-writing backlog, not a CI change: as of this commit nzcvm/ has
-# ~470 outstanding violations of GL08 (missing docstring), PR04 (missing
-# parameter type), PR01 (undocumented parameter) and RT01 (no Returns section).
-# Add them here as they are worked through.
 checks = ["GL05", "GL10", "PR02", "PR07", "RT03", "YD01"]
 
 [tool.deptry.per_rule_ignores]
