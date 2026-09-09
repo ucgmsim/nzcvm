@@ -34,12 +34,12 @@ class Bound(ConfigObject):
     """A ``(min, max)`` bound applied to a component.
 
     Each side is either a constant, or a multiple of another component when the
-    matching ``*_ref`` is set.  For example ``Bound(min=0.05, min_ref="vs")``
-    clamps the component to be at least ``0.05 * Vs`` at every point, which
-    reproduces the EMOD3D ``Qs = 50 * Vs`` relation (Vs is carried in m/s
-    internally, so the factor is ``50 / 1000``).  ``None`` leaves that side
-    unbounded.  The reference component's value is taken in the pipeline's
-    native units (velocities in m/s), evaluated pointwise at clamp time.
+    matching ``*_ref`` names one.  ``Bound(min=0.05, min_ref="vs")`` clamps the
+    component to at least ``0.05 * Vs`` at every point, which reproduces the
+    EMOD3D ``Qs = 50 * Vs`` relation (the pipeline holds Vs in m/s internally,
+    so the factor is ``50 / 1000``).  ``None`` leaves that side unbounded.  The
+    reference component keeps the pipeline's native units (velocities in m/s),
+    evaluated pointwise at clamp time.
     """
 
     min: float | None = None
@@ -113,9 +113,9 @@ class Bound(ConfigObject):
     def resolve(self, which: Literal["min", "max"], qualities):
         """Resolve the ``"min"`` or ``"max"`` side to a scalar or per-point array.
 
-        Returns ``None`` when that side is unbounded, the constant when no
-        ``*_ref`` is set, or ``coefficient * qualities[ref]`` (a DataArray
-        broadcastable to the grid) for a relative bound.
+        Returns ``None`` for an unbounded side, the constant when no
+        ``*_ref`` names a component, or ``coefficient * qualities[ref]`` (a
+        DataArray broadcastable to the grid) for a relative bound.
         """
         coeff = getattr(self, which)
         ref = getattr(self, f"{which}_ref")
@@ -131,20 +131,20 @@ class ClampLayerConfig(LayerConfig):
     """Configuration DTO for a :class:`~nzcvm.layers.clamp.ClampLayer`.
 
     The *clamps* mapping associates each velocity component with its
-    ``(min, max)`` bounds.  ``None`` means unbounded on that side; components
-    not listed are left unclamped.
+    ``(min, max)`` bounds.  ``None`` means unbounded on that side, and the
+    layer leaves any component the mapping omits unclamped.
 
-    Vs is the *master* property: a ``vs`` bound clamps Vs and then regenerates
-    Vp and density from the Brocher/Nafe-Drake relations at the affected
-    points, so the three stay physically consistent.  ``min_vp_vs_ratio`` /
+    Vs is the *master* property. A ``vs`` bound clamps Vs, then rebuilds Vp and
+    density from the Brocher/Nafe-Drake relations at the affected points, so
+    Vs, Vp and density stay mutually consistent.  ``min_vp_vs_ratio`` /
     ``max_vp_vs_ratio`` bound the Vp/Vs (Poisson) ratio as a physical guard
     (the isotropic hard floor is ``sqrt(2)``).  Bounds on any other component
-    are applied as plain hard guards and do not trigger the coherence
-    machinery, so reserve them for properties Vs does not govern (``qp``,
-    ``qs``) or for hard-capping an output.  Such a bound may be a constant or a
-    multiple of another component via ``min_ref``/``max_ref`` on the
-    :class:`Bound` -- e.g. ``[layers.clamps.qs] min = 0.05, min_ref = "vs"``
-    floors Qs at ``50 * Vs`` (Vs in m/s), and ``qp`` against ``vp`` likewise.
+    act as plain hard guards and don't trigger the coherence machinery, so
+    reserve them for properties Vs doesn't drive (``qp``, ``qs``) or for
+    hard-capping an output.  Such a bound may be a constant or a multiple of
+    another component via ``min_ref``/``max_ref`` on the :class:`Bound`.
+    Writing ``[layers.clamps.qs] min = 0.05, min_ref = "vs"`` floors Qs at
+    ``50 * Vs`` (Vs in m/s), and ``qp`` bounds against ``vp`` the same way.
     """
 
     type: str = "clamp"

@@ -45,7 +45,7 @@ class Model(ConfigObject):
 
         datum_shift_implied = geodetic_crs is None or geodetic_crs.to_epsg() not in (
             # NZGD2000 is technically different, but the alignment is extremely
-            # close and the warning would be annoying to see every time we run
+            # close and the warning would be annoying to see on every run
             # the code
             NZGD2000_EPSG,
             WGS84_EPSG,  # WGS84 itself

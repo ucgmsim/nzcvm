@@ -14,7 +14,7 @@ from nzcvm.grids.grid import Grid, GridSchema
 # ---------------------------------------------------------------------------
 # Hypothesis profiles
 #
-# ``deadline=None`` is load-bearing: several property tests build a fresh
+# ``deadline=None`` matters here: several property tests build a fresh
 # xarray Dataset per example, which is slow enough to trip the default
 # deadline on a loaded machine.
 # ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ def _mesh_model(
     priority: int = 0,
     name: str | None = None,
 ):
-    """Return a raw PyMeshModel wrapping a single unit tetrahedron."""
+    """Return a raw PyMeshModel wrapping one unit tetrahedron."""
     vertices = np.array(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         dtype=np.float32,
@@ -66,7 +66,7 @@ def _mesh_model(
 
 @pytest.fixture()
 def unit_tetrahedron_mesh():
-    """Raw PyMeshModel for a single unit tetrahedron."""
+    """Raw PyMeshModel for one unit tetrahedron."""
     return _mesh_model()
 
 

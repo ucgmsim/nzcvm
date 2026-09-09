@@ -59,12 +59,12 @@ def build_pipeline(geometry: Geometry, configs: list[LayerConfig]) -> Layer:
 def execute_model_pipeline(
     velocity_model: VelocityModel, pipeline: Callable[[Grid], Qualities]
 ) -> VelocityModel:
-    """Apply *pipeline* to every grid in *velocity_model* via a single
+    """Apply *pipeline* to every grid in *velocity_model* via one
     ``map_blocks`` per grid.
 
     Hoisting the chunked dispatch here means layers never need to call
     ``map_blocks`` or ``apply_ufunc(..., dask="parallelized")`` internally;
-    each layer always receives a fully-computed concrete chunk and can use
+    each layer always receives a fully computed concrete chunk and can use
     plain NumPy operations without creating extra Dask tasks.
     """
 

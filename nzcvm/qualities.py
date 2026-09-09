@@ -12,7 +12,7 @@ from nzcvm.components import Component
 
 @dataclass
 class Quality(DataClassDictMixin):
-    """Seismic material properties at a single point in the velocity model.
+    """Seismic material properties at one point in the velocity model.
 
     Attributes
     ----------
@@ -95,7 +95,7 @@ def _blend_raw(lhs_arr: np.ndarray, rhs_arr: np.ndarray) -> np.ndarray:
 
     ``apply_ufunc`` moves the ``component`` core dimension to the last axis,
     so *lhs_arr* and *rhs_arr* arrive as ``(*spatial_dims, 6)`` C-arrays.
-    We flatten the spatial prefix, call the Rust hot loop (GIL released
+    The wrapper flattens the spatial prefix, calls the Rust hot loop (GIL released
     inside), and reshape the result back.
     """
     shape = lhs_arr.shape  # (*spatial, 6)
@@ -121,11 +121,11 @@ def blend(
         Background qualities.
     out :
         Optional existing :class:`Qualities` dataset to write results into
-        in-place.  When provided it is also returned.
+        in-place.  When provided it's also the return value.
     where :
         Optional boolean array broadcastable to the qualities shape.  When
-        supplied, results are written only where the mask is ``True``; other
-        positions in *out* are left unchanged.  Requires *out* to be provided.
+        supplied, the blend writes only where the mask is ``True`` and leaves
+        every other position in *out* alone.  Requires *out*.
 
     Returns
     -------
@@ -134,8 +134,8 @@ def blend(
     """
     component_names = list(Component)
 
-    # Stack each variable into a single DataArray with a "component" dim.
-    # xr.concat puts "component" first; apply_ufunc moves it to last.
+    # Stack each variable into one DataArray with a "component" dim.
+    # xr.concat puts "component" first, and apply_ufunc moves it to last.
     lhs_da = xr.concat(
         [lhs[c] for c in component_names],
         dim=xr.DataArray(component_names, dims="component", name="component"),

@@ -7,8 +7,8 @@ class ModelRange(Enum):
     Priority values are ``u8`` ordered so that ``0`` is the highest priority
     and ``255`` is the lowest.  The ranges reflect the NZCVM convention:
 
-    * ``0–127``   — basin models (higher priority, evaluated first).
-    * ``128–255`` — tomography models (lower priority, blended in afterwards).
+    * ``0-127``: basin models. The higher priority half, queried first.
+    * ``128-255``: tomography models, blended in afterwards.
 
     Attributes
     ----------

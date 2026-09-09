@@ -1,6 +1,6 @@
 """Abstract base class and registry for pipeline layers."""
 
-# So that we can use the Layer[Any] without string quotes which look ugly.
+# Lets Layer[Any] appear without the string quotes, which look ugly.
 from __future__ import annotations
 
 import typing
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class Layer[C: LayerConfig](ABC):
-    """Abstract base class for a single stage in the model-query pipeline.
+    """Abstract base class for one stage in the model-query pipeline.
 
     A layer receives a :class:`~nzcvm.grids.grid.Grid` chunk, computes or
     transforms :class:`~nzcvm.qualities.Qualities`, and returns the result.
@@ -70,7 +70,7 @@ def layer_from_config(config: LayerConfig) -> type[Layer]:
     Raises
     ------
     KeyError
-        If no layer is registered for the given config type.
+        If the registry doesn't have a layer for the given config type.
     """
     config_type = type(config)
     if config_type not in Layer.registry:

@@ -143,7 +143,7 @@ def test_sfile_min_max_depth_attr(tmp_path: Path, simple_velocity_model: Velocit
 
     sfile.to_sfile(simple_velocity_model, out)
 
-    # Writer orients to (j, i, k) before writing, but min/max should be unchanged.
+    # The writer orients to (j, i, k) first, which must not move min/max.
     top_grid = simple_velocity_model.pairwise["g0"][0].transpose(
         Coordinate.J, Coordinate.I, Coordinate.K
     )

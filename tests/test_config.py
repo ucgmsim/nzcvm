@@ -2,14 +2,14 @@
 
 Covers two concerns:
 
-1. The validator functions in :mod:`nzcvm.config.validation` – tested
-   with Hypothesis property tests where natural, and contract-based unit
+1. The validator functions in :mod:`nzcvm.config.validation`, checked
+   with Hypothesis property tests where natural and contract-based unit
    tests otherwise.
 2. The layer and grid config dispatch that maps a :class:`LayerConfig`
    subclass to the corresponding :class:`Layer` subclass via
    :func:`~nzcvm.layers.core.layer_from_config`.
 
-Mashumaro TOML/YAML/JSON decoding is *not* tested here; that is the
+These tests leave Mashumaro TOML/YAML/JSON decoding alone, since that's the
 library's responsibility.
 """
 

@@ -52,7 +52,7 @@ def _depth_array(nk: int, resolution: float) -> xr.DataArray:
         dims=[Coordinate.K],
         coords={Coordinate.K: k},
     )
-    # Chunking only ever applies to i/j; k is always kept as a single chunk.
+    # Chunking only ever applies to i/j. k always stays one chunk.
     return k_da.chunk({Coordinate.K: -1})
 
 

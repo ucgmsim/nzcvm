@@ -42,9 +42,9 @@ class VelocityModel:
     @property
     def pairwise(self) -> dict[str, tuple[Grid, Qualities]]:
         if not self.qualities:
-            # We don't need to recheck this dataset because: (a) velocity model
-            # is frozen, and (b) the invariant set(self.qualities) ==
-            # set(self.grids) is checked in post init.
+            # No need to recheck this dataset because: (a) the velocity model
+            # never mutates, and (b) __post_init__ already checks the invariant
+            # set(self.qualities) == set(self.grids).
             raise ValueError(
                 "Cannot traverse pairwise when assigned qualities are empty"
             )

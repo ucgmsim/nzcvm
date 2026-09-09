@@ -34,7 +34,7 @@ class RegularGridConfig(GridConfig):
     azimuth :
         Clockwise rotation of the grid from north, in degrees.
     target_crs :
-        Target projected CRS integer code (e.g. ``2193`` for NZTM2000).
+        Target projected CRS integer code, such as ``2193`` for NZTM2000.
     origin_lon, origin_lat :
         Geographic origin of the local grid in *origin_crs* (longitude, latitude).
     transpose :

@@ -159,12 +159,12 @@ def read_surface_file(
 class LinearNDInterpolatorExt:
     """Linear interpolator with nearest-neighbour fallback outside the hull.
 
-    NaN input values are dropped before the interpolators are built so that an
-    undefined source node does not contaminate the linear interpolation of its
-    valid neighbours. The number of query points that fell outside the convex
-    hull of the (valid) input points on the most recent call — and were
-    therefore filled by nearest-neighbour extrapolation — is recorded in
-    :attr:`num_extrapolated` so callers can surface silent extrapolation.
+    Construction drops NaN input values before building the interpolators, so
+    that an undefined source node doesn't contaminate the linear interpolation
+    of its valid neighbours. :attr:`num_extrapolated` counts the query points
+    that fell outside the convex hull of the valid input points on the most
+    recent call and so took a nearest-neighbour extrapolation instead, which
+    lets callers report silent extrapolation.
     """
 
     def __init__(self, points, values):
@@ -220,8 +220,8 @@ def compute_topography_sizing_field(
     """Build a sizing field interpolator from one or more gradient fields.
 
     Where fields overlap, the minimum h (finest resolution) wins.
-    Points are binned at `bin_size` metres resolution before reduction
-    to identify near-coincident points across grids.
+    Binning the points at `bin_size` metres resolution before the reduction
+    identifies near-coincident points across grids.
 
     Example:
         coarse = gradient_field(x1, y1, z1, error_target=0.01, max_h=50000)
@@ -869,7 +869,7 @@ def main(
     top_x, top_y, top_z = read_surface_file(top_surface, bbox=buffered_bbox)
     bot_x, bot_y, bot_z = read_surface_file(bottom_surface, bbox=buffered_bbox)
     print("Computing topography gradient adaptive sizing field...")
-    # If we are smoothing then we cap the cell size to 1000.0 km to ensure decent smoothing resolution.
+    # When smoothing, cap the cell size to 1000.0 km to keep a decent smoothing resolution.
     # Otherwise, the only limit is geometry.
     max_h = 1000.0 if will_smooth else 50000.0
     fields = []

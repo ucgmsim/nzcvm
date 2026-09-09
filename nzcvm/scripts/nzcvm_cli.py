@@ -47,7 +47,7 @@ def _extract_error_snippet(config: str, lineno: int) -> tuple[str, int]:
 
 
 def print_syntax_error(exc: TOMLDecodeError | JSONDecodeError):
-    """Formats structural syntax violations elegantly inside a single card."""
+    """Formats structural syntax violations elegantly inside one card."""
     doc = exc.doc  # ty: ignore[unresolved-attribute]
     lineno = exc.lineno  # ty: ignore[unresolved-attribute]
     colno = exc.colno  # ty: ignore[unresolved-attribute]
@@ -87,7 +87,7 @@ def print_syntax_error(exc: TOMLDecodeError | JSONDecodeError):
 
 
 def print_config_error(exc: Exception):
-    """Recursively inspects exception context to surface the specific nested field error."""
+    """Recursively inspects exception context to find the nested field error."""
 
     # Track breadcrumbs of fields down the nesting structure
     field_path = []
@@ -238,10 +238,9 @@ def generate(
 
             exit_stack.enter_context(cluster)
             exit_stack.enter_context(client)
-            # Only need the registry pipeline manager if we are managing references
+            # Only need the registry pipeline manager when managing references
             # to the surface or model tree in the pickling. The built-in scheduler
-            # doesn't pickle the objects when run in threaded mode so this can
-            # be skipped.
+            # doesn't pickle the objects in threaded mode, so skip it there.
             exit_stack.enter_context(registry.pipeline_context())
         else:
             exit_stack.enter_context(LogProgress())

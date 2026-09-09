@@ -1,9 +1,9 @@
 """Topography-following spatially regular velocity model grid builder.
 
-Provides :func:`build_regular` for constructing the 3-D curvilinear mesh
+Provides :func:`build_regular` for constructing the 3D curvilinear mesh
 defined by a :class:`~nzcvm.config.grids.regular.RegularGridConfig`.
-Grids are returned as :class:`xarray.DataTree` nodes with chunked coordinates
-and topography-following ``z`` / ``depth`` arrays with a strictly fixed Z resolution.
+The builder returns :class:`xarray.DataTree` nodes with chunked coordinates
+and topography-following ``z`` / ``depth`` arrays at a strictly fixed Z resolution.
 """
 
 from typing import Any
@@ -36,7 +36,7 @@ def _regular_grid(
     # Depth is purely a function of k and resolution_z
     depth_values = np.linspace(0.0, thickness, num=nk, dtype=np.float32)
 
-    # Chunking only ever applies to i/j; k is always kept as a single chunk.
+    # Chunking only ever applies to i/j. k always stays one chunk.
     zeta_depth = xr.DataArray(
         depth_values,
         dims=[Coordinate.K],
@@ -44,7 +44,7 @@ def _regular_grid(
     ).chunk({Coordinate.K: -1})
 
     # Elevation (z) is the surface elevation shifted downward by the fixed depths.
-    # This guarantees the bottom follows the topography perfectly.
+    # The bottom then follows the topography exactly.
     z = surface + zeta_depth
 
     # Same idiomatic trick as the SW4 template to ensure coordinate ordering (i, j, k)
@@ -73,7 +73,7 @@ def build_regular(config: RegularGridConfig) -> dict[str, Grid]:
     rounded_extent_y = nj * config.resolution_y
 
     # Generate unit coordinates (resolution=1.0) and scale manually to handle
-    # independent X and Y resolutions seamlessly with the existing helper.
+    # independent X and Y resolutions with the existing helper.
     ox, oy = helpers.raw_coordinates(
         ni,
         nj,

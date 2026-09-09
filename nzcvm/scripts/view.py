@@ -1,5 +1,5 @@
 """
-3-D visualisation of xarray DataTree grid data using PyVista + Typer.
+3D visualisation of xarray DataTree grid data using PyVista + Typer.
 
 Usage examples
 --------------
@@ -65,7 +65,7 @@ ALL_SCALARS = (DEPTH_SCALAR, LAYER_SCALAR, *QUALITIES_COMPONENTS)
 
 app = typer.Typer(
     name="visualise-grid",
-    help="Interactive 3-D PyVista viewer for xarray DataTree model grids.",
+    help="Interactive 3D PyVista viewer for xarray DataTree model grids.",
     add_completion=False,
 )
 
@@ -93,7 +93,7 @@ def add_logical_axes(
             (_get_pt(0, 1, 0), "j", "green"),
             (_get_pt(0, 0, 1), "k", "blue"),
         ]
-    except Exception as exc:  # noqa: BLE001 - best-effort viewer annotation, must not crash the viewer
+    except Exception as exc:  # noqa: BLE001 - optional viewer annotation, must not crash the viewer
         typer.secho(f"⚠️ Could not calculate logical axes: {exc}", fg="yellow")
         return
 
@@ -258,7 +258,7 @@ def basin(
     pl = pv.Plotter()
 
     if scalar:
-        # This is required to ensure opacity is rendered correctly
+        # Needed so that PyVista renders opacity correctly
         pl.enable_depth_peeling(number_of_peels=10, occlusion_ratio=0.0)
 
     # A palette of visually distinct colors to cycle through for the meshes
@@ -324,7 +324,7 @@ def basin(
     if x_pos and y_pos:
         # Use global mesh bounds to define the vertical extent across all models
         z_min, z_max = global_bounds[4], global_bounds[5]
-        # Create a line from deep below to high above the meshes
+        # Create a line running from deep under the meshes to high over them
         start = (x_pos, y_pos, z_min - 5000)
         end = (x_pos, y_pos, z_max + 5000)
 
@@ -438,7 +438,7 @@ def model(
                 )
             )
             typer.echo(f"    → {g.n_points:,} points")
-        except Exception as exc:  # noqa: BLE001 - one bad grid must not abort the whole viewer
+        except Exception as exc:  # noqa: BLE001 - one bad grid must not stop the whole viewer
             typer.secho(f"  [error] Failed to build grid for '{name}': {exc}", fg="red")
 
     if not grids:

@@ -132,7 +132,7 @@ def main(
     dem_depth = (dset.z - dem_surface).clip(min=0)
     bpv_depth = (dset.z - bpv_dem).clip(min=0)
 
-    # Apparent surface Vs30 (m/s) at each point; used as the taper's near-surface endpoint.
+    # Apparent surface Vs30 (m/s) at each point, the taper's near-surface endpoint.
     vs_bpv_top = (vs0 + (vs_depth - vs0) * (dem_depth / vs30_taper_depth)) * 1000.0
 
     gtl_qualities = ely_taper._ely_vs_profile(

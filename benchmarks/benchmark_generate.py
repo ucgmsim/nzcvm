@@ -44,7 +44,7 @@ REFINEMENTS = {
     "lower_crust": MeshRefinement(resolution=800.0, bottom=60_000.0),
 }
 
-CHUNK_SIZE = 64  # voxels per chunk along i/j; k is always a single chunk
+CHUNK_SIZE = 64  # voxels per chunk along i/j, with k always one chunk
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ def _write_flat_surface(path: Path) -> None:
     """Write a flat z=0 StructuredGrid to *path* (VTK format)."""
     # NZ-wide bounding box in NZTM2000: origin roughly (1e6, 4.7e6)
     xmin, ymin = 1_000_000.0, 4_700_000.0
-    extent = 2_000_000.0  # 2000 km side — safely encloses the benchmark domain
+    extent = 2_000_000.0  # 2000 km side, which encloses the benchmark domain
     n = 10
     xs = np.linspace(xmin, xmin + extent, n)
     ys = np.linspace(ymin, ymin + extent, n)
