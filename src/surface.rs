@@ -142,7 +142,9 @@ mod tests {
         // Deliberately off-centre and off-diagonal so the two triangles of a
         // cell are distinguishable and the weights are all distinct.
         for (x, y) in [(0.3, 0.2), (0.7, 0.9), (1.25, 2.6), (2.5, 0.1), (1.1, 1.1)] {
-            let got = s.query(Point2::new(x, y)).expect("interior must be covered");
+            let got = s
+                .query(Point2::new(x, y))
+                .expect("interior must be covered");
             assert!(
                 (got - plane(x, y)).abs() < 1e-4,
                 "at ({x}, {y}): {got} != {}",
@@ -182,7 +184,9 @@ mod tests {
 
         let s = SurfaceModel::new(vertices, faces, z);
         let p = Point2::new(1.0, 1.0);
-        let got = s.query(p).expect("the non-degenerate face must still resolve");
+        let got = s
+            .query(p)
+            .expect("the non-degenerate face must still resolve");
         assert!((got - plane(1.0, 1.0)).abs() < 1e-4, "{got}");
     }
 

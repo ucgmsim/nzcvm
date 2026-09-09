@@ -10,7 +10,7 @@ from .core import LayerConfig
 class ElyLayerConfig(LayerConfig):
     """Configuration DTO for an :class:`~nzcvm.layers.ely.ElyLayer`.
 
-    Parameters
+    Attributes
     ----------
     vs30 :
         Path to the Vs30 surface file.

@@ -69,7 +69,7 @@ class QueryStats(DataClassDictMixin):
     Useful for profiling BVH traversal efficiency. Returned by
     :meth:`ModelTree.query_stats`.
 
-    Parameters
+    Attributes
     ----------
     aabb_tests :
         Number of axis-aligned bounding-box intersection tests performed.
@@ -94,7 +94,7 @@ class QueryStats(DataClassDictMixin):
 class ModelContribution(DataClassDictMixin):
     """A single model's contribution to a blended quality result.
 
-    Parameters
+    Attributes
     ----------
     priority :
         Integer priority of this model (lower number = higher priority).
@@ -118,7 +118,7 @@ class Explanation(DataClassDictMixin):
     ``contributions`` shows the raw quality from one model; ``output`` is
     the final blended result.
 
-    Parameters
+    Attributes
     ----------
     contributions :
         Per-model contributions in priority order.
@@ -209,6 +209,7 @@ class MeshModel:
         Returns
         -------
         MeshModel
+            The model wrapping *mesh*.
 
         See Also
         --------
@@ -287,7 +288,13 @@ class MeshModel:
     def __rich_console__(
         self, _console: Console, _options: ConsoleOptions
     ) -> RenderResult:
-        """Render this mesh model as a rich tree for ``rich.print``."""
+        """Render this mesh model as a rich tree for ``rich.print``.
+
+        Yields
+        ------
+        rich.tree.Tree
+            The metadata tree rich should display for this model.
+        """
         yield self.view()
 
 
@@ -357,6 +364,7 @@ class ModelTree:
         Returns
         -------
         ModelTree
+            A single-mesh tree containing *mesh_model*.
 
         See Also
         --------
@@ -424,6 +432,7 @@ class ModelTree:
         Returns
         -------
         QueryStats
+            Traversal counters and the blended result for the query point.
 
         See Also
         --------
@@ -442,6 +451,7 @@ class ModelTree:
         Returns
         -------
         Explanation
+            Per-model contributions and the blended result for the point.
 
         See Also
         --------

@@ -14,7 +14,7 @@ from nzcvm.components import Component
 class Quality(DataClassDictMixin):
     """Seismic material properties at a single point in the velocity model.
 
-    Parameters
+    Attributes
     ----------
     rho :
         Density in kg m⁻³.

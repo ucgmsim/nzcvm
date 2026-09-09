@@ -10,7 +10,7 @@ from nzcvm.grids import Grid
 from nzcvm.layers.core import Layer
 from nzcvm.layers.functional import functional_layer
 from nzcvm.query import ModelRange
-from nzcvm.scripts import nzcvm
+from nzcvm.scripts import nzcvm_cli
 
 
 # In our example we will use a point-source for simplicity, but this could be
@@ -35,4 +35,4 @@ def fault_zone(
 
 
 if __name__ == "__main__":
-    nzcvm.app()
+    nzcvm_cli.app()

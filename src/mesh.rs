@@ -531,8 +531,7 @@ mod tests {
         // (x,y,z,w) = (0,1,2,3), so the pairing is:
         //   qualities[3]=3 * l3,  qualities[0]=0 * l0,
         //   qualities[1]=1 * l1,  qualities[2]=2 * l2
-        let expected =
-            3.0 * bary[3] + 0.0 * bary[0] + 1.0 * bary[1] + 2.0 * bary[2];
+        let expected = 3.0 * bary[3] + 0.0 * bary[0] + 1.0 * bary[1] + 2.0 * bary[2];
         assert_relative_eq!(q.rho, expected, epsilon = 1e-4);
 
         // Guard the guard: equal weights would make this as permutation-blind
@@ -540,9 +539,9 @@ mod tests {
         assert_ne!(expected, 1.5, "weights must not be symmetric");
         let mut sorted = bary;
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        sorted.windows(2).for_each(|w| {
-            assert_ne!(w[0], w[1], "all four barycentric weights must be distinct")
-        });
+        sorted
+            .windows(2)
+            .for_each(|w| assert_ne!(w[0], w[1], "all four barycentric weights must be distinct"));
     }
 
     /// `CONTAINMENT_EPS` deliberately admits points slightly outside a face so
@@ -698,9 +697,8 @@ mod tests {
             .map(|p| mock_quality(p.x + 2.0 * p.y + 3.0 * p.z))
             .collect();
         let chart = |i, j, k| i + j * ni + k * ni * nj;
-        let mesh =
-            MeshModel::curvilinear_mesh(vertices.clone(), qualities, (ni, nj, nk), chart)
-                .unwrap_or_else(|_| panic!("mesh construction failed"));
+        let mesh = MeshModel::curvilinear_mesh(vertices.clone(), qualities, (ni, nj, nk), chart)
+            .unwrap_or_else(|_| panic!("mesh construction failed"));
 
         // Points on a fine grid inside and outside the mesh.
         for xi in 0..=14 {
@@ -722,11 +720,7 @@ mod tests {
                         // The quality field is linear, so any containing
                         // simplex interpolates to the same value.
                         let q = mesh.query(p).unwrap();
-                        assert_relative_eq!(
-                            q.rho,
-                            p.x + 2.0 * p.y + 3.0 * p.z,
-                            epsilon = 1e-3
-                        );
+                        assert_relative_eq!(q.rho, p.x + 2.0 * p.y + 3.0 * p.z, epsilon = 1e-3);
                     }
                 }
             }

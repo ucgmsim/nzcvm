@@ -181,7 +181,7 @@ def test_clamp_vp_vs_ratio_enforced(
     field: str, compare, ratio: float, vs: float, vp: float
 ) -> None:
     """After clamping, ``vp`` sits on the correct side of ``ratio * vs``."""
-    cfg = ClampLayerConfig(**{field: ratio})
+    cfg = ClampLayerConfig(**{field: ratio})  # ty: ignore[invalid-argument-type]
     result = _clamp_over_constant(cfg, vp=vp, vs=vs)
     vp_arr = result.vp.values.astype(np.float64)
     vs_arr = result.vs.values.astype(np.float64)
@@ -212,7 +212,7 @@ def test_clamp_vp_vs_ratio_moves_vp_onto_the_bound(
     The property test above only pins the inequality, which a clamp that
     over-corrects would also satisfy.
     """
-    cfg = ClampLayerConfig(**{field: ratio})
+    cfg = ClampLayerConfig(**{field: ratio})  # ty: ignore[invalid-argument-type]
     result = _clamp_over_constant(cfg, vp=vp_in, vs=vs)
     assert float(result.vp.mean()) == pytest.approx(vp_out, rel=1e-4)
 
@@ -491,7 +491,7 @@ class _OutcroppingBasinLayer(Layer):
     def __init__(self, geometry) -> None:
         from nzcvm.layers.dummy import _NullConfig
 
-        super().__init__(_NullConfig(), geometry, None)
+        super().__init__(_NullConfig(), geometry, None)  # ty: ignore[invalid-argument-type]
 
     def __call__(
         self, grid: Grid, model_range: ModelRange = ModelRange.ALL

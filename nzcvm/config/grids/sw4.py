@@ -17,7 +17,7 @@ from .core import GridConfig
 class MeshRefinement(ConfigObject):
     """Vertical mesh refinement for one depth layer.
 
-    Parameters
+    Attributes
     ----------
     resolution :
         Horizontal and nominal vertical resolution in metres.
@@ -46,7 +46,7 @@ DEFAULT_CHUNK_SIZES = {Coordinate.I: 128, Coordinate.J: 128}
 class SW4GridConfig(GridConfig):
     """Horizontal and vertical grid configuration for the velocity model.
 
-    Parameters
+    Attributes
     ----------
     surface :
         Path to the topographic surface mesh file.  Used to translate depth

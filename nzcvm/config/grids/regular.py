@@ -19,7 +19,7 @@ class RegularGridConfig(GridConfig):
     and maintains a fixed Z resolution across the entire domain. The bottom of
     the model perfectly mirrors the topographic surface at a constant depth.
 
-    Parameters
+    Attributes
     ----------
     surface :
         Path to the topographic surface mesh file. Used to translate depth

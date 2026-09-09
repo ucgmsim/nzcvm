@@ -7,7 +7,7 @@ from .core import LayerConfig
 class BackusAveragedLayerConfig(LayerConfig):
     """Configuration DTO for an :class:`~nzcvm.layers.backus.BackusAveragedLayer`.
 
-    Parameters
+    Attributes
     ----------
     samples : int
         The number of super samples to consider.

@@ -23,7 +23,7 @@ mod nzcvm {
     use crate::surface::SurfaceModel;
 
     use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
-    use ndarray::{array, azip, Array1, Array2, Axis};
+    use ndarray::{Array1, Array2, Axis, array, azip};
     use numpy::{
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
         PyReadwriteArray2, PyUntypedArrayMethods,
@@ -200,12 +200,16 @@ mod nzcvm {
                     return Err(PyValueError::new_err(format!(
                         "Invalid model type {}",
                         model_type
-                    )))
+                    )));
                 }
             }
         }
         if idx != model_idx.len() {
-            return Err(PyValueError::new_err(format!("Invalid model types detected (did not read all models from model array using types given). idx = {}, models len = {}", idx, model_idx.len())));
+            return Err(PyValueError::new_err(format!(
+                "Invalid model types detected (did not read all models from model array using types given). idx = {}, models len = {}",
+                idx,
+                model_idx.len()
+            )));
         }
 
         let transform = transform_py.map(|arr| {
