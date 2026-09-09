@@ -31,3 +31,7 @@ pre-push:
       # Once again, clippy will auto fix some problems, so we
       # automatically stage the changes.
       stage_fixed: true
+
+    vale:
+      run: vale {staged_files}
+      glob: "*.{py,md,rs}"
