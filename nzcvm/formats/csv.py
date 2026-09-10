@@ -1,14 +1,15 @@
 """Flat CSV velocity-model writer.
 
-Writes one row per grid point: the logical index, the position, and every
-component, under a header naming each column.  A grid may carry coordinates
+Writes one row per grid point, with a header for the columns. Each row gives
+the logical index, the position, and then the components.  A grid may hold
+coordinates
 beyond the ``(i, j, k)`` index, and each of those becomes a leading label
-column, so a borehole grid's ``site`` labels reach the table and a reader can
-tell one profile from another without counting rows.
+column.  That puts a borehole grid's ``site`` labels in the table, so a reader
+can tell one profile from another without counting rows.
 
-The whole table goes through :mod:`pandas`, so a run holds every point in
-memory at once.  That suits the outputs a person reads: boreholes, transects,
-a handful of profiles. Volumetric grids belong in Zarr or NetCDF.
+The whole table goes through :mod:`pandas`, which keeps every point in memory
+at once.  That suits the outputs a person reads: boreholes, transects, a few
+profiles. Volumetric grids belong in Zarr or NetCDF.
 """
 
 from pathlib import Path
@@ -21,13 +22,13 @@ from nzcvm.grids.grid import Grid
 from nzcvm.qualities import Qualities
 from nzcvm.velocity_model import VelocityModel
 
-#: Every grid and quality array is float32, and nine significant digits
+#: Every grid and quality array is float32, and nine digits of precision
 #: round-trip a float32 exactly. Left to pandas, a seven-digit easting comes
 #: out as ``1.5315095e+06`` instead.
 FLOAT_FORMAT = "%.9g"
 
-#: Column naming the grid a row came from.  An SW4 domain writes one grid per
-#: refinement level, so the name is what separates them in a single table.
+#: Column for the name of the grid a row came from.  An SW4 domain writes one
+#: grid per refinement level, so the name is what separates them in one table.
 GRID_COLUMN = "grid"
 
 #: Columns every grid has, in the order they appear after the label columns.
@@ -62,15 +63,15 @@ def _table(name: str, grid: Grid, qualities: Qualities) -> pd.DataFrame:
         :data:`GRID_COLUMN`, labels, then :data:`FIXED_COLUMNS`.
     """
     table = grid.assign(qualities).to_dataframe().reset_index()
-    # Whatever the grid carries past the logical index labels the rows: `site`
-    # on a borehole grid, and anything a custom grid builder adds.
+    # Any coordinate past the logical index labels the rows: `site` on a
+    # borehole grid, and anything a custom grid builder adds.
     labels = [column for column in table.columns if column not in FIXED_COLUMNS]
     table.insert(0, GRID_COLUMN, name)
     return table[[GRID_COLUMN, *labels, *FIXED_COLUMNS]]
 
 
 def to_csv(velocity_model: VelocityModel, path: Path) -> None:
-    """Write *velocity_model* to *path* as a single CSV table.
+    """Write *velocity_model* to *path* as one CSV table.
 
     Parameters
     ----------

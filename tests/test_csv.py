@@ -1,10 +1,10 @@
 """Tests for the flat CSV writer.
 
-The interesting property is the header. A grid may carry coordinates past the
+The interesting property is the header. A grid may hold coordinates past the
 ``(i, j, k)`` index, and the writer has to turn each one into a label column,
 which is what lets a reader tell one borehole profile from another. The rest
-checks the table covers every point exactly once and survives a round trip
-through :func:`pandas.read_csv` without losing a float32 bit.
+checks that the table lists each grid point once, and that a round trip
+through :func:`pandas.read_csv` recovers the float32 values exactly.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def _model(*grids: Grid) -> VelocityModel:
 
 @pytest.fixture()
 def labelled(tmp_path: Path) -> pd.DataFrame:
-    """The table written for a grid carrying site labels."""
+    """The table written for a grid that holds site labels."""
     path = tmp_path / "boreholes.csv"
     to_csv(_model(_grid(sites=["GULL", "TERR"])), path)
     return pd.read_csv(path)
@@ -92,7 +92,7 @@ def test_csv_is_inferred_from_the_extension() -> None:
 
 
 def test_quantisation_is_rejected(tmp_path: Path) -> None:
-    """ZFP applies to the array stores, so it cannot mean anything here."""
+    """ZFP applies to the array stores, so it can't mean anything here."""
     with pytest.raises(ValueError, match="quantisation"):
         write_velocity_model(
             _model(_grid()), tmp_path / "out.csv", Format.CSV, quantise_arrays=True
@@ -157,7 +157,7 @@ def test_one_row_per_grid_point(labelled: pd.DataFrame) -> None:
 
 
 def test_values_round_trip_losslessly(tmp_path: Path) -> None:
-    """Nine significant digits is enough to recover the float32 exactly."""
+    """The written precision recovers the float32 exactly."""
     grid = _grid(sites=["GULL", "TERR"])
     model = _model(grid)
     path = tmp_path / "boreholes.csv"
