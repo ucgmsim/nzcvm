@@ -1,0 +1,91 @@
+# Borehole profiles over the synthetic dataset.
+#
+#     just synthetic
+#     uv run nzcvm generate examples/borehole.toml synthetic/boreholes.zarr
+#
+# A borehole grid extracts one vertical profile per site instead of filling a
+# volume, so it has no extent, no azimuth and no model origin: just a
+# projection to extract the profiles in.
+#
+# Longitude and latitude place a site. Every other key below (`site`,
+# `network`) is one the grid knows nothing about, and rides through to the
+# output as a coordinate on the i axis. Set keep_extra_columns = false to drop
+# them.
+
+[metadata]
+title = "Synthetic borehole profiles"
+keywords = ["synthetic", "borehole", "testing"]
+
+[grid]
+type = "borehole"
+surface = "./synthetic/dem.zarr"
+
+# Bottom of every column, in metres below the topography, and the sample
+# spacing down to it.
+depth = 600.0
+resolution_z = 25.0
+
+# Sites can also come from a CSV or Parquet file with longitude and latitude
+# columns, where the other columns label the sites the same way. It has to
+# stay above the tables below, as TOML would otherwise read it as a key of
+# `[grid.projection]`.
+#
+# sites = "examples/sites.csv"
+
+[grid.projection]
+crs = 'EPSG:2193'
+
+[[grid.sites]]
+longitude = 172.15
+latitude = -43.70
+site = "GULL"          # inside the `gully` basin
+network = "NZ"
+
+[[grid.sites]]
+longitude = 172.30
+latitude = -43.53
+site = "TERR"          # inside the `terrace` basin
+network = "NZ"
+
+[[grid.sites]]
+longitude = 172.10
+latitude = -43.45
+site = "RIDG"          # up in the hills, outside every basin
+network = "SC"
+
+[[grid.sites]]
+longitude = 172.55
+latitude = -43.60
+site = "SEAB"          # offshore
+network = "SC"
+
+[[layers]]
+type = "clamp"
+min_vp_vs_ratio = 1.73
+max_vp_vs_ratio = 4.0
+
+[[layers]]
+type = "coastline"
+coastline = "synthetic/coastline.wkb.gz"
+
+[[layers]]
+type = "offshore"
+model = [
+    {bottom_depth = 50.0, rho = 1810.0, vp = 1800.0, vs = 380.0, qp = 100.0, qs = 50.0, alpha = 1.0},
+    {bottom_depth = 300.0, rho = 1810.0, vp = 1800.0, vs = 580.0, qp = 100.0, qs = 50.0, alpha = 1.0},
+    {bottom_depth = 1200.0, rho = 1810.0, vp = 1800.0, vs = 830.0, qp = 100.0, qs = 50.0, alpha = 1.0},
+]
+basin_depth = [
+    {distance = 0.0, bottom_depth = 0.0},
+    {distance = 10000.0, bottom_depth = 1000.0},
+]
+
+[[layers]]
+type = "ely"
+vs30 = "./synthetic/vs30.zarr"
+depth_t = 450.0
+
+[[layers]]
+type = "query"
+model_path = "./synthetic/models"
+model_globs = ["*.zarr"]

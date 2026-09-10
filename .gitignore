@@ -201,6 +201,10 @@ Cargo.lock
 *.sfile
 *.rho3dfile
 *.vs3dfile
+
+# Example inputs are small and belong in the repo, unlike the data products
+# the patterns above exclude.
+!examples/*.csv
 *.vp3dfile
 *.wkb.*
 
