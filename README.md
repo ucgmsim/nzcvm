@@ -197,6 +197,29 @@ for n, site in enumerate(grid.site.values):
     print(site, vs[n].values)
 ```
 
+Writing to a `*.csv` path instead puts those labels in the header, one row per
+sample:
+
+```sh
+uv run nzcvm generate examples/borehole.toml boreholes.csv
+```
+
+```
+grid,site,i,j,k,x,y,z,depth,rho,vp,vs,qp,qs,alpha
+boreholes,GULL,0,0,0,1531509.5,5161095.5,-641.124146,0,1810,1800.00012,500,100,50,1
+boreholes,GULL,0,0,1,1531509.5,5161095.5,-616.124146,25,1810,1800,500,100,50,1
+```
+
+which `pandas` groups straight back into profiles:
+
+```python
+import pandas as pd
+
+table = pd.read_csv("boreholes.csv")
+for site, profile in table.groupby("site", sort=False):
+    print(site, profile.vs.to_numpy())
+```
+
 `examples/borehole.toml` runs four profiles over the `just synthetic` dataset,
 two of them inside a basin.
 
@@ -228,6 +251,11 @@ Inferred from the output path, or forced with `--format`.
 | `netcdf` | `*.h5`    | NetCDF4/HDF5 via xarray                                         |
 | `sfile`  | `*.sfile` | sfile HDF5 format for driving [SW4](github.com/geodynamics/sw4) |
 | `emod3d` | directory | `rho3dfile.d`, `vp3dfile.p`, `vs3dfile.s` binaries suitable for driving [EMOD3D](https://doi.org/10.1785/BSSA0860041091)              |
+| `csv`    | `*.csv`   | Flat table, one row per point, labelled by grid, and by site    |
+
+The `csv` writer holds the whole table in memory, so it suits the outputs a
+person reads: boreholes, transects, a few profiles. Volumetric grids belong in
+Zarr or NetCDF.
 
 ### Example configuration
 
@@ -563,7 +591,23 @@ config.
 A grid is an xarray Dataset built through `GridSchema`, which fixes the
 contract every layer relies on: `x`, `y`, `z` and `depth` on the logical
 `(i, j, k)` index (metres, projected CRS, `z` positive down), plus the
-attributes below. Here is a transect: a line of vertical columns between two
+attributes below.
+
+Those four variables and the attributes are the whole of what `GridSchema`
+accepts, so a builder can't pass an extra *data variable*. It can attach extra
+*coordinates* after construction, though, and every stage keeps them: layers,
+`map_blocks`, the Zarr and NetCDF writers, and the read back through
+`GridSchema.from_dataset`. xarray keeps a coordinate on each data variable it
+indexes, so anything that reassembles a dataset from those variables picks it
+up again. The borehole grid labels its columns this way:
+
+```python
+grid = grid.assign_coords(site=("i", ["GULL", "TERR"]))
+```
+
+The `csv` writer turns any such coordinate into a label column.
+
+Here is a transect: a line of vertical columns between two
 points, shaped `(n, 1, nk)`.
 
 ```python
