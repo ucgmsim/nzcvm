@@ -10,7 +10,7 @@ from pathlib import Path
 
 from nzcvm.velocity_model import VelocityModel
 
-from . import datatree, emod3d, sfile
+from . import datatree, emod3d, sfile, table
 
 
 class Format(StrEnum):
@@ -30,6 +30,8 @@ class Format(StrEnum):
     SFILE = auto()
     NETCDF = auto()
     ZARR = auto()
+    CSV = auto()
+    PARQUET = auto()
 
 
 def from_path(path: Path) -> Format:
@@ -59,7 +61,14 @@ def from_path(path: Path) -> Format:
     >>> from_path(Path("model.h5"))
     <Format.NETCDF: 'netcdf'>
     """
-    format_map = {".sfile": Format.SFILE, ".h5": Format.NETCDF, ".zarr": Format.ZARR}
+    format_map = {
+        ".sfile": Format.SFILE,
+        ".h5": Format.NETCDF,
+        ".zarr": Format.ZARR,
+        ".csv": Format.CSV,
+        ".parquet": Format.PARQUET,
+        ".pq": Format.PARQUET,
+    }
     ext = path.suffix
 
     if ext in format_map:
@@ -106,3 +115,7 @@ def write_velocity_model(
             datatree.to_netcdf(velocity_model, path, quantise_arrays)
         case Format.ZARR:
             datatree.to_zarr(velocity_model, path)
+        case Format.CSV:
+            table.to_csv(velocity_model, path)
+        case Format.PARQUET:
+            table.to_parquet(velocity_model, path)
