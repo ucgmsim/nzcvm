@@ -3,7 +3,7 @@ from pathlib import Path
 
 from nzcvm.config.validation import PositiveFloat
 
-from .core import LayerConfig
+from .core import DERIVED, LayerConfig
 
 
 @dataclass
@@ -30,4 +30,6 @@ class ElyLayerConfig(LayerConfig):
     vs30: Path
     depth_t: PositiveFloat = 450.0
     type: str = "ely"
-    requires: list[str] = field(default_factory=lambda: ["coastline"], init=False)
+    requires: list[str] = field(
+        default_factory=lambda: ["coastline"], init=False, metadata=DERIVED
+    )
