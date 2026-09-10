@@ -1,10 +1,13 @@
-"""Tests for the flat CSV writer.
+"""Tests for the flat table writers, CSV and Parquet.
 
 The interesting property is the header. A grid may hold coordinates past the
-``(i, j, k)`` index, and the writer has to turn each one into a label column,
+``(i, j, k)`` index, and a writer has to turn each one into a label column,
 which is what lets a reader tell one borehole profile from another. The rest
 checks that the table lists each grid point once, and that a round trip
-through :func:`pandas.read_csv` recovers the float32 values exactly.
+recovers the float32 values exactly.
+
+Both encodings come off one :func:`~nzcvm.formats.table.flatten` call, so the
+header tests run against CSV alone and the round trip runs against both.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from nzcvm.components import Component
 from nzcvm.config.metadata import ModelMetadata
 from nzcvm.coordinates import Coordinate
 from nzcvm.formats import Format, from_path, write_velocity_model
-from nzcvm.formats.csv import GRID_COLUMN, to_csv
+from nzcvm.formats.table import GRID_COLUMN, to_csv, to_parquet
 from nzcvm.grids.grid import Grid, GridSchema
 from nzcvm.qualities import QualitiesSchema
 from nzcvm.velocity_model import VelocityModel
@@ -87,15 +90,24 @@ def labelled(tmp_path: Path) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def test_csv_is_inferred_from_the_extension() -> None:
-    assert from_path(Path("boreholes.csv")) is Format.CSV
+@pytest.mark.parametrize(
+    "suffix, expected",
+    [
+        (".csv", Format.CSV),
+        (".parquet", Format.PARQUET),
+        (".pq", Format.PARQUET),
+    ],
+)
+def test_format_is_inferred_from_the_extension(suffix: str, expected: Format) -> None:
+    assert from_path(Path("boreholes").with_suffix(suffix)) is expected
 
 
-def test_quantisation_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize("format", [Format.CSV, Format.PARQUET])
+def test_quantisation_is_rejected(format: Format, tmp_path: Path) -> None:
     """ZFP applies to the array stores, so it can't mean anything here."""
     with pytest.raises(ValueError, match="quantisation"):
         write_velocity_model(
-            _model(_grid()), tmp_path / "out.csv", Format.CSV, quantise_arrays=True
+            _model(_grid()), tmp_path / "out.table", format, quantise_arrays=True
         )
 
 
@@ -103,6 +115,12 @@ def test_write_velocity_model_dispatches_to_csv(tmp_path: Path) -> None:
     path = tmp_path / "out.csv"
     write_velocity_model(_model(_grid()), path, Format.INFERRED, quantise_arrays=False)
     assert path.read_text().startswith(f"{GRID_COLUMN},")
+
+
+def test_write_velocity_model_dispatches_to_parquet(tmp_path: Path) -> None:
+    path = tmp_path / "out.parquet"
+    write_velocity_model(_model(_grid()), path, Format.INFERRED, quantise_arrays=False)
+    assert pd.read_parquet(path).columns[0] == GRID_COLUMN
 
 
 # ---------------------------------------------------------------------------
@@ -156,13 +174,22 @@ def test_one_row_per_grid_point(labelled: pd.DataFrame) -> None:
     assert not labelled.duplicated(subset=index).any()
 
 
-def test_values_round_trip_losslessly(tmp_path: Path) -> None:
-    """The written precision recovers the float32 exactly."""
+@pytest.mark.parametrize(
+    "writer, reader, suffix",
+    [
+        (to_csv, pd.read_csv, ".csv"),
+        (to_parquet, pd.read_parquet, ".parquet"),
+    ],
+)
+def test_values_round_trip_losslessly(
+    writer, reader, suffix: str, tmp_path: Path
+) -> None:
+    """CSV recovers the float32 from its written precision. Parquet stores it."""
     grid = _grid(sites=["GULL", "TERR"])
     model = _model(grid)
-    path = tmp_path / "boreholes.csv"
-    to_csv(model, path)
-    table = pd.read_csv(path)
+    path = (tmp_path / "boreholes").with_suffix(suffix)
+    writer(model, path)
+    table = reader(path)
 
     qualities = model.qualities[grid.name]
     for name, expected in [*grid.data_vars.items(), *qualities.data_vars.items()]:
@@ -186,6 +213,32 @@ def test_grid_column_separates_multiple_grids(tmp_path: Path) -> None:
         "coarse": 3.0,
         "fine": 1003.0,
     }
+
+
+def test_parquet_keeps_the_float32_dtype(tmp_path: Path) -> None:
+    """Text rendering is a CSV problem, so Parquet shouldn't inherit it."""
+    path = tmp_path / "boreholes.parquet"
+    to_parquet(_model(_grid(sites=["GULL", "TERR"])), path)
+    table = pd.read_parquet(path)
+    assert table.vs.dtype == np.float32
+    assert table[Coordinate.SITE].tolist() == [
+        "GULL",
+        "GULL",
+        "GULL",
+        "TERR",
+        "TERR",
+        "TERR",
+    ]
+
+
+def test_parquet_and_csv_agree_on_columns(tmp_path: Path) -> None:
+    model = _model(_grid(sites=["GULL", "TERR"]))
+    to_csv(model, tmp_path / "out.csv")
+    to_parquet(model, tmp_path / "out.parquet")
+    assert (
+        pd.read_csv(tmp_path / "out.csv").columns.tolist()
+        == pd.read_parquet(tmp_path / "out.parquet").columns.tolist()
+    )
 
 
 def test_eastings_avoid_scientific_notation(tmp_path: Path) -> None:

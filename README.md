@@ -197,8 +197,8 @@ for n, site in enumerate(grid.site.values):
     print(site, vs[n].values)
 ```
 
-Writing to a `*.csv` path instead puts those labels in the header, one row per
-sample:
+Writing to a `*.csv` or `*.parquet` path instead puts those labels in the
+header, one row per sample:
 
 ```sh
 uv run nzcvm generate examples/borehole.toml boreholes.csv
@@ -215,7 +215,7 @@ which `pandas` groups straight back into profiles:
 ```python
 import pandas as pd
 
-table = pd.read_csv("boreholes.csv")
+table = pd.read_csv("boreholes.csv")  # or read_parquet("boreholes.parquet")
 for site, profile in table.groupby("site", sort=False):
     print(site, profile.vs.to_numpy())
 ```
@@ -251,9 +251,11 @@ Inferred from the output path, or forced with `--format`.
 | `netcdf` | `*.h5`    | NetCDF4/HDF5 via xarray                                         |
 | `sfile`  | `*.sfile` | sfile HDF5 format for driving [SW4](github.com/geodynamics/sw4) |
 | `emod3d` | directory | `rho3dfile.d`, `vp3dfile.p`, `vs3dfile.s` binaries suitable for driving [EMOD3D](https://doi.org/10.1785/BSSA0860041091)              |
-| `csv`    | `*.csv`   | Flat table, one row per point, labelled by grid, and by site    |
+| `csv`     | `*.csv`   | Flat table, one row per point, labelled by grid, and by site   |
+| `parquet` | `*.parquet`, `*.pq` | The same table, with the float32 columns kept typed |
 
-The `csv` writer holds the whole table in memory, so it suits the outputs a
+`csv` and `parquet` share one flattening step, so the columns are the same
+either way. Both hold the whole table in memory, which suits the outputs a
 person reads: boreholes, transects, a few profiles. Volumetric grids belong in
 Zarr or NetCDF.
 
@@ -605,7 +607,7 @@ up again. The borehole grid labels its columns this way:
 grid = grid.assign_coords(site=("i", ["GULL", "TERR"]))
 ```
 
-The `csv` writer turns any such coordinate into a label column.
+The `csv` and `parquet` writers turn any such coordinate into a label column.
 
 Here is a transect: a line of vertical columns between two
 points, shaped `(n, 1, nk)`.
