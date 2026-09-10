@@ -70,6 +70,14 @@ The config selects the grid, the layer chain, and the models to query. The
 output extension selects the writer. The preceding example needs `resources/`
 (DEM, Vs30, coastline) and `models/` to be present.
 
+With no data to hand, build the synthetic dataset instead, then run against
+it:
+
+```sh
+just synthetic
+uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
+```
+
 ---
 
 ## Command line
@@ -83,6 +91,7 @@ output extension selects the writer. The preceding example needs `resources/`
 | `nzcvm surface`      | Convert an HDF5 topography surface to a VTK unstructured grid |
 | `nzcvm convert-tiff` | Convert a GeoTIFF raster to a surface                         |
 | `nzcvm tree-stats`   | Benchmark BVH query performance                               |
+| `nzcvm synthetic`    | Write synthetic DEM, Vs30, basin, and tomography inputs       |
 
 Useful `generate` options:
 
@@ -171,6 +180,7 @@ See `examples/` for complete, working configs:
 | `2014p240655_emod3d.toml`     | The same domain as an EMOD3D grid                   |
 | `whole_country.toml`          | `regular` grid over New Zealand                     |
 | `near_fault_config.toml`      | A custom layer (`examples/near_fault.py`) in a config |
+| `synthetic.toml`              | The same chain over the `just synthetic` dataset    |
 
 ```toml
 [metadata]
@@ -310,6 +320,39 @@ uv run ty check nzcvm/                   # type checking
 ```
 
 Tests marked `real_data` need a model directory supplied via `MODEL_PATH`.
+
+### Synthetic data
+
+`just synthetic` writes a self-contained data root under `synthetic/`, so a
+run of `nzcvm generate` covers the whole path without the real NZCVM data. It
+takes about a minute, most of it meshing the basins, and needs no
+`NZCVM_DATA_ROOT`.
+
+| Recipe                 | Writes                                                     |
+|------------------------|------------------------------------------------------------|
+| `synthetic_dem`        | `dem.h5`, `dem.zarr` (topography for `grid.surface`)       |
+| `synthetic_vs30`       | `vs30.h5`, `vs30.zarr` (Vs30 map for the `ely` layer)      |
+| `synthetic_coastline`  | `coastline.wkb.gz` (land polygon in NZTM)                  |
+| `synthetic_tomography` | `models/tomography.zarr` (background tomography mesh)      |
+| `synthetic_basins`     | `models/gully.zarr`, `models/terrace.zarr`                 |
+| `clean_synthetic`      | Removes the lot                                            |
+
+Every field is a closed-form expression over a 48 × 44 km patch of coast, so
+the data regenerates identically anywhere and a test can work out the expected
+answer by hand. `nzcvm/synthetic.py` documents the world. Elevation falls west
+to east and crosses sea level three quarters of the way across, and Vs30
+tracks elevation. A pair of paraboloid basins sit inland, over a tomography
+block whose velocity increases with depth.
+
+The pieces are importable, so a test can use a field directly rather than
+going through a file:
+
+```python
+from nzcvm import synthetic
+
+synthetic.elevation(172.0, -43.6)  # 550.0 m above sea level, inland
+synthetic.vs30(172.6, -43.6)  # 200.0 m/s, offshore
+```
 
 ---
 
