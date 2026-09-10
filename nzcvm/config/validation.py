@@ -159,6 +159,16 @@ def longitude(value: float) -> None:
         )
 
 
+def geographic_crs(value: pyproj.CRS) -> pyproj.CRS:
+    """Ensures a CRS is geographic, so its coordinates are longitude and latitude."""
+    if value is not None and not value.is_geographic:
+        raise ValueError(
+            f"Expected a geographic (longitude/latitude) CRS, got the projected "
+            f"CRS {value.name!r}."
+        )
+    return value
+
+
 def in_choices(choices: Collection[Any]) -> Callable[[Any], Any]:
     """Ensures a value is a member of an allowed set of options."""
     allowed = set(choices)
@@ -177,6 +187,7 @@ NonNegativeFloat = Annotated[float, validate_non_negative]
 PositiveFloat = Annotated[float, validate_positive]
 Latitude = Annotated[float, latitude]
 Longitude = Annotated[float, longitude]
+GeographicCRS = Annotated[pyproj.CRS, geographic_crs]
 
 UnitIntervalFloat = Annotated[float, validate_non_negative, le(1.0)]
 

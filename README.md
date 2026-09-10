@@ -117,17 +117,19 @@ validate bounds, layer ordering, and layer dependencies.
 
 ### Grid types
 
-Set by `grid.type`. All three are topography-following and chunked lazily with
-Dask.
+Set by `grid.type`. All of them are topography-following and chunked lazily
+with Dask.
 
-| Type      | Key parameters                                                              |
-|-----------|------------------------------------------------------------------------------|
-| `sw4`     | `extent_x/y`, `refinements` (2:1 nested resolutions, ordered automatically)  |
-| `regular` | `extent_x/y`, `thickness`, `resolution_x/y/z` (fixed vertical resolution)    |
-| `emod3d`  | `nx`, `ny`, `nz`, `resolution`, `topo_type`                                  |
+| Type       | Key parameters                                                             |
+|------------|-----------------------------------------------------------------------------|
+| `sw4`      | `extent_x/y`, `refinements` (2:1 nested resolutions, ordered automatically) |
+| `regular`  | `extent_x/y`, `thickness`, `resolution_x/y/z` (fixed vertical resolution)   |
+| `emod3d`   | `nx`, `ny`, `nz`, `resolution`, `topo_type`                                 |
+| `borehole` | `sites`, `depth`, `resolution_z` (one vertical profile per site)            |
 
-Every grid also takes `surface` (path to a DEM), an `[grid.orientation]` block,
-and optional `[grid.chunks]`:
+Every grid takes `surface` (path to a DEM) and optional `[grid.chunks]`. The
+three volumetric grids fill a rotated box, so they also take an
+`[grid.orientation]` block naming the model origin of that box:
 
 ```toml
 [grid.orientation]
@@ -140,6 +142,92 @@ origin_lat = -39.65225
 i = 256
 j = 256
 ```
+
+A `borehole` grid holds independent columns with no box to orient, so it takes
+a bare `[grid.projection]` instead: just a CRS.
+
+### Borehole grids
+
+`grid.type = "borehole"` extracts one vertical profile per site rather than
+filling a volume. Each column runs from the topography down to `depth` at a
+fixed `resolution_z`, so the profiles line up sample for sample and compare
+directly.
+
+```toml
+[grid]
+type = "borehole"
+surface = "./resources/dem.zarr"
+depth = 600.0          # metres below the topography
+resolution_z = 25.0    # metres between samples
+
+[grid.projection]
+crs = 'EPSG:2193'      # CRS the profiles are extracted in
+
+[[grid.sites]]
+longitude = 172.6218
+latitude = -43.5283
+site = "CACS"          # not a keyword; see below
+network = "NZ"
+```
+
+Sites come in a global CRS (WGS84 unless `sites_crs` says otherwise), and the
+builder maps them into `grid.projection.crs`. Instead of listing them inline,
+point `sites` at a CSV or Parquet file with `longitude` and `latitude`
+columns:
+
+```toml
+sites = "stations.csv"
+```
+
+Keep that line ahead of `[grid.projection]`: TOML would otherwise read it as
+a key of that table.
+
+#### Site labels
+
+Longitude and latitude place a site, and the config reserves nothing else.
+Every other key, and every other column of a site file, becomes a coordinate
+on the grid's `i` axis under the name the caller gave it, which the writers
+keep. Neither `site` nor `network` in the preceding example is a
+keyword the grid interprets. Both end up in the output because nothing
+reserves them. Rename them, add a driller's reference, drop them entirely: the
+grid doesn't care.
+
+A label keeps the type the caller wrote, so a numeric column arrives numeric.
+Each site needs the same set of labels, since the alternative is a column of
+nulls where one site was missing a key.
+
+`nzcvm.grids.grid.RESERVED_COORDINATES` lists the names a label may not take:
+the variables and attributes `GridSchema` declares (`x`, `y`, `z`, `depth`,
+`name`, `geometry`, …), the `(i, j, k)` index, and the components that share
+that index with the grid. A coordinate shadows a variable of the
+same name, so
+a label called `name` would turn `grid.name` from the grid's name into an
+array. Naming one of those raises rather than corrupting the grid.
+
+To drop the labels and keep only the spatial coordinates:
+
+```toml
+keep_extra_columns = false
+```
+
+The result has shape `(len(sites), 1, nk)`: one column per site, with `nk`
+samples down each column. The singleton `j` axis preserves the `(i, j, k)`
+contract every layer relies on. The site labels index the `i` axis, so the
+output reads back per station:
+
+```python
+import xarray as xr
+
+tree = xr.open_datatree("boreholes.zarr", engine="zarr")
+grid = tree["grids/boreholes"].ds
+vs = tree["qualities/boreholes"].ds.vs.squeeze("j")
+
+for n, site in enumerate(grid.site.values):
+    print(site, vs[n].values)
+```
+
+`examples/borehole.toml` runs four profiles over the `just synthetic` dataset,
+two of them inside a basin.
 
 ### Layers
 
@@ -181,6 +269,7 @@ See `examples/` for complete, working configs:
 | `whole_country.toml`          | `regular` grid over New Zealand                     |
 | `near_fault_config.toml`      | A custom layer (`examples/near_fault.py`) in a config |
 | `synthetic.toml`              | The same chain over the `just synthetic` dataset    |
+| `borehole.toml`               | `borehole` grid: profiles at four sites             |
 
 ```toml
 [metadata]
@@ -503,8 +592,25 @@ config.
 A grid is an xarray Dataset built through `GridSchema`, which fixes the
 contract every layer relies on: `x`, `y`, `z` and `depth` on the logical
 `(i, j, k)` index (metres, projected CRS, `z` positive down), plus the
-attributes below. The smallest useful grid is a borehole: one vertical
-column, shaped `(1, 1, nk)`:
+attributes below.
+
+Those four variables and the attributes are the whole of what `GridSchema`
+accepts, so a builder can't pass an extra *data variable*. It can attach extra
+*coordinates* after construction, though, and every stage keeps them: layers,
+`map_blocks`, the Zarr and NetCDF writers, and the read back through
+`GridSchema.from_dataset`. xarray keeps a coordinate on each data variable it
+indexes, so anything that reassembles a dataset from those variables picks it
+up again. The borehole grid labels its columns this way:
+
+```python
+grid = grid.assign_coords(site=("i", ["GULL", "TERR"]))
+```
+
+The name must avoid `RESERVED_COORDINATES`, since a coordinate shadows a
+variable or attribute of the same name.
+
+Here is a transect: a line of vertical columns between two
+points, shaped `(n, 1, nk)`.
 
 ```python
 import numpy as np
@@ -513,17 +619,32 @@ import shapely
 from nzcvm.grids.grid import Grid, GridSchema
 
 
-def borehole_grid(x: float, y: float, bottom: float, dz: float) -> Grid:
-    """A single vertical column of query points (a synthetic borehole)."""
-    depth = np.arange(0.0, bottom, dz, dtype=np.float32).reshape(1, 1, -1)
+def transect_grid(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    n: int,
+    bottom: float,
+    dz: float,
+) -> Grid:
+    """A line of vertical columns of query points, sampled at *n* stations."""
+    depth = np.arange(0.0, bottom, dz, dtype=np.float32)
+    along = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    x = start[0] + along * (end[0] - start[0])
+    y = start[1] + along * (end[1] - start[1])
+
+    # Broadcast the (n,) line and the (nk,) depths into (n, 1, nk).
+    x, _ = np.meshgrid(x, depth, indexing="ij")
+    y, depth = np.meshgrid(y, depth, indexing="ij")
+    x, y, depth = (array[:, np.newaxis, :] for array in (x, y, depth))
+
     return GridSchema.new(
-        x=np.full_like(depth, x),
-        y=np.full_like(depth, y),
+        x=x,
+        y=y,
         z=depth,
         depth=depth,
-        name="borehole",
+        name="transect",
         resolution=dz,
-        geometry=shapely.Point(x, y),
+        geometry=shapely.LineString([start, end]),
         origin_lon=np.float32(174.7762),
         origin_lat=np.float32(-41.2865),
         azimuth=np.float32(0.0),
@@ -541,14 +662,19 @@ from pathlib import Path
 from nzcvm.config.layers.query import QueryLayerConfig
 from nzcvm.layers.pipeline import build_pipeline
 
-grid = borehole_grid(x=1_749_150.0, y=5_428_150.0, bottom=500.0, dz=100.0)
+grid = transect_grid(
+    start=(1_749_150.0, 5_428_150.0),
+    end=(1_759_150.0, 5_428_150.0),
+    n=3,
+    bottom=500.0,
+    dz=100.0,
+)
 pipeline = build_pipeline(
     grid.geometry,
     [QueryLayerConfig(model_path=Path("models"), model_globs=["*.zarr"])],
 )
 qualities = pipeline(grid)
-print(qualities.vs.values.ravel())
-# [ 380.  580. 2643.6 2647.6 2651.6]
+print(qualities.vs.values[0].ravel())  # Vs down the first column, in m/s
 ```
 
 To drive a grid from a config file, register a builder against a `GridConfig`
@@ -566,26 +692,36 @@ from nzcvm.grids.grid import Grid
 
 
 @dataclass
-class BoreholeConfig(GridConfig):
-    x: float
-    y: float
+class TransectConfig(GridConfig):
+    start: tuple[float, float]
+    end: tuple[float, float]
+    n: int
     bottom: float
     dz: float
-    type: Literal["borehole"] = "borehole"
+    type: Literal["transect"] = "transect"
 
 
 @build_grids_from_config.register
-def _(config: BoreholeConfig) -> dict[str, Grid]:
-    return {"borehole": borehole_grid(config.x, config.y, config.bottom, config.dz)}
+def _(config: TransectConfig) -> dict[str, Grid]:
+    return {
+        "transect": transect_grid(
+            config.start, config.end, config.n, config.bottom, config.dz
+        )
+    }
 ```
 
 Which makes this config valid:
 
 ```toml
 [grid]
-type = "borehole"
-x = 1749150.0
-y = 5428150.0
+type = "transect"
+start = [1749150.0, 5428150.0]
+end = [1759150.0, 5428150.0]
+n = 3
 bottom = 500.0
 dz = 100.0
 ```
+
+`nzcvm.grids.borehole` is the same pattern, done properly: a registered
+`GridConfig` whose builder reads its own sites and DEM, over Dask-backed
+coordinates.
