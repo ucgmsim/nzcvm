@@ -17,6 +17,7 @@ from mashumaro.exceptions import InvalidFieldValue
 from pyproj import CRS, Transformer
 
 from nzcvm import synthetic
+from nzcvm.components import Component
 from nzcvm.config.grids.borehole import (
     DEFAULT_CHUNK_SIZES,
     BoreholeGridConfig,
@@ -29,7 +30,7 @@ from nzcvm.coordinates import Coordinate
 from nzcvm.formats import Format, write_velocity_model
 from nzcvm.grids.borehole import read_sites, resolve_sites
 from nzcvm.grids.builder import build_grids_from_config
-from nzcvm.grids.grid import Grid
+from nzcvm.grids.grid import RESERVED_COORDINATES, Grid
 from nzcvm.layers.pipeline import execute_model_pipeline
 from nzcvm.models.mesh import StructuredMeshSchema
 from nzcvm.qualities import Qualities, QualitiesSchema
@@ -41,12 +42,18 @@ _NZGD2000 = CRS.from_epsg(4167)
 _WGS84 = CRS.from_epsg(4326)
 _TO_NZTM = Transformer.from_crs(4326, _NZTM, always_xy=True)
 
-# Sites in the hills and out to sea, spread across the domain.
+# Sites in the hills and out to sea, spread across the domain. `site` and
+# `network` are ordinary labels, not keywords the grid interprets.
 SITES = [
-    Site(name="GULL", longitude=172.15, latitude=-43.70),
-    Site(name="RIDG", longitude=172.10, latitude=-43.45),
-    Site(name="SEAB", longitude=172.55, latitude=-43.60),
+    Site(longitude=172.15, latitude=-43.70, labels={"site": "GULL", "network": "NZ"}),
+    Site(longitude=172.10, latitude=-43.45, labels={"site": "RIDG", "network": "NZ"}),
+    Site(longitude=172.55, latitude=-43.60, labels={"site": "SEAB", "network": "SC"}),
 ]
+
+#: The labels on the sites, both treated like any other.
+SITE = "site"
+NETWORK = "network"
+NAMES = [site.labels[SITE] for site in SITES]
 
 
 @pytest.fixture(scope="module")
@@ -76,6 +83,7 @@ def _config(
     depth: float = 400.0,
     resolution_z: float = 100.0,
     sites_crs: CRS = _WGS84,
+    keep_extra_columns: bool = True,
     chunks: dict[Coordinate, int] = DEFAULT_CHUNK_SIZES,
 ) -> BoreholeGridConfig:
     return BoreholeGridConfig(
@@ -85,6 +93,7 @@ def _config(
         resolution_z=resolution_z,
         projection=Projection(crs=_NZTM),
         sites_crs=sites_crs,
+        keep_extra_columns=keep_extra_columns,
         chunks=chunks,
     )
 
@@ -131,9 +140,10 @@ def test_transformer_from_reaches_the_projection() -> None:
 def _write_sites(path: Path) -> Path:
     frame = pd.DataFrame(
         {
-            "name": [site.name for site in SITES],
             "longitude": [site.longitude for site in SITES],
             "latitude": [site.latitude for site in SITES],
+            SITE: NAMES,
+            NETWORK: [site.labels[NETWORK] for site in SITES],
         }
     )
     if path.suffix == ".csv":
@@ -151,22 +161,36 @@ def test_read_sites_round_trips(tmp_path: Path, suffix: str) -> None:
 def test_read_sites_preserves_file_order(tmp_path: Path) -> None:
     path = tmp_path / "sites.csv"
     pd.DataFrame(
-        {"name": ["B", "A"], "longitude": [172.1, 172.2], "latitude": [-43.5, -43.6]}
+        {"longitude": [172.1, 172.2], "latitude": [-43.5, -43.6], SITE: ["B", "A"]}
     ).to_csv(path, index=False)
-    assert [site.name for site in read_sites(path)] == ["B", "A"]
+    assert [site.labels[SITE] for site in read_sites(path)] == ["B", "A"]
 
 
-def test_read_sites_ignores_extra_columns(tmp_path: Path) -> None:
+def test_read_sites_keeps_extra_columns_as_labels(tmp_path: Path) -> None:
+    """Longitude and latitude are the only reserved columns. The rest
+    describe the site."""
     path = tmp_path / "sites.csv"
     pd.DataFrame(
         {
-            "name": ["A"],
             "longitude": [172.1],
             "latitude": [-43.5],
+            SITE: ["A"],
             "elevation": [12.0],
         }
     ).to_csv(path, index=False)
-    assert read_sites(path) == [Site(name="A", longitude=172.1, latitude=-43.5)]
+    assert read_sites(path) == [
+        Site(
+            longitude=172.1,
+            latitude=-43.5,
+            labels={SITE: "A", "elevation": 12.0},
+        )
+    ]
+
+
+def test_read_sites_accepts_a_file_with_no_labels(tmp_path: Path) -> None:
+    path = tmp_path / "sites.csv"
+    pd.DataFrame({"longitude": [172.1], "latitude": [-43.5]}).to_csv(path, index=False)
+    assert read_sites(path) == [Site(longitude=172.1, latitude=-43.5, labels={})]
 
 
 def test_read_sites_rejects_unknown_format(tmp_path: Path) -> None:
@@ -178,7 +202,7 @@ def test_read_sites_rejects_unknown_format(tmp_path: Path) -> None:
 
 def test_read_sites_reports_missing_columns(tmp_path: Path) -> None:
     path = tmp_path / "sites.csv"
-    pd.DataFrame({"name": ["A"], "longitude": [172.1]}).to_csv(path, index=False)
+    pd.DataFrame({SITE: ["A"], "longitude": [172.1]}).to_csv(path, index=False)
     with pytest.raises(ValueError, match="missing the latitude column"):
         read_sites(path)
 
@@ -212,6 +236,100 @@ def test_config_rejects_a_projected_sites_crs(synthetic_surface: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Site labels
+#
+# Longitude and latitude place a site. Every other key or column is a label
+# the grid passes through to the output under the name the caller gave it.
+# ---------------------------------------------------------------------------
+
+
+def test_extra_config_keys_become_labels() -> None:
+    site = Site.from_dict(
+        {"longitude": 172.1, "latitude": -43.5, SITE: "A", "depth_drilled": 30.0}
+    )
+    assert site.labels == {SITE: "A", "depth_drilled": 30.0}
+
+
+def test_a_site_needs_no_labels_at_all() -> None:
+    assert Site.from_dict({"longitude": 172.1, "latitude": -43.5}).labels == {}
+
+
+def test_labels_become_coordinates_on_the_site_axis(synthetic_surface: Path) -> None:
+    grid = _build(_config(synthetic_surface))
+    for label in (SITE, NETWORK):
+        assert grid[label].dims == (Coordinate.I,)
+        assert list(grid[label].values) == [site.labels[label] for site in SITES]
+
+
+def test_numeric_labels_keep_a_numeric_dtype(synthetic_surface: Path) -> None:
+    """A label is whatever the caller wrote, not necessarily a string."""
+    sites = [
+        Site(longitude=site.longitude, latitude=site.latitude, labels={"cased": n * 10})
+        for n, site in enumerate(SITES)
+    ]
+    grid = _build(_config(synthetic_surface, sites=sites))
+    assert np.issubdtype(grid["cased"].dtype, np.integer)
+    assert list(grid["cased"].values) == [0, 10, 20]
+
+
+def test_keep_extra_columns_false_drops_the_labels(synthetic_surface: Path) -> None:
+    grid = _build(_config(synthetic_surface, keep_extra_columns=False))
+    assert set(grid.coords) == {Coordinate.I, Coordinate.J, Coordinate.K}
+    # The opt-out leaves the spatial coordinates alone.
+    assert grid.x.shape == (len(SITES), 1, 5)
+
+
+@pytest.mark.parametrize("reserved", ["name", "x", "depth", "vs", "i", "geometry"])
+def test_a_label_may_not_shadow_a_grid_name(
+    synthetic_surface: Path, reserved: str
+) -> None:
+    """A coordinate shadows a variable or attribute of the same name, so
+    `grid.name` would stop being the grid's name."""
+    sites = [
+        Site(longitude=site.longitude, latitude=site.latitude, labels={reserved: "x"})
+        for site in SITES
+    ]
+    with pytest.raises(ValueError, match="would shadow"):
+        _build(_config(synthetic_surface, sites=sites))
+
+
+def test_reserved_names_cover_the_grid_contract() -> None:
+    """Derived from GridSchema, so it keeps up if the schema changes."""
+    assert {"x", "y", "z", "depth", "name", "geometry", "resolution"} <= (
+        RESERVED_COORDINATES
+    )
+    assert {Coordinate.I, Coordinate.J, Coordinate.K} <= RESERVED_COORDINATES
+    assert set(Component) <= RESERVED_COORDINATES
+    assert SITE not in RESERVED_COORDINATES
+
+
+def test_sites_have_to_agree_on_their_labels(synthetic_surface: Path) -> None:
+    """A missing label is nearly always a typo, and the alternative is a
+    column of nulls."""
+    sites = [
+        Site(
+            longitude=SITES[0].longitude, latitude=SITES[0].latitude, labels={SITE: "A"}
+        ),
+        Site(longitude=SITES[1].longitude, latitude=SITES[1].latitude, labels={}),
+    ]
+    with pytest.raises(ValueError, match="Every site needs the same labels"):
+        _build(_config(synthetic_surface, sites=sites))
+
+
+def test_disagreement_is_allowed_once_labels_are_dropped(
+    synthetic_surface: Path,
+) -> None:
+    sites = [
+        Site(
+            longitude=SITES[0].longitude, latitude=SITES[0].latitude, labels={SITE: "A"}
+        ),
+        Site(longitude=SITES[1].longitude, latitude=SITES[1].latitude, labels={}),
+    ]
+    grid = _build(_config(synthetic_surface, sites=sites, keep_extra_columns=False))
+    assert grid.x.shape == (2, 1, 5)
+
+
+# ---------------------------------------------------------------------------
 # Grid geometry
 # ---------------------------------------------------------------------------
 
@@ -224,7 +342,8 @@ def test_grid_is_one_column_per_site(synthetic_surface: Path) -> None:
 
 def test_grid_labels_columns_by_site(synthetic_surface: Path) -> None:
     grid = _build(_config(synthetic_surface))
-    assert list(grid[Coordinate.SITE].values) == [site.name for site in SITES]
+    assert list(grid[SITE].values) == NAMES
+    assert list(grid[NETWORK].values) == [site.labels[NETWORK] for site in SITES]
 
 
 def test_depth_is_identical_across_sites(synthetic_surface: Path) -> None:
@@ -332,9 +451,10 @@ resolution_z = 50.0
 crs = 'EPSG:2193'
 
 [[grid.sites]]
-name = "GULL"
 longitude = 172.15
 latitude = -43.70
+site = "GULL"
+network = "NZ"
 
 [[layers]]
 type = "query"
@@ -350,7 +470,13 @@ def test_toml_config_selects_the_borehole_grid(
 
     config = VelocityModelConfig.read_config(path)
     assert isinstance(config.grid, BoreholeGridConfig)
-    assert config.grid.sites == [Site(name="GULL", longitude=172.15, latitude=-43.70)]
+    assert config.grid.sites == [
+        Site(
+            longitude=172.15,
+            latitude=-43.70,
+            labels={SITE: "GULL", NETWORK: "NZ"},
+        )
+    ]
     # Unset, so it falls back to WGS84.
     assert config.grid.sites_crs.to_epsg() == 4326
     assert _build(config.grid).sizes[Coordinate.K] == 5
@@ -370,9 +496,7 @@ def test_toml_config_reads_sites_from_a_file(
     config = VelocityModelConfig.read_config(path)
     assert isinstance(config.grid, BoreholeGridConfig)
     assert config.grid.sites == sites
-    assert list(_build(config.grid)[Coordinate.SITE].values) == [
-        site.name for site in SITES
-    ]
+    assert list(_build(config.grid)[SITE].values) == NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -411,9 +535,7 @@ def test_grid_survives_the_chunked_pipeline(synthetic_surface: Path) -> None:
     qualities = result.qualities["boreholes"]
     assert qualities.vs.shape == grid.x.shape
     assert float(qualities.vs.values.mean()) == pytest.approx(1234.0, rel=1e-4)
-    assert list(result.grids["boreholes"][Coordinate.SITE].values) == [
-        site.name for site in SITES
-    ]
+    assert list(result.grids["boreholes"][SITE].values) == NAMES
 
 
 def test_output_round_trips_through_zarr(
@@ -430,7 +552,7 @@ def test_output_round_trips_through_zarr(
 
     with xr.open_datatree(path, engine="zarr") as tree:
         stored = tree["grids/boreholes"].ds
-        assert list(stored[Coordinate.SITE].values) == [site.name for site in SITES]
-        gull = stored.set_xindex(Coordinate.SITE).sel({Coordinate.SITE: "GULL"})
+        assert list(stored[SITE].values) == NAMES
+        gull = stored.set_xindex(SITE).sel({SITE: "GULL"})
         assert float(gull.depth.max()) == pytest.approx(400.0)
         assert tree["qualities/boreholes"].ds.vs.shape == stored.x.shape

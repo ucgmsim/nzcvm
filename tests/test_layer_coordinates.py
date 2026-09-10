@@ -47,7 +47,6 @@ from nzcvm.config.layers.offshore import (
 )
 from nzcvm.config.layers.query import QueryLayerConfig
 from nzcvm.config.metadata import ModelMetadata
-from nzcvm.coordinates import Coordinate
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.grid import Grid
 from nzcvm.layers.core import Layer, layer_from_config
@@ -67,9 +66,13 @@ _TO_NZTM = Transformer.from_crs(4326, _NZTM, always_xy=True)
 # One site inland and one offshore, so the coastline-dependent layers see both
 # sides of the shoreline and can't skip their work.
 SITES = [
-    Site(name="GULL", longitude=172.15, latitude=-43.70),
-    Site(name="SEAB", longitude=172.55, latitude=-43.60),
+    Site(longitude=172.15, latitude=-43.70, labels={"site": "GULL"}),
+    Site(longitude=172.55, latitude=-43.60, labels={"site": "SEAB"}),
 ]
+
+#: The label on the sites, treated like any other.
+SITE = "site"
+NAMES = [site.labels[SITE] for site in SITES]
 
 
 # ---------------------------------------------------------------------------
@@ -303,8 +306,8 @@ def test_layer_preserves_the_site_label(
     layer = layer_from_config(config)(config, grid.geometry, _Terminal())
     qualities = layer(grid)
 
-    assert Coordinate.SITE in qualities.coords, layer_type
-    assert list(qualities[Coordinate.SITE].values) == [site.name for site in SITES]
+    assert SITE in qualities.coords, layer_type
+    assert list(qualities[SITE].values) == NAMES
     # A dropped label would show up as a reindex to NaN rather than an error.
     assert not np.isnan(qualities.vs.values).any(), layer_type
 
@@ -346,7 +349,7 @@ def test_full_chain_preserves_the_site_label(
     )
     qualities = pipeline(concrete_grid.copy())
 
-    assert list(qualities[Coordinate.SITE].values) == [site.name for site in SITES]
+    assert list(qualities[SITE].values) == NAMES
     assert qualities.vs.shape == concrete_grid.x.shape
 
 
@@ -374,7 +377,7 @@ def test_full_chain_survives_map_blocks(
     )
 
     qualities = model.qualities["boreholes"]
-    assert list(qualities[Coordinate.SITE].values) == [site.name for site in SITES]
+    assert list(qualities[SITE].values) == NAMES
     assert not np.isnan(qualities.vs.values).any()
 
 
@@ -392,4 +395,4 @@ def test_a_numpy_terminal_drops_the_label(concrete_grid: Grid) -> None:
     from nzcvm.layers.dummy import ConstantLayer
 
     qualities = ConstantLayer(vs=1234.0)(concrete_grid)
-    assert Coordinate.SITE not in qualities.coords
+    assert SITE not in qualities.coords

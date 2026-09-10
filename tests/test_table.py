@@ -29,6 +29,9 @@ from nzcvm.grids.grid import Grid, GridSchema
 from nzcvm.qualities import QualitiesSchema
 from nzcvm.velocity_model import VelocityModel
 
+#: The label the fixture grid puts on `i`, treated like any other.
+SITE = "site"
+
 SHAPE = (2, 1, 3)
 
 
@@ -53,7 +56,7 @@ def _grid(name: str = "boreholes", sites: list[str] | None = None) -> Grid:
         bottom_left_lat=np.float32(-43.5),
     )
     if sites is not None:
-        grid = grid.assign_coords({Coordinate.SITE: (Coordinate.I, sites)})
+        grid = grid.assign_coords(site=(Coordinate.I, sites))
     return grid
 
 
@@ -131,7 +134,7 @@ def test_write_velocity_model_dispatches_to_parquet(tmp_path: Path) -> None:
 def test_extra_coordinates_become_label_columns(labelled: pd.DataFrame) -> None:
     assert labelled.columns.tolist() == [
         GRID_COLUMN,
-        Coordinate.SITE,
+        SITE,
         Coordinate.I,
         Coordinate.J,
         Coordinate.K,
@@ -148,18 +151,18 @@ def test_a_grid_without_extra_coordinates_has_no_label_column(
 ) -> None:
     path = tmp_path / "plain.csv"
     to_csv(_model(_grid()), path)
-    assert Coordinate.SITE not in pd.read_csv(path).columns
+    assert SITE not in pd.read_csv(path).columns
 
 
 def test_labels_follow_their_own_axis(labelled: pd.DataFrame) -> None:
     """`site` lives on i, so every row of a column shares one label."""
-    by_site = labelled.groupby(Coordinate.SITE.value)[Coordinate.I.value].unique()
+    by_site = labelled.groupby(SITE)[Coordinate.I.value].unique()
     assert by_site["GULL"].tolist() == [0]
     assert by_site["TERR"].tolist() == [1]
 
 
 def test_every_label_gets_a_full_profile(labelled: pd.DataFrame) -> None:
-    counts = labelled[Coordinate.SITE].value_counts()
+    counts = labelled[SITE].value_counts()
     assert counts.to_dict() == {"GULL": SHAPE[2], "TERR": SHAPE[2]}
 
 
@@ -221,7 +224,7 @@ def test_parquet_keeps_the_float32_dtype(tmp_path: Path) -> None:
     to_parquet(_model(_grid(sites=["GULL", "TERR"])), path)
     table = pd.read_parquet(path)
     assert table.vs.dtype == np.float32
-    assert table[Coordinate.SITE].tolist() == [
+    assert table[SITE].tolist() == [
         "GULL",
         "GULL",
         "GULL",

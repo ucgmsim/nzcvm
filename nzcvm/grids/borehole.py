@@ -11,6 +11,13 @@ the volumetric grids record means anything here.  The builder still fills in
 the :class:`~nzcvm.grids.grid.Grid` attributes that name an origin, taking the
 centroid of the sites as the origin and the south-west corner of their
 bounding box as the bottom-left corner.
+
+Longitude and latitude place a site.  The config doesn't reserve any other
+key, so every other key or column becomes a coordinate on the ``i`` axis under
+the name the caller gave it, which is how a station code or a network ends up
+in the layer chain and the output.
+:data:`~nzcvm.grids.grid.RESERVED_COORDINATES` lists the names a label may not
+take, and ``keep_extra_columns = false`` drops the labels altogether.
 """
 
 from collections.abc import Callable
@@ -23,15 +30,15 @@ import pandas as pd
 import shapely
 import xarray as xr
 
-from nzcvm.config.grids.borehole import BoreholeGridConfig, Site
+from nzcvm.config.grids.borehole import SPATIAL_KEYS, BoreholeGridConfig, Site
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids import helpers
 from nzcvm.grids.builder import build_grids_from_config
-from nzcvm.grids.grid import Grid, GridSchema
+from nzcvm.grids.grid import RESERVED_COORDINATES, Grid, GridSchema
 from nzcvm.models.surface import Surface
 
-#: Columns a site file has to provide.
-SITE_COLUMNS = ("name", "longitude", "latitude")
+#: Name of the one grid a borehole config builds.
+GRID_NAME = "boreholes"
 
 #: Readers for the supported site file formats, keyed by suffix.
 SITE_READERS: dict[str, Callable[[Path], pd.DataFrame]] = {
@@ -47,8 +54,8 @@ def read_sites(path: Path) -> list[Site]:
     Parameters
     ----------
     path :
-        File with ``name``, ``longitude`` and ``latitude`` columns.  The
-        reader skips any other column.
+        File with ``longitude`` and ``latitude`` columns.  Every other column
+        becomes a label on the site it belongs to.
 
     Returns
     -------
@@ -58,7 +65,7 @@ def read_sites(path: Path) -> list[Site]:
     Raises
     ------
     ValueError
-        If the suffix isn't a supported format, or a required column is
+        If the suffix isn't a supported format, or a spatial column is
         missing.
     """
     reader = SITE_READERS.get(path.suffix.lower())
@@ -69,19 +76,64 @@ def read_sites(path: Path) -> list[Site]:
         )
 
     frame = reader(path)
-    missing = [column for column in SITE_COLUMNS if column not in frame.columns]
+    missing = [column for column in SPATIAL_KEYS if column not in frame.columns]
     if missing:
         raise ValueError(
             f"Site file '{path}' is missing the {', '.join(missing)} column(s). "
-            f"Expected {', '.join(SITE_COLUMNS)}."
+            f"Expected {', '.join(SPATIAL_KEYS)}."
         )
 
     return [
-        Site(name=str(name), longitude=float(longitude), latitude=float(latitude))
-        for name, longitude, latitude in frame[list(SITE_COLUMNS)].itertuples(
-            index=False
+        Site(
+            longitude=float(record.pop("longitude")),
+            latitude=float(record.pop("latitude")),
+            labels=record,
         )
+        for record in frame.to_dict("records")
     ]
+
+
+def site_labels(sites: list[Site]) -> dict[str, np.ndarray]:
+    """Collect the site labels into one array per label name.
+
+    Parameters
+    ----------
+    sites :
+        Sites to read the labels off.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray]
+        One array per label, ordered as *sites* are and typed by whatever
+        NumPy infers from the values.
+
+    Raises
+    ------
+    ValueError
+        If a label collides with
+        :data:`~nzcvm.grids.grid.RESERVED_COORDINATES`, or if the sites do
+        not agree on which labels they carry.  Disagreement is nearly always
+        a typo, and the alternative is a column of nulls.
+    """
+    names = list(sites[0].labels)
+
+    reserved = sorted(RESERVED_COORDINATES.intersection(names))
+    if reserved:
+        raise ValueError(
+            f"Site label(s) {', '.join(reserved)} would shadow a grid variable "
+            f"or attribute of the same name. Rename them, or set "
+            f"keep_extra_columns = false."
+        )
+
+    for position, site in enumerate(sites):
+        if set(site.labels) != set(names):
+            raise ValueError(
+                f"Site {position} carries labels "
+                f"{sorted(site.labels) or 'none'}, but site 0 carries "
+                f"{sorted(names)}. Every site needs the same labels."
+            )
+
+    return {name: np.asarray([site.labels[name] for site in sites]) for name in names}
 
 
 def resolve_sites(config: BoreholeGridConfig) -> list[Site]:
@@ -135,6 +187,7 @@ def _borehole_grid(
 def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
     sites = resolve_sites(config)
     index = np.arange(len(sites))
+    labels = site_labels(sites) if config.keep_extra_columns else {}
 
     transformer = config.projection.transformer_from(config.sites_crs)
     x, y = transformer.transform(
@@ -163,7 +216,7 @@ def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
         x_phys,
         y_phys,
         z_surface,
-        name="boreholes",
+        name=GRID_NAME,
         depth=config.depth,
         resolution_z=config.resolution_z,
         resolution=config.resolution_z,
@@ -175,10 +228,10 @@ def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
         bottom_left_lon=min_lon,
         bottom_left_lat=min_lat,
     )
-    # Labelling i by site is what makes the output readable: without it, the
-    # only route back to a station is the order the config listed it in.
+    # Labelling i is what makes the output readable: without it, the only
+    # route back to a station is the order the config listed it in.
     grid = grid.assign_coords(
-        {Coordinate.SITE: (Coordinate.I, [site.name for site in sites])}
+        {name: (Coordinate.I, values) for name, values in labels.items()}
     )
 
-    return {grid.name: grid}
+    return {GRID_NAME: grid}

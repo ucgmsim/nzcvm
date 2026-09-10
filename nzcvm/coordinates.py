@@ -49,7 +49,6 @@ class Coordinate(StrEnum):
     Z = auto()
     DEPTH = auto()
     COASTLINE = auto()
-    SITE = auto()
     I = auto()
     J = auto()
     K = auto()

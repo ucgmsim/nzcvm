@@ -164,14 +164,15 @@ resolution_z = 25.0    # metres between samples
 crs = 'EPSG:2193'      # CRS the profiles are extracted in
 
 [[grid.sites]]
-name = "CACS"
 longitude = 172.6218
 latitude = -43.5283
+site = "CACS"          # not a keyword; see below
+network = "NZ"
 ```
 
 Sites come in a global CRS (WGS84 unless `sites_crs` says otherwise), and the
 builder maps them into `grid.projection.crs`. Instead of listing them inline,
-point `sites` at a CSV or Parquet file with `name`, `longitude` and `latitude`
+point `sites` at a CSV or Parquet file with `longitude` and `latitude`
 columns:
 
 ```toml
@@ -181,10 +182,37 @@ sites = "stations.csv"
 Keep that line ahead of `[grid.projection]`: TOML would otherwise read it as
 a key of that table.
 
+#### Site labels
+
+Longitude and latitude place a site, and the config reserves nothing else.
+Every other key, and every other column of a site file, becomes a coordinate
+on the grid's `i` axis under the name the caller gave it, and a column in
+table output. Neither `site` nor `network` in the preceding example is a
+keyword the grid interprets. Both end up in the output because nothing
+reserves them. Rename them, add a driller's reference, drop them entirely: the
+grid doesn't care.
+
+A label keeps the type the caller wrote, so a numeric column arrives numeric.
+Each site needs the same set of labels, since the alternative is a column of
+nulls where one site was missing a key.
+
+`nzcvm.grids.grid.RESERVED_COORDINATES` lists the names a label may not take:
+the variables and attributes `GridSchema` declares (`x`, `y`, `z`, `depth`,
+`name`, `geometry`, …), the `(i, j, k)` index, and the components a writer
+puts alongside the grid. A coordinate shadows a variable of the same name, so
+a label called `name` would turn `grid.name` from the grid's name into an
+array. Naming one of those raises rather than corrupting the grid.
+
+To drop the labels and keep only the spatial coordinates:
+
+```toml
+keep_extra_columns = false
+```
+
 The result has shape `(len(sites), 1, nk)`: one column per site, with `nk`
 samples down each column. The singleton `j` axis preserves the `(i, j, k)`
-contract every layer relies on. A `site` coordinate labels the `i` axis, so
-the output reads back per station:
+contract every layer relies on. The site labels index the `i` axis, so the
+output reads back per station:
 
 ```python
 import xarray as xr
@@ -205,9 +233,9 @@ uv run nzcvm generate examples/borehole.toml boreholes.csv
 ```
 
 ```
-grid,site,i,j,k,x,y,z,depth,rho,vp,vs,qp,qs,alpha
-boreholes,GULL,0,0,0,1531509.5,5161095.5,-641.124146,0,1810,1800.00012,500,100,50,1
-boreholes,GULL,0,0,1,1531509.5,5161095.5,-616.124146,25,1810,1800,500,100,50,1
+grid,site,network,i,j,k,x,y,z,depth,rho,vp,vs,qp,qs,alpha
+boreholes,GULL,NZ,0,0,0,1531509.5,5161095.5,-641.124146,0,1810,1800.00012,500,100,50,1
+boreholes,GULL,NZ,0,0,1,1531509.5,5161095.5,-616.124146,25,1810,1800,500,100,50,1
 ```
 
 which `pandas` groups straight back into profiles:
@@ -607,7 +635,9 @@ up again. The borehole grid labels its columns this way:
 grid = grid.assign_coords(site=("i", ["GULL", "TERR"]))
 ```
 
-The `csv` and `parquet` writers turn any such coordinate into a label column.
+The name must avoid `RESERVED_COORDINATES`, since a coordinate shadows a
+variable or attribute of the same name. The `csv` and `parquet` writers turn
+any coordinate outside the contract into a label column.
 
 Here is a transect: a line of vertical columns between two
 points, shaped `(n, 1, nk)`.

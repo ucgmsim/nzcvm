@@ -6,6 +6,11 @@
 # A borehole grid extracts one vertical profile per site instead of filling a
 # volume, so it has no extent, no azimuth and no model origin: just a
 # projection to extract the profiles in.
+#
+# Longitude and latitude place a site. Every other key below (`site`,
+# `network`) is one the grid knows nothing about, and rides through to the
+# output as a coordinate on the i axis. Set keep_extra_columns = false to drop
+# them.
 
 [metadata]
 title = "Synthetic borehole profiles"
@@ -20,9 +25,10 @@ surface = "./synthetic/dem.zarr"
 depth = 600.0
 resolution_z = 25.0
 
-# Sites can also come from a CSV or Parquet file with name, longitude and
-# latitude columns. It has to stay above the tables below, as TOML would
-# otherwise read it as a key of `[grid.projection]`.
+# Sites can also come from a CSV or Parquet file with longitude and latitude
+# columns, where the other columns label the sites the same way. It has to
+# stay above the tables below, as TOML would otherwise read it as a key of
+# `[grid.projection]`.
 #
 # sites = "examples/sites.csv"
 
@@ -30,24 +36,28 @@ resolution_z = 25.0
 crs = 'EPSG:2193'
 
 [[grid.sites]]
-name = "GULL"          # inside the `gully` basin
 longitude = 172.15
 latitude = -43.70
+site = "GULL"          # inside the `gully` basin
+network = "NZ"
 
 [[grid.sites]]
-name = "TERR"          # inside the `terrace` basin
 longitude = 172.30
 latitude = -43.53
+site = "TERR"          # inside the `terrace` basin
+network = "NZ"
 
 [[grid.sites]]
-name = "RIDG"          # up in the hills, outside every basin
 longitude = 172.10
 latitude = -43.45
+site = "RIDG"          # up in the hills, outside every basin
+network = "SC"
 
 [[grid.sites]]
-name = "SEAB"          # offshore
 longitude = 172.55
 latitude = -43.60
+site = "SEAB"          # offshore
+network = "SC"
 
 [[layers]]
 type = "clamp"
