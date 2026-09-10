@@ -199,8 +199,7 @@ nulls where one site was missing a key.
 `nzcvm.grids.grid.RESERVED_COORDINATES` lists the names a label may not take:
 the variables and attributes `GridSchema` declares (`x`, `y`, `z`, `depth`,
 `name`, `geometry`, …), the `(i, j, k)` index, and the components that share
-that index with the grid. A coordinate shadows a variable of the
-same name, so
+that index with the grid. A coordinate shadows a variable of the same name, so
 a label called `name` would turn `grid.name` from the grid's name into an
 array. Naming one of those raises rather than corrupting the grid.
 
@@ -224,6 +223,29 @@ vs = tree["qualities/boreholes"].ds.vs.squeeze("j")
 
 for n, site in enumerate(grid.site.values):
     print(site, vs[n].values)
+```
+
+Writing to a `*.csv` or `*.parquet` path instead puts those labels in the
+header, one row per sample:
+
+```sh
+uv run nzcvm generate examples/borehole.toml boreholes.csv
+```
+
+```
+grid,site,network,i,j,k,x,y,z,depth,rho,vp,vs,qp,qs,alpha
+boreholes,GULL,NZ,0,0,0,1531509.5,5161095.5,-641.124146,0,1810,1800.00012,500,100,50,1
+boreholes,GULL,NZ,0,0,1,1531509.5,5161095.5,-616.124146,25,1810,1800,500,100,50,1
+```
+
+which `pandas` groups straight back into profiles:
+
+```python
+import pandas as pd
+
+table = pd.read_csv("boreholes.csv")  # or read_parquet("boreholes.parquet")
+for site, profile in table.groupby("site", sort=False):
+    print(site, profile.vs.to_numpy())
 ```
 
 `examples/borehole.toml` runs four profiles over the `just synthetic` dataset,
@@ -257,6 +279,13 @@ Inferred from the output path, or forced with `--format`.
 | `netcdf` | `*.h5`    | NetCDF4/HDF5 via xarray                                         |
 | `sfile`  | `*.sfile` | sfile HDF5 format for driving [SW4](github.com/geodynamics/sw4) |
 | `emod3d` | directory | `rho3dfile.d`, `vp3dfile.p`, `vs3dfile.s` binaries suitable for driving [EMOD3D](https://doi.org/10.1785/BSSA0860041091)              |
+| `csv`     | `*.csv`   | Flat table, one row per point, labelled by grid, and by site   |
+| `parquet` | `*.parquet`, `*.pq` | The same table, with the float32 columns kept typed |
+
+`csv` and `parquet` share one flattening step, so the columns are the same
+either way. Both hold the whole table in memory, which suits the outputs a
+person reads: boreholes, transects, a few profiles. Volumetric grids belong in
+Zarr or NetCDF.
 
 ### Example configuration
 
@@ -607,7 +636,8 @@ grid = grid.assign_coords(site=("i", ["GULL", "TERR"]))
 ```
 
 The name must avoid `RESERVED_COORDINATES`, since a coordinate shadows a
-variable or attribute of the same name.
+variable or attribute of the same name. The `csv` and `parquet` writers turn
+any coordinate outside the contract into a label column.
 
 Here is a transect: a line of vertical columns between two
 points, shaped `(n, 1, nk)`.
