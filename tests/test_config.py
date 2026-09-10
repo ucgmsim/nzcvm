@@ -15,13 +15,23 @@ library's responsibility.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from mashumaro.exceptions import InvalidFieldValue
+from mashumaro.config import BaseConfig
+from mashumaro.exceptions import ExtraKeysError, InvalidFieldValue
 
+from nzcvm.config.core import ConfigObject
+from nzcvm.config.grids.core import GridConfig
+from nzcvm.config.grids.model import Model
+from nzcvm.config.grids.regular import RegularGridConfig
 from nzcvm.config.layers.clamp import Bound, ClampLayerConfig
+from nzcvm.config.layers.core import LayerConfig
+from nzcvm.config.layers.ely import ElyLayerConfig
 from nzcvm.config.layers.offshore import VelocityModel1D
+from nzcvm.config.metadata import ModelMetadata
 from nzcvm.config.validation import (
     ge,
     gt,
@@ -289,3 +299,81 @@ def test_velocity_model_1d_rejects_equal_vp_vs() -> None:
 def test_layer_from_config_clamp() -> None:
     cfg = ClampLayerConfig()
     assert layer_from_config(cfg) is ClampLayer
+
+
+# ---------------------------------------------------------------------------
+# Mashumaro reads the settings on ConfigObject
+#
+# Mashumaro looks for a nested class named `Config`. Naming it anything else
+# leaves every setting on it inert, which is a silent failure: the decoder
+# keeps working and simply stops enforcing what the class asked for.
+# ---------------------------------------------------------------------------
+
+
+def _config_of(cls: type) -> type[BaseConfig]:
+    """The config class mashumaro resolves for *cls*, however it inherits it."""
+    return getattr(cls, "Config", BaseConfig)
+
+
+@pytest.mark.parametrize(
+    "config_cls",
+    [ConfigObject, LayerConfig, GridConfig, ClampLayerConfig, RegularGridConfig],
+)
+def test_mashumaro_sees_the_project_settings(config_cls: type) -> None:
+    """The discriminated bases declare their own `Config`, so they have to
+    inherit the project one rather than replace it."""
+    resolved = _config_of(config_cls)
+    assert resolved.forbid_extra_keys is True
+    assert resolved.omit_none is True
+    assert resolved.serialize_by_alias is True
+
+
+@pytest.mark.parametrize(
+    "config_cls, payload",
+    [
+        (
+            Model,
+            {
+                "origin_lon": 172.0,
+                "origin_lat": -43.5,
+                "azimuth": 0.0,
+                "crs": 2193,
+                "azimuth_deg": 39.0,
+            },
+        ),
+        (ClampLayerConfig, {"type": "clamp", "min_vp_vs_ratio": 1.7, "typo": 1}),
+        (LayerConfig, {"type": "clamp", "min_vp_vs_ratio": 1.7, "typo": 1}),
+    ],
+)
+def test_an_unknown_key_is_reported(
+    config_cls: type[ConfigObject], payload: dict
+) -> None:
+    """A misspelled key used to vanish. The default stayed in place."""
+    with pytest.raises(ExtraKeysError, match="typo|azimuth_deg"):
+        config_cls.from_dict(payload)
+
+
+def test_a_known_key_still_decodes() -> None:
+    clamp = ClampLayerConfig.from_dict({"type": "clamp", "min_vp_vs_ratio": 1.7})
+    assert clamp.min_vp_vs_ratio == pytest.approx(1.7)
+
+
+def test_derived_layer_fields_survive_a_round_trip() -> None:
+    """`provides` and `requires` are `init=False`, so mashumaro can't feed
+    them back in. Serialising them would produce output that fails to decode."""
+    config = ElyLayerConfig(vs30=Path("vs30.zarr"))
+    assert config.requires == ["coastline"]
+
+    serialised = config.to_dict()
+    assert "requires" not in serialised
+    assert "provides" not in serialised
+
+    assert LayerConfig.from_dict(serialised).requires == ["coastline"]
+
+
+def test_omit_none_drops_unset_metadata() -> None:
+    """The metadata goes onto the output as dataset attributes, where a null
+    is worth nothing."""
+    metadata = ModelMetadata(title="A title").to_dict()
+    assert metadata["title"] == "A title"
+    assert "creator_name" not in metadata
