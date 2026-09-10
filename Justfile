@@ -205,3 +205,46 @@ clippy:
     cargo clippy -- -D warnings
 
 lint: ty ruff clippy
+
+# ---------------------------------------------------------------------------
+# Synthetic data
+#
+# `just synthetic` builds a self-contained data root from closed-form fields
+# (see nzcvm/synthetic.py), small enough to regenerate in seconds and complete
+# enough to drive `nzcvm generate`. It needs no NZCVM_DATA_ROOT.
+# ---------------------------------------------------------------------------
+
+synthetic_root := "synthetic"
+synthetic := "uv run nzcvm synthetic"
+convert_surface := "uv run nzcvm surface convert"
+
+# Every input `examples/synthetic.toml` reads.
+synthetic: synthetic_dem synthetic_vs30 synthetic_coastline synthetic_models
+
+synthetic_dem:
+    {{ synthetic }} dem {{ synthetic_root }}/dem.h5
+    {{ convert_surface }} {{ synthetic_root }}/dem.h5 {{ synthetic_root }}/dem.zarr
+
+synthetic_vs30:
+    {{ synthetic }} vs30 {{ synthetic_root }}/vs30.h5
+    {{ convert_surface }} {{ synthetic_root }}/vs30.h5 {{ synthetic_root }}/vs30.zarr --scalar-key vs30 --no-flip
+
+synthetic_coastline:
+    {{ synthetic }} coastline {{ synthetic_root }}/coastline.wkb.gz
+
+synthetic_tomography:
+    {{ synthetic }} tomography {{ synthetic_root }}/tomography.csv
+    {{ tomography }} {{ synthetic_root }}/tomography.csv {{ synthetic_root }}/models/tomography.zarr
+
+# Priorities mirror the real basin recipes: lower wins over the tomography.
+synthetic_basins: synthetic_dem
+    {{ synthetic }} profile {{ synthetic_root }}/profile.fd_modfile
+    @for basin in gully terrace; do \
+        {{ synthetic }} basin $basin {{ synthetic_root }}; \
+        {{ construct }} {{ synthetic_root }}/${basin}_outline.geojson {{ synthetic_root }}/dem.h5 {{ synthetic_root }}/dem.h5 {{ synthetic_root }}/${basin}_basement.h5 {{ synthetic_root }}/models/${basin}.zarr --priority 1 --vm-1d {{ synthetic_root }}/profile.fd_modfile; \
+    done
+
+synthetic_models: synthetic_tomography synthetic_basins
+
+clean_synthetic:
+    rm -rf {{ synthetic_root }}
