@@ -27,9 +27,10 @@ from mashumaro.mixins.dict import DataClassDictMixin
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.tree import Tree
 
-from nzcvm import nzcvm, registry  # ty: ignore[unresolved-import]
+from nzcvm import nzcvm  # ty: ignore[unresolved-import]
 from nzcvm.components import Component
 from nzcvm.models.mesh import TetrahedralMesh, TetrahedralMeshSchema
+from nzcvm.models.reconstruct import Reconstructable, cached
 from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
     PyModelTree,
     QueryCoordinates,
@@ -156,7 +157,7 @@ class Explanation(DataClassDictMixin):
         return root
 
 
-class MeshModel:
+class MeshModel(Reconstructable):
     """One tetrahedral mesh velocity model.
 
     Wraps a compiled Rust :class:`PyMeshModel` and exposes spatial quality
@@ -188,7 +189,7 @@ class MeshModel:
     def from_path(cls, path: Path) -> Self:
         mesh_dataset = TetrahedralMeshSchema.from_dataset(xr.load_dataset(path))
 
-        return cls(_mesh_model_from_tetra(mesh_dataset))
+        return cls(_mesh_model_from_tetra(mesh_dataset)).built_by(cls.from_path, path)
 
     @classmethod
     def from_mesh(
@@ -217,7 +218,9 @@ class MeshModel:
         nzcvm.models.mesh.make_mesh : Create a compatible :class:`~nzcvm.models.mesh.TetrahedralMesh`.
         ModelTree : Combine multiple ``MeshModel`` instances for priority-blended queries.
         """
-        return cls(_mesh_model_from_tetra(mesh, name=name))
+        return cls(_mesh_model_from_tetra(mesh, name=name)).built_by(
+            cls.from_mesh, mesh, name
+        )
 
     @property
     def name(self) -> str:
@@ -300,7 +303,7 @@ class MeshModel:
 
 
 @dataclass
-class ModelTree:
+class ModelTree(Reconstructable):
     """A velocity model backed by a Rust BVH tree of tetrahedral meshes.
 
     Wraps one or more :class:`MeshModel` instances (or VTKHDF mesh files)
@@ -332,6 +335,10 @@ class ModelTree:
         models : iterable of path
             Paths to individual models.
 
+        Repeated loads of the same paths return the same tree: a worker
+        process rebuilding it after unpickling pays for the reads and the BVH
+        build once rather than once per task.
+
         Returns
         -------
         ModelTree
@@ -345,12 +352,7 @@ class ModelTree:
         >>> ModelTree.load_models([Path("/path/to/models")])  # doctest: +SKIP
         """
 
-        mesh_models = []
-        for p in models:
-            mesh_models.append(MeshModel.from_path(p)._raw)
-
-        raw = nzcvm.model_tree(mesh_models)
-        return cls(raw)
+        return _load_models(tuple(Path(p) for p in models))  # ty: ignore[invalid-return-type]
 
     @classmethod
     def from_mesh(cls, mesh_model: TetrahedralMesh) -> Self:
@@ -374,7 +376,7 @@ class ModelTree:
         """
         raw_mesh_model = _mesh_model_from_tetra(mesh_model)
         raw_model_tree = nzcvm.model_tree([raw_mesh_model])
-        return cls(raw_model_tree)
+        return cls(raw_model_tree).built_by(cls.from_mesh, mesh_model)
 
     @property
     def aabb(self) -> tuple[np.ndarray, np.ndarray]:
@@ -621,19 +623,6 @@ class ModelTree:
 
         return tree
 
-    def __getstate__(self):
-        # When standard pickle hits this object, bypass pickling the Rust object
-        state = self.__dict__.copy()
-
-        state["inner"] = registry.pickle_pass(self.inner)
-        return state
-
-    def __setstate__(self, state):
-        # When unpickling, swap the key back for the live object reference
-        self.__dict__.update(state)
-        key = state["inner"]
-        self.inner = registry.REGISTRY[key]
-
 
 def _mesh_model_from_tetra(
     mesh_model: TetrahedralMesh,
@@ -678,3 +667,12 @@ def _mesh_model_from_tetra(
     except ValueError as e:
         e.add_note(f"While building model: {mesh_model.name!r}")
         raise
+
+
+@cached
+def _load_models(paths: tuple[Path, ...]) -> ModelTree:
+    """Read every mesh in *paths* and index them into one tree."""
+    # `nzcvm.model_tree` moves each mesh's inner model out of it, so these
+    # `MeshModel` wrappers are single use and the cache has to stay off them.
+    meshes = [MeshModel.from_path(path)._raw for path in paths]
+    return ModelTree(nzcvm.model_tree(meshes)).built_by(ModelTree.load_models, paths)

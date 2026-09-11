@@ -103,7 +103,11 @@ def test_transform_1d_input(flat_surface: Surface) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pickling (registry round-trip)
+# Pickling
+#
+# A surface built in memory replays `from_dataset`; one read off disk replays
+# `load`. `tests/test_pickling.py` covers the path-based form and the process
+# boundary.
 # ---------------------------------------------------------------------------
 
 

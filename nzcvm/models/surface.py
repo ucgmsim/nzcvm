@@ -15,8 +15,8 @@ import xarray as xr
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.tree import Tree
 
-from nzcvm import registry
 from nzcvm.models.mesh import StructuredMesh, StructuredMeshSchema, triangulate
+from nzcvm.models.reconstruct import Reconstructable, cached
 from nzcvm.nzcvm import PySurfaceModel, surface_model  # ty: ignore[unresolved-import]
 
 DEFAULT_TOLERANCE = 1e-4
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class Surface:
+class Surface(Reconstructable):
     """A surface interpolator backed by a triangulated mesh.
 
     Given a set of (x, y) query points, returns the interpolated elevation
@@ -57,11 +57,16 @@ class Surface:
             ]
         )
 
-        return cls(inner, bounds=bounds, n_points=len(points))
+        surface = cls(inner, bounds=bounds, n_points=len(points))
+        return surface.built_by(cls.from_dataset, mesh)
 
     @classmethod
     def load(cls, path: Path) -> Self:
-        """Load a surface mesh from *surface_path* and return a :class:`Surface`.
+        """Load a surface mesh from *path* and return a :class:`Surface`.
+
+        Repeated loads of the same path return the same object: a worker
+        process rebuilding the surface after unpickling pays for the read and
+        the triangulation once rather than once per task.
 
         Parameters
         ----------
@@ -73,9 +78,7 @@ class Surface:
         Surface
             The loaded surface, ready to interpolate.
         """
-        with xr.open_dataset(path) as dset:
-            mesh = StructuredMeshSchema.from_dataset(dset)
-            return cls.from_dataset(mesh)
+        return _load(Path(path))  # ty: ignore[invalid-return-type]
 
     def transform(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         """Interpolate surface elevation at query (x, y) locations.
@@ -97,19 +100,6 @@ class Surface:
         logger.debug("Query complete.")
         return z.reshape(x.shape).astype(x.dtype)
 
-    def __getstate__(self):
-        # When standard pickle hits this object, bypass pickling the Rust object
-        state = self.__dict__.copy()
-
-        state["inner"] = registry.pickle_pass(self.inner)
-        return state
-
-    def __setstate__(self, state):
-        # When unpickling, swap the key back for the live object reference
-        self.__dict__.update(state)
-        key = state["inner"]
-        self.inner = registry.REGISTRY[key]
-
     def __rich_console__(
         self, _console: Console, _options: ConsoleOptions
     ) -> RenderResult:
@@ -128,3 +118,13 @@ class Surface:
         tree.add(f"Value Range: {self.bounds[2]:.0f}-{self.bounds[5]:.0f}")
         tree.add(f"Number of points in surface: {self.n_points:,}")
         yield tree
+
+
+@cached
+def _load(path: Path) -> Surface:
+    """Read and index the surface at *path*."""
+    with xr.open_dataset(path) as dset:
+        mesh = StructuredMeshSchema.from_dataset(dset)
+    # Recorded against the path rather than the mesh `from_dataset` recorded,
+    # so pickling sends a filename instead of the whole surface.
+    return Surface.from_dataset(mesh).built_by(Surface.load, path)

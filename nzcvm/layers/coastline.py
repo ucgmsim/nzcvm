@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import gzip
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Self
 
 import numpy as np
 import shapely
@@ -14,6 +15,7 @@ from shapely import Geometry
 from nzcvm.config.layers.coastline import CoastlineConfig
 from nzcvm.coordinates import Coordinate
 from nzcvm.layers.core import Layer
+from nzcvm.models.reconstruct import Reconstructable, cached
 from nzcvm.nzcvm import coastline as build_coastline  # ty: ignore[unresolved-import]
 from nzcvm.query import ModelRange
 
@@ -43,28 +45,75 @@ def _extract_segments(geometry: shapely.Geometry) -> np.ndarray:
     return np.array(extracted_segments)
 
 
+@dataclass
+class Coastline(Reconstructable):
+    """A coastline indexed for signed-distance queries.
+
+    Wraps the Rust index so that a layer can cross a process boundary with
+    one attached. The index itself has no Python representation, but the file
+    it came from does.
+    """
+
+    inner: Any
+
+    @classmethod
+    def load(cls, path: Path) -> Self:
+        """Read and index the coastline polygon stored at *path*.
+
+        Repeated loads of the same path return the same object, so a worker
+        process rebuilding it after unpickling indexes once rather than once
+        per task.
+
+        Parameters
+        ----------
+        path :
+            Path to a gzipped WKB polygon in the projected CRS.
+
+        Returns
+        -------
+        Coastline
+            The indexed coastline.
+        """
+        return _load(Path(path))  # ty: ignore[invalid-return-type]
+
+    def signed_distance(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """Distance from each point to the coastline, negative onshore."""
+        return self.inner.signed_distance(_borrowable(x), _borrowable(y))
+
+    def __len__(self) -> int:
+        return len(self.inner)
+
+
+def _borrowable(array: np.ndarray) -> np.ndarray:
+    """Coerce *array* into something the Rust side can borrow as a slice.
+
+    It needs float32, contiguous *and* aligned.  `ascontiguousarray` promises
+    only the first two: a buffer that arrived over the wire can start at an
+    offset that leaves the array contiguous and misaligned, and it would pass
+    through untouched and then fail in the binding.
+    """
+    return np.require(array, dtype=np.float32, requirements=["C", "A"])
+
+
+@cached
+def _load(path: Path) -> Coastline:
+    polygon = shapely.ops.orient(_read_compressed_shapely_wkb(path), sign=1.0)
+    segments = _extract_segments(polygon).astype(np.float32)
+    return Coastline(build_coastline(segments)).built_by(Coastline.load, path)
+
+
 class CoastlineLayer(Layer[CoastlineConfig], config_cls=CoastlineConfig):
     def __init__(
         self, config: CoastlineConfig, geometry: Geometry, next_layer: Layer
     ) -> None:
         super().__init__(config, geometry, next_layer)
-        coastline = shapely.ops.orient(
-            _read_compressed_shapely_wkb(config.coastline), sign=1.0
-        )
-        segments = _extract_segments(coastline).astype(np.float32)
-        self.coastline = build_coastline(segments)
+        self.coastline = Coastline.load(config.coastline)
         logger.debug("Indexed %d coastline segments", len(self.coastline))
 
     def _distance(self, x: xr.DataArray, y: xr.DataArray) -> xr.DataArray:
 
         def _compute_chunk_dist(x_chunk, y_chunk):
-            # The Rust side takes contiguous float32. A grid holds float32
-            # already, but a caller passing anything else should convert here
-            # rather than hit a binding type error.
-            distance = self.coastline.signed_distance(
-                np.ascontiguousarray(x_chunk.ravel(), dtype=np.float32),
-                np.ascontiguousarray(y_chunk.ravel(), dtype=np.float32),
-            )
+            distance = self.coastline.signed_distance(x_chunk.ravel(), y_chunk.ravel())
             return distance.reshape(x_chunk.shape)
 
         return xr.apply_ufunc(

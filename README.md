@@ -101,10 +101,17 @@ Useful `generate` options:
 | `--format`       | Force an output format instead of inferring it from the path    |
 | `--config-format`| Force `toml` / `yaml` / `json` instead of inferring             |
 | `--quantise`     | ZFP-compress the arrays in NetCDF/Zarr output                   |
-| `--distributed`  | Run on a local Dask distributed cluster                         |
+| `--distributed`  | Run on a local Dask distributed cluster of worker processes     |
+| `--n-workers`    | Worker processes for `--distributed` (default one)              |
 | `--progress`     | tqdm progress bar (not compatible with `--distributed`)         |
 | `--monitor`      | Log CPU/memory usage while running                              |
 | `--log-level`    | `DEBUG` / `INFO` / `WARNING` (default `WARNING`)                |
+
+`--distributed` runs real worker processes. The models, surfaces and
+coastline a layer holds are indexes built in Rust, and they pickle as the call
+that loaded them rather than as their contents, so each worker reads the data
+root for itself and caches what it reads. A worker needs to see the same
+paths as the client, and pays one read and one index build for them.
 
 ---
 

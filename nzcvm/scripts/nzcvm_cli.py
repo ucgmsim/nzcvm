@@ -21,7 +21,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from tqdm.dask import TqdmCallback
 
-from nzcvm import formats, registry
+from nzcvm import formats
 from nzcvm.config import VelocityModelConfig, VelocityModelConfigFormat
 from nzcvm.layers import pipeline
 from nzcvm.layers.pipeline import execute_model_pipeline
@@ -216,6 +216,12 @@ def generate(
         ),
     ] = False,
     distributed: bool = False,
+    n_workers: Annotated[
+        int | None,
+        typer.Option(
+            help="Worker processes for --distributed (defaults to one).", min=1
+        ),
+    ] = None,
     progress: bool = False,
     monitor: bool = False,
     log_level: str = "WARNING",
@@ -232,18 +238,20 @@ def generate(
 
     with exit_stack:
         if distributed:
+            # Worker processes, not threads. A layer's models and surfaces
+            # pickle as the call that rebuilt them, so a worker reads them off
+            # the data root for itself and caches what it reads. That's what
+            # makes more than one process worth having, since the query
+            # releases the GIL but everything around it doesn't.
             cluster = LocalCluster(
-                processes=False, n_workers=1, threads_per_worker=resolved_n_threads
+                n_workers=n_workers or 1,
+                threads_per_worker=max(resolved_n_threads // (n_workers or 1), 1),
             )
 
             client = Client(cluster)
 
             exit_stack.enter_context(cluster)
             exit_stack.enter_context(client)
-            # Only need the registry pipeline manager when managing references
-            # to the surface or model tree in the pickling. The built-in scheduler
-            # doesn't pickle the objects in threaded mode, so skip it there.
-            exit_stack.enter_context(registry.pipeline_context())
         else:
             exit_stack.enter_context(LogProgress())
             exit_stack.enter_context(
