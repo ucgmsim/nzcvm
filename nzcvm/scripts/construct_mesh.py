@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Annotated, TextIO
 
 import h5py
-import numba
 import numpy as np
 import pandas as pd
 import pyproj
@@ -505,28 +504,6 @@ def read_layered_model(layered_model_path: Path) -> pd.DataFrame:
     df["thickness"] = bottom_depth - df["z"]
 
     return df
-
-
-@numba.njit(cache=True)
-def tetra_volume(vertices: np.ndarray, tetra: np.ndarray) -> np.ndarray:
-    volumes = np.zeros(len(tetra), dtype=np.float64)
-    mat = np.ones((4, 4), dtype=np.float64)
-    f = 1 / 6
-    for i, tet in enumerate(tetra):
-        mat[0, :3] = vertices[tet[0]]
-        mat[1, :3] = vertices[tet[1]]
-        mat[2, :3] = vertices[tet[2]]
-        mat[3, :3] = vertices[tet[3]]
-        volumes[i] = np.abs(f * np.linalg.det(mat))
-    return volumes
-
-
-@numba.njit
-def count_mask(n: int, idx: np.ndarray) -> np.ndarray:
-    mask = np.zeros(n, dtype=np.uint8)
-    for i in idx:
-        mask[i] = 1
-    return mask
 
 
 def volumes(vertices: np.ndarray, tetra: np.ndarray) -> np.ndarray:
