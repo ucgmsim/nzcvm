@@ -1021,6 +1021,7 @@ dependencies = [
  "proptest",
  "pyo3",
  "pythonize",
+ "rayon",
  "serde",
  "small-collections",
  "smallvec",
