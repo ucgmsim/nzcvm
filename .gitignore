@@ -198,6 +198,8 @@ Cargo.lock
 *.vtk
 *.csv
 *.zarr
+*.nzidx
+*.nzidx.partial
 *.sfile
 *.rho3dfile
 *.vs3dfile

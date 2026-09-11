@@ -92,6 +92,7 @@ uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
 | `nzcvm convert-tiff` | Convert a GeoTIFF raster to a surface                         |
 | `nzcvm tree-stats`   | Benchmark BVH query performance                               |
 | `nzcvm synthetic`    | Write synthetic DEM, Vs30, basin, and tomography inputs       |
+| `nzcvm index`        | Compile mesh models into memory-mappable index files          |
 
 Useful `generate` options:
 
