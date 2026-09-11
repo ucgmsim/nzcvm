@@ -16,7 +16,8 @@ nzcvm.models.mesh : Mesh I/O utilities used by :meth:`ModelTree.load_models`.
 
 import hashlib
 import logging
-from collections.abc import Iterable
+import os
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -195,8 +196,8 @@ class MeshModel:
         the mesh and builds its BVH in memory as before.
         """
         path = Path(path)
-        index = index_path(path)
-        if index.exists() and nzcvm.index_fingerprint(index) == fingerprint(path):
+        index = current_index(path)
+        if index is not None:
             return cls(nzcvm.mesh_model_open(index))
         return cls._build(path)
 
@@ -222,11 +223,10 @@ class MeshModel:
             The index file, whether this call wrote it or found it current.
         """
         path = Path(path)
-        index = index_path(path)
-        current = fingerprint(path)
-        if index.exists() and not force and nzcvm.index_fingerprint(index) == current:
+        if not force and (index := current_index(path)) is not None:
             return index
-        cls._build(path)._raw.write_index(index, current)
+        index = index_path(path)
+        cls._build(path)._raw.write_index(index, fingerprint(path))
         return index
 
     @property
@@ -692,6 +692,24 @@ def index_path(mesh_path: Path) -> Path:
     return Path(mesh_path).with_suffix(".nzidx")
 
 
+def current_index(mesh_path: Path) -> Path | None:
+    """The index beside the mesh at *mesh_path*, if it matches the mesh.
+
+    ``None`` when there is no index, when its fingerprint differs from the
+    mesh's, or when the reader rejects its header. A foreign or truncated
+    file counts as no index rather than an error, since the loader can
+    always build instead.
+    """
+    index = index_path(mesh_path)
+    if not index.exists():
+        return None
+    try:
+        stored = nzcvm.index_fingerprint(index)
+    except (OSError, ValueError):
+        return None
+    return index if stored == fingerprint(mesh_path) else None
+
+
 def fingerprint(mesh_path: Path) -> bytes:
     """A 32-byte summary of the mesh store at *mesh_path*.
 
@@ -702,16 +720,32 @@ def fingerprint(mesh_path: Path) -> bytes:
     mesh rewritten with identical contents fails to match its old index, which
     is the cheap side to err on.
     """
-    mesh_path = Path(mesh_path)
     digest = hashlib.blake2b(digest_size=32)
-    for file in sorted(p for p in mesh_path.rglob("*") if p.is_file()):
-        stat = file.stat()
-        digest.update(str(file.relative_to(mesh_path)).encode())
+    for relative, entry in sorted(_walk(Path(mesh_path))):
+        stat = entry.stat()
+        digest.update(relative.encode())
         digest.update(stat.st_size.to_bytes(8, "little"))
         digest.update(stat.st_mtime_ns.to_bytes(8, "little", signed=True))
-        if file.name == "zarr.json":
-            digest.update(file.read_bytes())
+        if entry.name == "zarr.json":
+            digest.update(Path(entry.path).read_bytes())
     return digest.digest()
+
+
+def _walk(root: Path, prefix: str = "") -> Iterator[tuple[str, os.DirEntry[str]]]:
+    """Every file under *root* with its path relative to *root*.
+
+    ``scandir`` gets the file type from the directory listing, so a store of a
+    few hundred chunk files costs one ``stat`` per file rather than the two or
+    three a ``rglob`` walk makes. On a network filesystem each of those is a
+    round trip.
+    """
+    with os.scandir(root) as entries:
+        for entry in entries:
+            relative = f"{prefix}{entry.name}"
+            if entry.is_dir(follow_symlinks=False):
+                yield from _walk(Path(entry.path), f"{relative}/")
+            elif entry.is_file(follow_symlinks=False):
+                yield relative, entry
 
 
 def _mesh_model_from_tetra(

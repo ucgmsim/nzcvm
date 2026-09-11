@@ -1,30 +1,29 @@
+use crate::index::{IndexError, SectionReader, SectionWriter, tag};
 use crate::quality::{Quality, barycentric_interpolate};
 use crate::real::Real;
 use crate::simplex::Simplex;
 use crate::slab::Slab;
 use deepsize::{Context, DeepSizeOf};
-use enum_dispatch::enum_dispatch;
 use nalgebra::{Point3, Point4};
 
-/// A type that can report the seismic quality at a point inside a simplex.
-#[enum_dispatch]
-pub trait Queryable {
-    /// Return the quality at `point` inside `simplex`, looking up vertex
-    /// properties from the qualities slice.
-    fn quality_at(&self, qualities: &[Quality], simplex: &Simplex, point: &Point3<Real>)
-    -> Quality;
-}
-
-/// Per-simplex model variant: either constant or barycentric interpolation.
-#[enum_dispatch(Queryable)]
+/// How one simplex reports its quality, as supplied when a mesh is built.
+///
+/// A [`ModelMap`] stores these compactly; this enum only exists to describe
+/// a mesh on the way in.
 pub enum Model {
     Constant(ConstantModel),
     Interpolate(InterpolateModel),
 }
 
-impl DeepSizeOf for Model {
-    fn deep_size_of_children(&self, _context: &mut Context) -> usize {
-        0
+impl From<ConstantModel> for Model {
+    fn from(m: ConstantModel) -> Self {
+        Model::Constant(m)
+    }
+}
+
+impl From<InterpolateModel> for Model {
+    fn from(m: InterpolateModel) -> Self {
+        Model::Interpolate(m)
     }
 }
 
@@ -32,17 +31,6 @@ impl DeepSizeOf for Model {
 pub struct ConstantModel {
     /// Index into the qualities array.
     pub quality: u32,
-}
-
-impl Queryable for ConstantModel {
-    fn quality_at(
-        &self,
-        qualities: &[Quality],
-        _simplex: &Simplex,
-        _point: &Point3<Real>,
-    ) -> Quality {
-        qualities[self.quality as usize]
-    }
 }
 
 /// Model that interpolates quality using barycentric coordinates within the simplex.
@@ -70,43 +58,33 @@ fn interpolate_quality(
     barycentric_interpolate([q0, q1, q2, q3], [bary.w, bary.x, bary.y, bary.z])
 }
 
-impl Queryable for InterpolateModel {
-    fn quality_at(
-        &self,
-        qualities: &[Quality],
-        simplex: &Simplex,
-        point: &Point3<Real>,
-    ) -> Quality {
-        interpolate_quality(&self.qualities.into(), qualities, simplex, point)
-    }
-}
-
 /// Per-mesh map from simplex index to its model.
 ///
 /// Meshes are almost always homogeneous (basins are all-interpolate), so the
 /// common cases store just the quality indices in a flat array — 16 bytes per
 /// simplex for interpolation, 4 for constant — instead of a `Vec<Model>` that
-/// pays an enum tag per element.  A heterogeneous mesh stores the tag in a
-/// parallel [`Slab`] instead.
+/// pays an enum tag per element.  A heterogeneous mesh stores four indices
+/// per simplex too, and marks a constant one with [`NO_INTERPOLATION`] in the
+/// second slot.
 ///
 /// Every variant is a [`Slab`] so that the map can be memory-mapped from an
 /// index file as readily as built in memory.
 pub enum ModelMap {
     Interpolate(Slab<VertexRefs>),
     Constant(Slab<u32>),
-    Mixed {
-        /// [`MIXED_CONSTANT`] or [`MIXED_INTERPOLATE`] per simplex.
-        kinds: Slab<u32>,
-        /// Four vertex indices per simplex; a constant simplex uses only the
-        /// first.
-        refs: Slab<VertexRefs>,
-    },
+    Mixed(Slab<VertexRefs>),
 }
 
-/// Tag of a constant simplex in a [`ModelMap::Mixed`] map.
-pub const MIXED_CONSTANT: u32 = 0;
-/// Tag of an interpolating simplex in a [`ModelMap::Mixed`] map.
-pub const MIXED_INTERPOLATE: u32 = 1;
+/// Marks a constant simplex in a [`ModelMap::Mixed`] map.
+///
+/// Sits in the second index slot, where an interpolating simplex has a
+/// vertex index.  A mesh holds at most `u32::MAX` qualities, so no vertex
+/// index is ever this value.
+pub const NO_INTERPOLATION: u32 = u32::MAX;
+
+const KIND_INTERPOLATE: u32 = 0;
+const KIND_CONSTANT: u32 = 1;
+const KIND_MIXED: u32 = 2;
 
 impl ModelMap {
     /// Build a map from a list of per-simplex models, collapsing to a
@@ -133,39 +111,27 @@ impl ModelMap {
                     .collect(),
             ))
         } else {
-            let (kinds, refs) = models
-                .into_iter()
-                .map(|m| match m {
-                    Model::Constant(cm) => (MIXED_CONSTANT, [cm.quality, 0, 0, 0]),
-                    Model::Interpolate(im) => (MIXED_INTERPOLATE, im.qualities.into()),
-                })
-                .unzip();
-            ModelMap::Mixed {
-                kinds: Slab::Owned(kinds),
-                refs: Slab::Owned(refs),
-            }
+            ModelMap::Mixed(Slab::Owned(
+                models
+                    .into_iter()
+                    .map(|m| match m {
+                        Model::Constant(cm) => [cm.quality, NO_INTERPOLATION, 0, 0],
+                        Model::Interpolate(im) => im.qualities.into(),
+                    })
+                    .collect(),
+            ))
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            ModelMap::Interpolate(v) => v.len(),
+            ModelMap::Interpolate(v) | ModelMap::Mixed(v) => v.len(),
             ModelMap::Constant(v) => v.len(),
-            ModelMap::Mixed { kinds, .. } => kinds.len(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    /// Whether the map's records live in a file mapping.
-    pub fn is_mapped(&self) -> bool {
-        match self {
-            ModelMap::Interpolate(v) => v.is_mapped(),
-            ModelMap::Constant(v) => v.is_mapped(),
-            ModelMap::Mixed { kinds, .. } => kinds.is_mapped(),
-        }
     }
 
     /// Gather the map into a new order: entry `i` of the result is entry
@@ -180,10 +146,7 @@ impl ModelMap {
         match self {
             ModelMap::Interpolate(v) => ModelMap::Interpolate(gather(v, order)),
             ModelMap::Constant(v) => ModelMap::Constant(gather(v, order)),
-            ModelMap::Mixed { kinds, refs } => ModelMap::Mixed {
-                kinds: gather(kinds, order),
-                refs: gather(refs, order),
-            },
+            ModelMap::Mixed(v) => ModelMap::Mixed(gather(v, order)),
         }
     }
 
@@ -198,22 +161,50 @@ impl ModelMap {
         match self {
             ModelMap::Interpolate(v) => interpolate_quality(&v[index], qualities, simplex, point),
             ModelMap::Constant(v) => qualities[v[index] as usize],
-            ModelMap::Mixed { kinds, refs } => match kinds[index] {
-                MIXED_CONSTANT => qualities[refs[index][0] as usize],
-                _ => interpolate_quality(&refs[index], qualities, simplex, point),
-            },
+            ModelMap::Mixed(v) => {
+                let refs = &v[index];
+                if refs[1] == NO_INTERPOLATION {
+                    qualities[refs[0] as usize]
+                } else {
+                    interpolate_quality(refs, qualities, simplex, point)
+                }
+            }
         }
+    }
+
+    /// The kind tag the index header records for this map.
+    pub(crate) fn kind(&self) -> u32 {
+        match self {
+            ModelMap::Interpolate(_) => KIND_INTERPOLATE,
+            ModelMap::Constant(_) => KIND_CONSTANT,
+            ModelMap::Mixed(_) => KIND_MIXED,
+        }
+    }
+
+    /// Append this map's records to an index being written.
+    pub(crate) fn write_sections(&self, writer: &mut SectionWriter) -> Result<(), IndexError> {
+        match self {
+            ModelMap::Interpolate(v) | ModelMap::Mixed(v) => writer.write(tag::REFS, v),
+            ModelMap::Constant(v) => writer.write(tag::REFS, v),
+        }
+    }
+
+    /// Map this map's records back out of an opened index.
+    pub(crate) fn read_sections(reader: &SectionReader) -> Result<Self, IndexError> {
+        Ok(match reader.model_kind() {
+            KIND_INTERPOLATE => ModelMap::Interpolate(reader.section(tag::REFS)?),
+            KIND_CONSTANT => ModelMap::Constant(reader.section(tag::REFS)?),
+            KIND_MIXED => ModelMap::Mixed(reader.section(tag::REFS)?),
+            _ => return Err(IndexError::Corrupt("unknown model kind")),
+        })
     }
 }
 
 impl DeepSizeOf for ModelMap {
     fn deep_size_of_children(&self, context: &mut Context) -> usize {
         match self {
-            ModelMap::Interpolate(v) => v.deep_size_of_children(context),
+            ModelMap::Interpolate(v) | ModelMap::Mixed(v) => v.deep_size_of_children(context),
             ModelMap::Constant(v) => v.deep_size_of_children(context),
-            ModelMap::Mixed { kinds, refs } => {
-                kinds.deep_size_of_children(context) + refs.deep_size_of_children(context)
-            }
         }
     }
 }

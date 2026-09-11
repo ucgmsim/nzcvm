@@ -64,7 +64,7 @@ mod nzcvm {
     #[pyfunction]
     pub fn mesh_model_open(path: PathBuf) -> PyResult<PyMeshModel> {
         Ok(PyMeshModel {
-            inner: Some(index::open(&path).map_err(index_error)?),
+            inner: Some(MeshModel::open_index(&path).map_err(index_error)?),
         })
     }
 
@@ -305,6 +305,16 @@ mod nzcvm {
         })
     }
 
+    impl PyMeshModel {
+        /// The wrapped model, or the error every method raises once
+        /// `model_tree()` has moved it out.
+        fn model(&self) -> PyResult<&MeshModel> {
+            self.inner
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("MeshModel has been consumed by model_tree()"))
+        }
+    }
+
     #[pymethods]
     impl PyMeshModel {
         /// Write this model as a compiled index at `path`.
@@ -312,18 +322,14 @@ mod nzcvm {
         /// `fingerprint` is the caller's 32-byte summary of the source mesh,
         /// stored in the header so a stale index can be recognised later.
         pub fn write_index(&self, path: PathBuf, fingerprint: &[u8]) -> PyResult<()> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             let fingerprint = fingerprint_array(fingerprint)?;
-            index::write(inner, &fingerprint, &path).map_err(index_error)
+            inner.write_index(&fingerprint, &path).map_err(index_error)
         }
 
         /// Whether the model's arrays are memory-mapped from an index file.
         pub fn is_mapped(&self) -> PyResult<bool> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             Ok(inner.is_mapped())
         }
 
@@ -342,9 +348,7 @@ mod nzcvm {
             y: Real,
             z: Real,
         ) -> PyResult<Option<Bound<'py, PyAny>>> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             let pt = Point3::new(x, y, z);
             inner
                 .query(pt)
@@ -364,9 +368,7 @@ mod nzcvm {
             &self,
             py: Python<'py>,
         ) -> PyResult<(Bound<'py, PyArray1<Real>>, Bound<'py, PyArray1<Real>>)> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             let b = inner.aabb3();
             let min = array![b.min.x, b.min.y, b.min.z];
             let max = array![b.max.x, b.max.y, b.max.z];
@@ -380,9 +382,7 @@ mod nzcvm {
         /// Returns `ValueError` if the model has been consumed by `model_tree()`.
         #[getter]
         pub fn name(&self) -> PyResult<String> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             Ok(inner.name.clone())
         }
 
@@ -393,9 +393,7 @@ mod nzcvm {
         /// Returns `ValueError` if the model has been consumed by `model_tree()`.
         #[getter]
         pub fn priority(&self) -> PyResult<u8> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             Ok(inner.priority)
         }
 
@@ -405,9 +403,7 @@ mod nzcvm {
         ///
         /// Returns `ValueError` if the model has been consumed by `model_tree()`.
         pub fn view<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             pythonize(py, &inner.view()).map_err(|e| e.into())
         }
     }

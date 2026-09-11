@@ -8,7 +8,7 @@
 //! kind it is.
 //!
 //! The mapped form casts bytes to records with `zerocopy`, which checks size
-//! and alignment when the slab is created.  The record types opt in by
+//! and alignment when the slab is created.  A record type qualifies by
 //! deriving [`FromBytes`], [`IntoBytes`], [`KnownLayout`] and [`Immutable`]
 //! on a `#[repr(C)]` layout, which is also what pins the on-disk format.
 
@@ -17,9 +17,9 @@ use std::sync::Arc;
 
 use deepsize::{Context, DeepSizeOf};
 use memmap2::Mmap;
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+use zerocopy::{CastError, FromBytes, Immutable, IntoBytes, KnownLayout};
 
-/// A record type a [`Slab`] can hold.
+/// A record type a [`Slab`] can hold: shorthand for the `zerocopy` bounds.
 pub trait Record: FromBytes + IntoBytes + KnownLayout + Immutable + Copy {}
 
 impl<T: FromBytes + IntoBytes + KnownLayout + Immutable + Copy> Record for T {}
@@ -60,13 +60,11 @@ impl<T: Record> Slab<T> {
     /// Size and alignment are checked here, once, so that [`Deref`] can stay
     /// infallible.
     pub fn mapped(mmap: Arc<Mmap>, offset: usize, len: usize) -> Result<Self, SlabError> {
-        let bytes = len
-            .checked_mul(size_of::<T>())
-            .and_then(|n| offset.checked_add(n))
-            .filter(|end| *end <= mmap.len())
-            .map(|end| &mmap[offset..end])
-            .ok_or(SlabError::OutOfBounds)?;
-        <[T]>::ref_from_bytes_with_elems(bytes, len).map_err(|_| SlabError::Misaligned)?;
+        let rest = mmap.get(offset..).ok_or(SlabError::OutOfBounds)?;
+        <[T]>::ref_from_prefix_with_elems(rest, len).map_err(|e| match e {
+            CastError::Alignment(_) => SlabError::Misaligned,
+            CastError::Size(_) | CastError::Validity(_) => SlabError::OutOfBounds,
+        })?;
         Ok(Slab::Mapped { mmap, offset, len })
     }
 
@@ -99,20 +97,14 @@ impl<T: Record> Deref for Slab<T> {
         match self {
             Slab::Owned(v) => v,
             Slab::Mapped { mmap, offset, len } => {
-                let bytes = &mmap[*offset..*offset + *len * size_of::<T>()];
                 // `Slab::mapped` proved this exact range castable when the
                 // slab was built, and neither the mapping nor the range has
                 // changed since.
-                <[T]>::ref_from_bytes_with_elems(bytes, *len)
+                <[T]>::ref_from_prefix_with_elems(&mmap[*offset..], *len)
                     .expect("slab range was validated at construction")
+                    .0
             }
         }
-    }
-}
-
-impl<T: Record> From<Vec<T>> for Slab<T> {
-    fn from(v: Vec<T>) -> Self {
-        Slab::Owned(v)
     }
 }
 
