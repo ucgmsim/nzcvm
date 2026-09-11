@@ -5,7 +5,6 @@ from enum import StrEnum, auto
 from pathlib import Path
 from typing import Annotated
 
-import numba
 import numpy as np
 import pandas as pd
 import typer
@@ -91,41 +90,55 @@ def morton_map(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
     return map
 
 
-@numba.njit(cache=True)
-def tet_connectivity(ni: int, nj: int, nk: int):
-    # 5 tetrahedra per voxel
-    num_voxels = (ni - 1) * (nj - 1) * (nk - 1)
-    connectivity = np.empty((num_voxels * 5, 4), dtype=np.int64)
+def tet_connectivity(ni: int, nj: int, nk: int) -> np.ndarray:
+    """Split each voxel of an ``(ni, nj, nk)`` grid into five tetrahedra.
 
-    idx = 0
-    for i in range(ni - 1):
-        for j in range(nj - 1):
-            for k in range(nk - 1):
-                v000 = i * (nj * nk) + j * nk + k
-                v100 = (i + 1) * (nj * nk) + j * nk + k
-                v010 = i * (nj * nk) + (j + 1) * nk + k
-                v110 = (i + 1) * (nj * nk) + (j + 1) * nk + k
-                v001 = i * (nj * nk) + j * nk + (k + 1)
-                v101 = (i + 1) * (nj * nk) + j * nk + (k + 1)
-                v011 = i * (nj * nk) + (j + 1) * nk + (k + 1)
-                v111 = (i + 1) * (nj * nk) + (j + 1) * nk + (k + 1)
+    Neighbouring voxels have to agree on the diagonal they share, or the
+    tetrahedra leave cracks instead of tiling the volume. Alternating the
+    split on the parity of ``i + j + k`` is what makes them agree.
 
-                if (i + j + k) % 2 == 0:
-                    connectivity[idx + 0] = (v000, v100, v010, v001)
-                    connectivity[idx + 1] = (v110, v100, v010, v111)
-                    connectivity[idx + 2] = (v101, v100, v001, v111)
-                    connectivity[idx + 3] = (v011, v010, v001, v111)
-                    connectivity[idx + 4] = (v100, v010, v001, v111)
-                else:
-                    connectivity[idx + 0] = (v100, v000, v110, v101)
-                    connectivity[idx + 1] = (v010, v000, v110, v011)
-                    connectivity[idx + 2] = (v001, v000, v101, v011)
-                    connectivity[idx + 3] = (v111, v110, v101, v011)
-                    connectivity[idx + 4] = (v000, v110, v101, v011)
+    Parameters
+    ----------
+    ni, nj, nk :
+        Number of grid points along each axis.
 
-                idx += 5
+    Returns
+    -------
+    numpy.ndarray
+        ``(5 * (ni-1) * (nj-1) * (nk-1), 4)`` array of vertex indices into the
+        flattened grid.
+    """
+    i, j, k = (a.ravel() for a in np.indices((ni - 1, nj - 1, nk - 1), dtype=np.int64))
 
-    return connectivity
+    def vertex(di: int, dj: int, dk: int) -> np.ndarray:
+        return (i + di) * (nj * nk) + (j + dj) * nk + (k + dk)
+
+    # fmt: off
+    v000, v100, v010, v110 = vertex(0,0,0), vertex(1,0,0), vertex(0,1,0), vertex(1,1,0)
+    v001, v101, v011, v111 = vertex(0,0,1), vertex(1,0,1), vertex(0,1,1), vertex(1,1,1)
+
+    even = [
+        (v000, v100, v010, v001), (v110, v100, v010, v111),
+        (v101, v100, v001, v111), (v011, v010, v001, v111),
+        (v100, v010, v001, v111),
+    ]
+    odd = [
+        (v100, v000, v110, v101), (v010, v000, v110, v011),
+        (v001, v000, v101, v011), (v111, v110, v101, v011),
+        (v000, v110, v101, v011),
+    ]
+    # fmt: on
+
+    is_even = (i + j + k) % 2 == 0
+    # Filled one tetrahedron at a time: stacking all ten patterns first needs
+    # room for three copies of the output at once, and a country-sized
+    # tomography grid runs to tens of millions of tetrahedra.
+    connectivity = np.empty((len(i), 5, 4), dtype=np.int64)
+    for slot, (even_tet, odd_tet) in enumerate(zip(even, odd, strict=True)):
+        for corner, (e, o) in enumerate(zip(even_tet, odd_tet, strict=True)):
+            np.copyto(connectivity[:, slot, corner], o)
+            np.copyto(connectivity[:, slot, corner], e, where=is_even)
+    return connectivity.reshape(-1, 4)
 
 
 def data_frame_to_mesh(
