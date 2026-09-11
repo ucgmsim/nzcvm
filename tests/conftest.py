@@ -1,15 +1,22 @@
 """Shared fixtures for the nzcvm test suite."""
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pytest
 import shapely
+import xarray as xr
 from hypothesis import HealthCheck, settings
 
 from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
+from nzcvm.config.layers.core import LayerConfig
 from nzcvm.grids.grid import Grid, GridSchema
+from nzcvm.layers.core import Layer
+from nzcvm.qualities import Qualities, QualitiesSchema
+from nzcvm.query import ModelRange
 
 # ---------------------------------------------------------------------------
 # Hypothesis profiles
@@ -115,6 +122,39 @@ def make_grid(
 def unit_grid() -> Grid:
     """2×2×2 concrete Grid with all points inside the unit tetrahedron."""
     return make_grid()
+
+
+@dataclass
+class TerminalConfig(LayerConfig):
+    type: Literal["_terminal"] = "_terminal"
+
+
+class Terminal(Layer[TerminalConfig]):
+    """A terminal layer that keeps the coordinates of the grid it receives.
+
+    `nzcvm.layers.dummy.constant` builds its output from `np.ones`, so it hands
+    back no coordinates at all, which `map_blocks` rejects for any grid that
+    carries them. Building from `xarray.ones_like` keeps them.
+
+    Passing no `config_cls` keeps this out of `Layer.registry`, the same way
+    `nzcvm.layers.pipeline._SentinelLayer` does.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(TerminalConfig(), None, None)  # ty: ignore[invalid-argument-type]
+
+    def __call__(
+        self, grid: Grid, model_range: ModelRange = ModelRange.ALL
+    ) -> Qualities:
+        ones = xr.ones_like(grid.x)
+        return QualitiesSchema.new(
+            rho=ones * 2700.0,
+            vp=ones * 6000.0,
+            vs=ones * 3500.0,
+            qp=ones * 200.0,
+            qs=ones * 100.0,
+            alpha=ones,
+        )
 
 
 @pytest.fixture()

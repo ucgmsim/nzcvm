@@ -20,15 +20,13 @@ from __future__ import annotations
 import gzip
 import importlib
 import pkgutil
-from dataclasses import dataclass, fields
+from dataclasses import fields
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import pytest
 import shapely
 import shapely.ops
-import xarray as xr
 from pyproj import CRS, Transformer
 
 from nzcvm import synthetic
@@ -49,16 +47,15 @@ from nzcvm.config.layers.query import QueryLayerConfig
 from nzcvm.config.metadata import ModelMetadata
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.grid import Grid
-from nzcvm.layers.core import Layer, layer_from_config
+from nzcvm.layers.core import layer_from_config
 from nzcvm.layers.pipeline import build_pipeline, execute_model_pipeline
 from nzcvm.models.mesh import StructuredMeshSchema
-from nzcvm.qualities import Qualities, QualitiesSchema
-from nzcvm.query import ModelRange
 from nzcvm.scripts.convert_tomography import (
     MODEL_COLUMNS,
     ModelType,
     data_frame_to_mesh,
 )
+from tests.conftest import Terminal
 
 _NZTM = CRS.from_epsg(2193)
 _TO_NZTM = Transformer.from_crs(4326, _NZTM, always_xy=True)
@@ -247,36 +244,6 @@ def test_every_shipped_layer_is_covered() -> None:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _TerminalConfig(LayerConfig):
-    type: Literal["_terminal"] = "_terminal"
-
-
-class _Terminal(Layer[_TerminalConfig]):
-    """A terminal built with xarray, so it keeps the grid's coordinates.
-
-    `nzcvm.layers.dummy.constant` would be the obvious choice, but it builds
-    its output from `np.ones` and so hands back no coordinates at all, which
-    is the property under test here.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(_TerminalConfig(), None, None)  # ty: ignore[invalid-argument-type]
-
-    def __call__(
-        self, grid: Grid, model_range: ModelRange = ModelRange.ALL
-    ) -> Qualities:
-        ones = xr.ones_like(grid.x)
-        return QualitiesSchema.new(
-            rho=ones * 2700.0,
-            vp=ones * 6000.0,
-            vs=ones * 3500.0,
-            qp=ones * 200.0,
-            qs=ones * 100.0,
-            alpha=ones,
-        )
-
-
 def _with_coastline(grid: Grid, resources: dict[str, Path]) -> Grid:
     """Add the ``coastline`` coordinate that `ely` and `offshore` require.
 
@@ -285,7 +252,7 @@ def _with_coastline(grid: Grid, resources: dict[str, Path]) -> Grid:
     """
     config = CoastlineConfig(coastline=resources["coastline"])
     populated = grid.copy()
-    layer_from_config(config)(config, grid.geometry, _Terminal())(populated)
+    layer_from_config(config)(config, grid.geometry, Terminal())(populated)
     return populated
 
 
@@ -303,7 +270,7 @@ def test_layer_preserves_the_site_label(
     if "coastline" in config.requires:
         grid = _with_coastline(grid, resources)
 
-    layer = layer_from_config(config)(config, grid.geometry, _Terminal())
+    layer = layer_from_config(config)(config, grid.geometry, Terminal())
     qualities = layer(grid)
 
     assert SITE in qualities.coords, layer_type
@@ -322,7 +289,7 @@ def test_layer_returns_the_grid_shape(
     if "coastline" in config.requires:
         grid = _with_coastline(grid, resources)
 
-    layer = layer_from_config(config)(config, grid.geometry, _Terminal())
+    layer = layer_from_config(config)(config, grid.geometry, Terminal())
     assert layer(grid).vs.shape == concrete_grid.x.shape, layer_type
 
 
