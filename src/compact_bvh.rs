@@ -22,6 +22,7 @@ use deepsize::{Context, DeepSizeOf};
 use nalgebra::Point3;
 use smallvec::SmallVec;
 
+use crate::index::{IndexError, SectionReader, SectionWriter, tag};
 use crate::real::Real;
 use crate::simplex::Simplex;
 use crate::slab::Slab;
@@ -143,15 +144,11 @@ impl ChildRef {
         ChildSlot::from_bits(self.slot)
     }
 
-    /// Closed-interval bounds test, matching `Aabb::contains`.
+    /// The child's bounds, for the same containment test the rest of the
+    /// crate uses.  Building the `Aabb` is two loads the optimiser folds away.
     #[inline(always)]
     fn contains(&self, p: &Point3<Real>) -> bool {
-        p.x >= self.min[0]
-            && p.x <= self.max[0]
-            && p.y >= self.min[1]
-            && p.y <= self.max[1]
-            && p.z >= self.min[2]
-            && p.z <= self.max[2]
+        Aabb::with_bounds(Point3::from(self.min), Point3::from(self.max)).contains(p)
     }
 }
 
@@ -163,8 +160,10 @@ pub struct CompactNode {
     right: ChildRef,
 }
 
-#[cfg(not(feature = "high_precision"))]
-const _: () = assert!(std::mem::size_of::<CompactNode>() == 56);
+// Each child is six reals of corners and one real's worth of slot: the `f64`
+// build spells out the pad that `repr(C)` would otherwise add silently, so
+// the record is exactly as wide at either width and the file layout is pinned.
+const _: () = assert!(size_of::<CompactNode>() == 14 * size_of::<Real>());
 
 pub struct CompactBvh {
     nodes: Slab<CompactNode>,
@@ -292,24 +291,22 @@ impl CompactBvh {
         )
     }
 
-    /// Reassemble a tree from records read back off disk.
-    ///
-    /// `root` is the packed root slot, or `None` for an empty mesh.
-    pub(crate) fn from_parts(nodes: Slab<CompactNode>, root: Option<u32>) -> Self {
-        Self {
-            nodes,
-            root: root.map(ChildSlot::from_bits),
-        }
-    }
-
-    /// The node records, in the order they are written to disk.
-    pub(crate) fn nodes(&self) -> &Slab<CompactNode> {
-        &self.nodes
-    }
-
     /// The packed root slot, or `None` for an empty mesh.
-    pub(crate) fn root_bits(&self) -> Option<u32> {
+    pub(crate) fn root_slot(&self) -> Option<u32> {
         self.root.map(ChildSlot::into_bits)
+    }
+
+    /// Append the node records to an index being written.
+    pub(crate) fn write_sections(&self, writer: &mut SectionWriter) -> Result<(), IndexError> {
+        writer.write(tag::NODES, &self.nodes)
+    }
+
+    /// Map the node records back out of an opened index.
+    pub(crate) fn read_sections(reader: &SectionReader) -> Result<Self, IndexError> {
+        Ok(Self {
+            nodes: reader.section(tag::NODES)?,
+            root: reader.root_slot().map(ChildSlot::from_bits),
+        })
     }
 
     /// Iterator over the indices of all simplices that contain `point`.

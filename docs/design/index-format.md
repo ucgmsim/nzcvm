@@ -41,6 +41,12 @@ Each hot array is plain-old-data with fixed-width fields and no pointers.
 | `CompactNode` |       56 B | two children, each an axis-aligned bounding box (AABB) and a packed child slot |
 | `Simplex`     |       48 B | anchor vertex and the inverse edge matrix                       |
 | `VertexRefs`  |       16 B | four quality indices, or 4 B for a constant model               |
+
+A mesh whose simplices mix constant and interpolating models stores four
+indices for every simplex and marks a constant one with `u32::MAX` in the
+second slot, where an interpolating simplex has a vertex index. The mesh can't
+hold that many qualities, so the marker is unambiguous, and the mixed case
+doesn't need a second array.
 | `Quality`     |       24 B | six components per mesh vertex                                  |
 
 Each record is `#[repr(C)]` and derives `zerocopy`'s `FromBytes`, `IntoBytes`,
@@ -67,9 +73,9 @@ pub enum Slab<T: Record> {
 ```
 
 `Slab` dereferences to `&[T]` in either variant. `MeshModel`'s four
-arrays are slabs. The build produces `Owned`, and `index::open` produces
-`Mapped`, sharing one `Arc<Mmap>` across the sections of a file. Nothing
-downstream changed, because everything already took a slice.
+arrays are slabs. The build produces `Owned`, and `MeshModel::open_index`
+produces `Mapped`, sharing one `Arc<Mmap>` across the sections of a file.
+The query code didn't change, because it already took a slice.
 
 The cast in `Deref` can't fail. `Slab::mapped` proved the exact range castable
 when it built the slab, and nothing modifies the mapping or the range after
@@ -82,17 +88,25 @@ page 0        Header, then the model name as UTF-8
 nodes         [CompactNode]   the tree, in the order the build emitted it
 simplices     [Simplex]       in BVH leaf order
 refs          [VertexRefs] or [u32], by model kind
-kinds         [u32]           only for a mixed model map
 qualities     [Quality]       one per mesh vertex
 ```
 
 Each section starts on a 4 KiB boundary, which aligns it for its record type
-and for the mapping. The header records the byte offset and record count of
-each section, the `Real` width, the layout version, the model's bounding box,
-priority, transform, and name, and a 32-byte fingerprint of the source mesh
-supplied by the caller. A reader built with the other `Real` width refuses the
-file rather than misread it. Numbers are little-endian, and the file says
-nothing about byte order.
+and for the mapping. The header stores a table with one row per section:
+byte offset, record count, record width, and a tag that specifies the array.
+A reader
+finds a section by tag and refuses one whose record width differs from its
+own type, so a layout change that forgot to bump the version is still caught
+at open. The header also records the `Real` width, the layout version, the
+model's bounding box, priority, transform, and name, and a 32-byte
+fingerprint of the source mesh supplied by the caller. A reader built with
+the other `Real` width refuses the file rather than misread it. Numbers are
+little-endian, and the file says nothing about byte order.
+
+The file module handles bytes and offsets, not meshes. `SectionWriter`
+appends record arrays and `SectionReader` maps them back. `CompactBvh`,
+`ModelMap`, and `MeshModel` each write and read their own sections through
+those two, so none of them exposes a field for the sake of the file.
 
 The writer puts the file down under a `.partial` name and renames it into
 place, so a crash mid-write leaves nothing that parses.
@@ -253,3 +267,11 @@ section is about.
   sections.
 - `Slab` reporting resident rather than mapped pages in `deep_size_of`, once
   there is a reason to distinguish them.
+- `Slab::deref` re-checks the `zerocopy` cast on every call, five times per
+  mapped query, which measures at about a third of the mapped-versus-built
+  gap. Caching the validated pointer at construction closes that for one
+  `unsafe` block. Not taken yet, because the gap is small and the pages are
+  the larger share.
+- `query_many` runs one thread. Dask already runs one chunk per thread over
+  it, so a `rayon` loop inside would oversubscribe the node. The scheduler
+  is the place for that parallelism, and it already has it.

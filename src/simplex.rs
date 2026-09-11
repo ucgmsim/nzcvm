@@ -86,7 +86,7 @@ impl Simplex {
     }
 
     /// The anchor vertex.
-    pub fn c3(&self) -> Point3<Real> {
+    fn c3(&self) -> Point3<Real> {
         Point3::from(self.c3)
     }
 

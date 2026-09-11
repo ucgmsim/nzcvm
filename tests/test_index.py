@@ -19,30 +19,20 @@ import xarray as xr
 from typer.testing import CliRunner
 
 from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
-from nzcvm import synthetic
-from nzcvm.models.model import MeshModel, ModelTree, fingerprint, index_path
-from nzcvm.scripts.convert_tomography import (
-    DEFAULT_ENCODING_SETTINGS,
-    MODEL_COLUMNS,
-    ModelType,
-    data_frame_to_mesh,
+from nzcvm.models.model import (
+    MeshModel,
+    ModelTree,
+    current_index,
+    fingerprint,
+    index_path,
 )
 from nzcvm.scripts.nzcvm_cli import app
 
 runner = CliRunner()
 
-
-@pytest.fixture()
-def mesh_path(tmp_path: Path) -> Path:
-    """A small tomography mesh, with no index."""
-    path = tmp_path / "tomography.zarr"
-    mesh = data_frame_to_mesh(
-        "tomography",
-        synthetic.tomography(n_horizontal=6, n_depth=5),
-        MODEL_COLUMNS[ModelType.EP2020],
-    )
-    mesh.to_zarr(path, mode="w", encoding=DEFAULT_ENCODING_SETTINGS)
-    return path
+# The shared ``tomography_mesh_path`` fixture, under the name the tests read
+# naturally.
+mesh_path = pytest.fixture()(lambda tomography_mesh_path: tomography_mesh_path)
 
 
 def _probe(tree: ModelTree) -> xr.Dataset:
@@ -161,3 +151,10 @@ def test_a_foreign_file_is_not_opened_as_an_index(tmp_path: Path) -> None:
 def test_a_missing_index_is_an_io_error(tmp_path: Path) -> None:
     with pytest.raises(OSError):
         _nzcvm.mesh_model_open(tmp_path / "absent.nzidx")
+
+
+def test_a_foreign_file_beside_the_mesh_counts_as_no_index(mesh_path: Path) -> None:
+    """The loader builds rather than fails when the reader rejects the index."""
+    index_path(mesh_path).write_bytes(b"\0" * 8192)
+    assert current_index(mesh_path) is None
+    assert not MeshModel.from_path(mesh_path).mapped

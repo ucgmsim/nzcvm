@@ -168,6 +168,35 @@ def isolated_layer_registry():
     Layer.registry.update(original)
 
 
+def write_synthetic_tomography(path: Path) -> Path:
+    """Write a small synthetic tomography mesh store to *path*.
+
+    The mesh has a few hundred tetrahedra, enough to exercise a query path
+    and small enough that writing it costs less than the test around it.
+    """
+    from nzcvm import synthetic
+    from nzcvm.scripts.convert_tomography import (
+        DEFAULT_ENCODING_SETTINGS,
+        MODEL_COLUMNS,
+        ModelType,
+        data_frame_to_mesh,
+    )
+
+    mesh = data_frame_to_mesh(
+        "tomography",
+        synthetic.tomography(n_horizontal=6, n_depth=5),
+        MODEL_COLUMNS[ModelType.EP2020],
+    )
+    mesh.to_zarr(path, mode="w", encoding=DEFAULT_ENCODING_SETTINGS)
+    return path
+
+
+@pytest.fixture()
+def tomography_mesh_path(tmp_path: Path) -> Path:
+    """A small tomography mesh store, with no index beside it."""
+    return write_synthetic_tomography(tmp_path / "tomography.zarr")
+
+
 def get_model_directory() -> Path | None:
     model_path = os.getenv("MODEL_PATH")
     return Path(model_path) if model_path else None
