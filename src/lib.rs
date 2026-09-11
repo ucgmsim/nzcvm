@@ -1,4 +1,5 @@
 pub mod blend;
+pub mod coastline;
 pub mod compact_bvh;
 pub mod mesh;
 pub mod model;
@@ -14,6 +15,7 @@ use pyo3::prelude::*;
 
 #[pymodule]
 mod nzcvm {
+    use crate::coastline::{Coastline, Segment};
     use crate::mesh::{MeshModel, MeshModelError};
     use crate::model::{ConstantModel, InterpolateModel, Model};
     use crate::model_tree::ModelTree;
@@ -26,7 +28,7 @@ mod nzcvm {
     use ndarray::{Array1, Array2, Axis, array, azip};
     use numpy::{
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
-        PyReadwriteArray2, PyUntypedArrayMethods,
+        PyReadonlyArray3, PyReadwriteArray2, PyUntypedArrayMethods,
     };
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
@@ -661,15 +663,90 @@ mod nzcvm {
         Ok(out.into_pyarray(py))
     }
 
+    /// Python-facing coastline for signed-distance queries.
+    #[pyclass]
+    pub struct PyCoastline {
+        inner: Coastline,
+    }
+
+    /// Build a [`PyCoastline`] from an array of segments.
+    ///
+    /// # Arguments
+    /// * `segments_py` – `(S, 2, 2)` array of segment endpoints, indexed
+    ///   `[segment, endpoint, (x, y)]`.  The segments are expected to close
+    ///   into one or more rings.
+    #[pyfunction]
+    pub fn coastline(segments_py: PyReadonlyArray3<Real>) -> PyResult<PyCoastline> {
+        let array = segments_py.as_array();
+        let shape = array.shape();
+        if shape[1] != 2 || shape[2] != 2 {
+            return Err(PyValueError::new_err(format!(
+                "segments must have shape (S, 2, 2), got ({}, {}, {})",
+                shape[0], shape[1], shape[2]
+            )));
+        }
+        let segments = array
+            .axis_iter(Axis(0))
+            .map(|s| Segment::new(Point2::new(s[[0, 0]], s[[0, 1]]), Point2::new(s[[1, 0]], s[[1, 1]])))
+            .collect();
+        Ok(PyCoastline {
+            inner: Coastline::new(segments),
+        })
+    }
+
+    #[pymethods]
+    impl PyCoastline {
+        /// Number of segments in the coastline.
+        pub fn __len__(&self) -> usize {
+            self.inner.len()
+        }
+
+        /// Signed distance from each point to the coastline, negative inside.
+        ///
+        /// Parameters
+        /// ----------
+        /// x, y :
+        ///     Two 1-D float arrays of the same length.
+        ///
+        /// Returns
+        /// -------
+        /// numpy.ndarray
+        ///     Distances, negative where the point lies inside the coastline.
+        pub fn signed_distance<'py>(
+            &self,
+            py: Python<'py>,
+            x: PyReadonlyArray1<Real>,
+            y: PyReadonlyArray1<Real>,
+        ) -> PyResult<Bound<'py, PyArray1<Real>>> {
+            let x = x.as_slice()?;
+            let y = y.as_slice()?;
+            if x.len() != y.len() {
+                return Err(PyValueError::new_err(format!(
+                    "x and y must be the same length, got {} and {}",
+                    x.len(),
+                    y.len()
+                )));
+            }
+            let mut out = Array1::<Real>::zeros(x.len());
+            py.detach(|| {
+                self.inner
+                    .signed_distance_many(x, y, out.as_slice_mut().expect("contiguous"))
+            });
+            Ok(out.into_pyarray(py))
+        }
+    }
+
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<PyMeshModel>()?;
         m.add_class::<PySurfaceModel>()?;
+        m.add_class::<PyCoastline>()?;
         m.add_class::<PyModelTree>()?;
         m.add_class::<QueryParams>()?;
         m.add_class::<QueryCoordinates>()?;
         m.add_function(wrap_pyfunction!(mesh_model, m)?)?;
         m.add_function(wrap_pyfunction!(surface_model, m)?)?;
+        m.add_function(wrap_pyfunction!(coastline, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;
         m.add_function(wrap_pyfunction!(blend_many, m)?)?;
 
