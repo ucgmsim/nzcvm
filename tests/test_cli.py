@@ -24,6 +24,7 @@ runner = CliRunner()
         ["tree-stats"],
         ["view"],
         ["synthetic"],
+        ["index"],
     ],
 )
 def test_help_exits_cleanly(args: list[str]) -> None:

@@ -1,6 +1,7 @@
 use crate::quality::{Quality, barycentric_interpolate};
 use crate::real::Real;
 use crate::simplex::Simplex;
+use crate::slab::Slab;
 use deepsize::{Context, DeepSizeOf};
 use enum_dispatch::enum_dispatch;
 use nalgebra::{Point3, Point4};
@@ -51,17 +52,21 @@ pub struct InterpolateModel {
     pub qualities: Point4<u32>,
 }
 
+/// Quality indices of one simplex's four vertices, in `(x, y, z, w)` order.
+pub type VertexRefs = [u32; 4];
+
 fn interpolate_quality(
-    indices: &Point4<u32>,
+    indices: &VertexRefs,
     qualities: &[Quality],
     simplex: &Simplex,
     point: &Point3<Real>,
 ) -> Quality {
     let bary = simplex.barycentric_coordinates(*point);
-    let q0 = qualities[indices.w as usize];
-    let q1 = qualities[indices.x as usize];
-    let q2 = qualities[indices.y as usize];
-    let q3 = qualities[indices.z as usize];
+    let [x, y, z, w] = *indices;
+    let q0 = qualities[w as usize];
+    let q1 = qualities[x as usize];
+    let q2 = qualities[y as usize];
+    let q3 = qualities[z as usize];
     barycentric_interpolate([q0, q1, q2, q3], [bary.w, bary.x, bary.y, bary.z])
 }
 
@@ -72,7 +77,7 @@ impl Queryable for InterpolateModel {
         simplex: &Simplex,
         point: &Point3<Real>,
     ) -> Quality {
-        interpolate_quality(&self.qualities, qualities, simplex, point)
+        interpolate_quality(&self.qualities.into(), qualities, simplex, point)
     }
 }
 
@@ -81,29 +86,44 @@ impl Queryable for InterpolateModel {
 /// Meshes are almost always homogeneous (basins are all-interpolate), so the
 /// common cases store just the quality indices in a flat array — 16 bytes per
 /// simplex for interpolation, 4 for constant — instead of a `Vec<Model>` that
-/// pays an enum tag per element.  Heterogeneous meshes fall back to `Mixed`.
+/// pays an enum tag per element.  A heterogeneous mesh stores the tag in a
+/// parallel [`Slab`] instead.
+///
+/// Every variant is a [`Slab`] so that the map can be memory-mapped from an
+/// index file as readily as built in memory.
 pub enum ModelMap {
-    Interpolate(Vec<Point4<u32>>),
-    Constant(Vec<u32>),
-    Mixed(Vec<Model>),
+    Interpolate(Slab<VertexRefs>),
+    Constant(Slab<u32>),
+    Mixed {
+        /// [`MIXED_CONSTANT`] or [`MIXED_INTERPOLATE`] per simplex.
+        kinds: Slab<u32>,
+        /// Four vertex indices per simplex; a constant simplex uses only the
+        /// first.
+        refs: Slab<VertexRefs>,
+    },
 }
+
+/// Tag of a constant simplex in a [`ModelMap::Mixed`] map.
+pub const MIXED_CONSTANT: u32 = 0;
+/// Tag of an interpolating simplex in a [`ModelMap::Mixed`] map.
+pub const MIXED_INTERPOLATE: u32 = 1;
 
 impl ModelMap {
     /// Build a map from a list of per-simplex models, collapsing to a
     /// homogeneous representation when possible.
     pub fn from_models(models: Vec<Model>) -> Self {
         if models.iter().all(|m| matches!(m, Model::Interpolate(_))) {
-            ModelMap::Interpolate(
+            ModelMap::Interpolate(Slab::Owned(
                 models
                     .into_iter()
                     .map(|m| match m {
-                        Model::Interpolate(im) => im.qualities,
+                        Model::Interpolate(im) => im.qualities.into(),
                         Model::Constant(_) => unreachable!(),
                     })
                     .collect(),
-            )
+            ))
         } else if models.iter().all(|m| matches!(m, Model::Constant(_))) {
-            ModelMap::Constant(
+            ModelMap::Constant(Slab::Owned(
                 models
                     .into_iter()
                     .map(|m| match m {
@@ -111,9 +131,19 @@ impl ModelMap {
                         Model::Interpolate(_) => unreachable!(),
                     })
                     .collect(),
-            )
+            ))
         } else {
-            ModelMap::Mixed(models)
+            let (kinds, refs) = models
+                .into_iter()
+                .map(|m| match m {
+                    Model::Constant(cm) => (MIXED_CONSTANT, [cm.quality, 0, 0, 0]),
+                    Model::Interpolate(im) => (MIXED_INTERPOLATE, im.qualities.into()),
+                })
+                .unzip();
+            ModelMap::Mixed {
+                kinds: Slab::Owned(kinds),
+                refs: Slab::Owned(refs),
+            }
         }
     }
 
@@ -121,7 +151,7 @@ impl ModelMap {
         match self {
             ModelMap::Interpolate(v) => v.len(),
             ModelMap::Constant(v) => v.len(),
-            ModelMap::Mixed(v) => v.len(),
+            ModelMap::Mixed { kinds, .. } => kinds.len(),
         }
     }
 
@@ -129,24 +159,31 @@ impl ModelMap {
         self.len() == 0
     }
 
+    /// Whether the map's records live in a file mapping.
+    pub fn is_mapped(&self) -> bool {
+        match self {
+            ModelMap::Interpolate(v) => v.is_mapped(),
+            ModelMap::Constant(v) => v.is_mapped(),
+            ModelMap::Mixed { kinds, .. } => kinds.is_mapped(),
+        }
+    }
+
     /// Gather the map into a new order: entry `i` of the result is entry
     /// `order[i]` of `self`.  Used to match the BVH's leaf ordering.
+    ///
+    /// Only an owned map is ever reordered: a mapped one was written in leaf
+    /// order already.
     pub(crate) fn reorder(self, order: &[u32]) -> Self {
-        fn gather<T: Copy>(v: Vec<T>, order: &[u32]) -> Vec<T> {
-            order.iter().map(|&i| v[i as usize]).collect()
+        fn gather<T: crate::slab::Record>(v: Slab<T>, order: &[u32]) -> Slab<T> {
+            Slab::Owned(order.iter().map(|&i| v[i as usize]).collect())
         }
         match self {
             ModelMap::Interpolate(v) => ModelMap::Interpolate(gather(v, order)),
             ModelMap::Constant(v) => ModelMap::Constant(gather(v, order)),
-            ModelMap::Mixed(v) => {
-                let mut slots: Vec<Option<Model>> = v.into_iter().map(Some).collect();
-                ModelMap::Mixed(
-                    order
-                        .iter()
-                        .map(|&i| slots[i as usize].take().expect("duplicate index in order"))
-                        .collect(),
-                )
-            }
+            ModelMap::Mixed { kinds, refs } => ModelMap::Mixed {
+                kinds: gather(kinds, order),
+                refs: gather(refs, order),
+            },
         }
     }
 
@@ -161,7 +198,10 @@ impl ModelMap {
         match self {
             ModelMap::Interpolate(v) => interpolate_quality(&v[index], qualities, simplex, point),
             ModelMap::Constant(v) => qualities[v[index] as usize],
-            ModelMap::Mixed(v) => v[index].quality_at(qualities, simplex, point),
+            ModelMap::Mixed { kinds, refs } => match kinds[index] {
+                MIXED_CONSTANT => qualities[refs[index][0] as usize],
+                _ => interpolate_quality(&refs[index], qualities, simplex, point),
+            },
         }
     }
 }
@@ -169,9 +209,11 @@ impl ModelMap {
 impl DeepSizeOf for ModelMap {
     fn deep_size_of_children(&self, context: &mut Context) -> usize {
         match self {
-            ModelMap::Interpolate(v) => v.capacity() * std::mem::size_of::<Point4<u32>>(),
-            ModelMap::Constant(v) => v.capacity() * std::mem::size_of::<u32>(),
-            ModelMap::Mixed(v) => v.deep_size_of_children(context),
+            ModelMap::Interpolate(v) => v.deep_size_of_children(context),
+            ModelMap::Constant(v) => v.deep_size_of_children(context),
+            ModelMap::Mixed { kinds, refs } => {
+                kinds.deep_size_of_children(context) + refs.deep_size_of_children(context)
+            }
         }
     }
 }

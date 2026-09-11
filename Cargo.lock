@@ -1014,6 +1014,7 @@ dependencies = [
  "criterion",
  "deepsize",
  "enum_dispatch",
+ "memmap2",
  "nalgebra",
  "ndarray",
  "numpy",
@@ -1024,6 +1025,8 @@ dependencies = [
  "serde",
  "small-collections",
  "smallvec",
+ "tempfile",
+ "zerocopy",
 ]
 
 [[package]]
