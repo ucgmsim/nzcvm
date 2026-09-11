@@ -3,6 +3,7 @@ use crate::model::*;
 use crate::quality::Quality;
 use crate::real::Real;
 use crate::simplex::{BuildSimplex, Simplex};
+use crate::slab::Slab;
 use crate::tree_query::Contains;
 use deepsize::{Context, DeepSizeOf};
 
@@ -46,9 +47,9 @@ pub struct MeshModelView {
 /// visit scans adjacent entries of `simplices`.
 pub struct MeshModel {
     bvh_tree: CompactBvh,
-    simplices: Vec<Simplex>,
+    simplices: Slab<Simplex>,
     model_map: ModelMap,
-    qualities: Vec<Quality>,
+    qualities: Slab<Quality>,
     aabb: Aabb<Real, 3>,
     transform: Option<Affine3<Real>>,
     pub priority: u8,
@@ -217,18 +218,71 @@ impl MeshModel {
             .collect();
         let model_map = ModelMap::from_models(models).reorder(&order);
 
-        Ok(Self {
+        Ok(Self::from_parts(
+            bvh_tree,
+            Slab::Owned(simplices),
+            model_map,
+            Slab::Owned(qualities),
+            aabb,
+            transform,
+            priority,
+            name,
+        ))
+    }
+
+    /// Assemble a model from arrays already in BVH leaf order.
+    ///
+    /// This is how a model comes back off disk: the index file stores exactly
+    /// these parts, so opening one is a matter of mapping them.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_parts(
+        bvh_tree: CompactBvh,
+        simplices: Slab<Simplex>,
+        model_map: ModelMap,
+        qualities: Slab<Quality>,
+        aabb: Aabb<Real, 3>,
+        transform: Option<Affine3<Real>>,
+        priority: u8,
+        name: String,
+    ) -> Self {
+        Self {
             bvh_tree,
             simplices,
+            model_map,
             qualities,
             aabb,
-            model_map,
+            transform,
             priority,
             name,
             id: 0,
             node_index: 0,
-            transform,
-        })
+        }
+    }
+
+    pub(crate) fn bvh(&self) -> &CompactBvh {
+        &self.bvh_tree
+    }
+
+    pub(crate) fn simplices(&self) -> &Slab<Simplex> {
+        &self.simplices
+    }
+
+    pub(crate) fn model_map(&self) -> &ModelMap {
+        &self.model_map
+    }
+
+    pub(crate) fn qualities(&self) -> &Slab<Quality> {
+        &self.qualities
+    }
+
+    pub(crate) fn transform(&self) -> Option<Affine3<Real>> {
+        self.transform
+    }
+
+    /// Whether the model's arrays are memory-mapped from an index file
+    /// rather than held on the heap.
+    pub fn is_mapped(&self) -> bool {
+        self.simplices.is_mapped()
     }
 
     /// Number of vertex-quality entries in this mesh.

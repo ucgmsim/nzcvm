@@ -30,6 +30,7 @@ from nzcvm.scripts import (
     construct_mesh,
     convert_tiff,
     convert_tomography,
+    index_cli,
     surface_cli,
     synthetic,
     tree_stats,
@@ -176,6 +177,7 @@ app.add_typer(tree_stats.app, name="tree-stats")
 app.add_typer(view.app, name="view")
 app.add_typer(convert_tiff.app, name="convert-tiff")
 app.add_typer(synthetic.app, name="synthetic")
+app.add_typer(index_cli.app, name="index")
 
 
 @app.command()

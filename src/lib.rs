@@ -1,6 +1,7 @@
 pub mod blend;
 pub mod coastline;
 pub mod compact_bvh;
+pub mod index;
 pub mod mesh;
 pub mod model;
 pub mod model_tree;
@@ -8,6 +9,7 @@ pub mod quality;
 pub mod query;
 pub mod real;
 pub mod simplex;
+pub mod slab;
 pub mod surface;
 mod tree_query;
 pub mod triangle;
@@ -16,6 +18,7 @@ use pyo3::prelude::*;
 #[pymodule]
 mod nzcvm {
     use crate::coastline::{Coastline, Segment};
+    use crate::index::{self, FINGERPRINT_LEN, IndexError};
     use crate::mesh::{MeshModel, MeshModelError};
     use crate::model::{ConstantModel, InterpolateModel, Model};
     use crate::model_tree::ModelTree;
@@ -23,6 +26,7 @@ mod nzcvm {
     use crate::query::Query;
     use crate::real::Real;
     use crate::surface::SurfaceModel;
+    use std::path::PathBuf;
 
     use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
     use ndarray::{Array1, Array2, Axis, array, azip};
@@ -30,9 +34,46 @@ mod nzcvm {
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
         PyReadonlyArray3, PyReadwriteArray2, PyUntypedArrayMethods,
     };
-    use pyo3::exceptions::PyValueError;
+    use pyo3::exceptions::{PyIOError, PyValueError};
     use pyo3::prelude::*;
+    use pyo3::types::PyBytes;
     use pythonize::pythonize;
+
+    fn index_error(e: IndexError) -> PyErr {
+        match e {
+            IndexError::Io(e) => PyIOError::new_err(e.to_string()),
+            other => PyValueError::new_err(other.to_string()),
+        }
+    }
+
+    fn fingerprint_array(bytes: &[u8]) -> PyResult<[u8; FINGERPRINT_LEN]> {
+        bytes.try_into().map_err(|_| {
+            PyValueError::new_err(format!(
+                "fingerprint must be {FINGERPRINT_LEN} bytes, got {}",
+                bytes.len()
+            ))
+        })
+    }
+
+    /// Open a compiled index as a memory-mapped mesh model.
+    ///
+    /// The header is read and checked; the record sections are mapped and
+    /// paged in as queries touch them.
+    #[pyfunction]
+    pub fn mesh_model_open(path: PathBuf) -> PyResult<PyMeshModel> {
+        Ok(PyMeshModel {
+            inner: Some(index::open(&path).map_err(index_error)?),
+        })
+    }
+
+    /// The source fingerprint recorded in the index at `path`.
+    ///
+    /// Reads only the header page.
+    #[pyfunction]
+    pub fn index_fingerprint<'py>(py: Python<'py>, path: PathBuf) -> PyResult<Bound<'py, PyBytes>> {
+        let fingerprint = index::read_fingerprint(&path).map_err(index_error)?;
+        Ok(PyBytes::new(py, &fingerprint))
+    }
 
     /// Coordinate arrays and optional boolean mask for a vectorised query.
     ///
@@ -264,6 +305,26 @@ mod nzcvm {
 
     #[pymethods]
     impl PyMeshModel {
+        /// Write this model as a compiled index at `path`.
+        ///
+        /// `fingerprint` is the caller's 32-byte summary of the source mesh,
+        /// stored in the header so a stale index can be recognised later.
+        pub fn write_index(&self, path: PathBuf, fingerprint: &[u8]) -> PyResult<()> {
+            let inner = self.inner.as_ref().ok_or_else(|| {
+                PyValueError::new_err("MeshModel has been consumed by model_tree()")
+            })?;
+            let fingerprint = fingerprint_array(fingerprint)?;
+            index::write(inner, &fingerprint, &path).map_err(index_error)
+        }
+
+        /// Whether the model's arrays are memory-mapped from an index file.
+        pub fn is_mapped(&self) -> PyResult<bool> {
+            let inner = self.inner.as_ref().ok_or_else(|| {
+                PyValueError::new_err("MeshModel has been consumed by model_tree()")
+            })?;
+            Ok(inner.is_mapped())
+        }
+
         /// Query the mesh model at a single point.
         ///
         /// Returns a dict with keys `rho`, `vp`, `vs`, `qp`, `qs`, `alpha`,
@@ -750,6 +811,8 @@ mod nzcvm {
         m.add_class::<QueryParams>()?;
         m.add_class::<QueryCoordinates>()?;
         m.add_function(wrap_pyfunction!(mesh_model, m)?)?;
+        m.add_function(wrap_pyfunction!(mesh_model_open, m)?)?;
+        m.add_function(wrap_pyfunction!(index_fingerprint, m)?)?;
         m.add_function(wrap_pyfunction!(surface_model, m)?)?;
         m.add_function(wrap_pyfunction!(coastline, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;
