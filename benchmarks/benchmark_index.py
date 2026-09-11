@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from nzcvm import synthetic
-from nzcvm.models.model import MeshModel, ModelTree, index_path
+from nzcvm.models.model import MB, MeshModel, ModelTree, index_path
 from nzcvm.scripts.convert_tomography import (
     DEFAULT_ENCODING_SETTINGS,
     MODEL_COLUMNS,
@@ -84,7 +84,7 @@ def main() -> None:
     # is this figure less the build figure.
     timed("compile index (build + write)", lambda: MeshModel.compile_index(mesh_path))
     size = index_path(mesh_path).stat().st_size
-    print(f"{'index size':48s} {size / 1e6:10.1f} MB  ({size / n_tets:.0f} B/tet)")
+    print(f"{'index size':48s} {size * MB:10.1f} MB  ({size / n_tets:.0f} B/tet)")
 
     # A current index now exists beside the mesh, so this load maps it. The
     # figure includes the fingerprint walk over the zarr store.

@@ -1,4 +1,5 @@
 use crate::compact_bvh::CompactBvh;
+use crate::index::{self, IndexError, IndexMeta, SectionReader, SectionWriter, tag};
 use crate::model::*;
 use crate::quality::Quality;
 use crate::real::Real;
@@ -6,6 +7,7 @@ use crate::simplex::{BuildSimplex, Simplex};
 use crate::slab::Slab;
 use crate::tree_query::Contains;
 use deepsize::{Context, DeepSizeOf};
+use std::path::Path;
 
 use bvh::aabb::{Aabb, Bounded};
 use bvh::bounding_hierarchy::{BHShape, BoundingHierarchy};
@@ -218,7 +220,7 @@ impl MeshModel {
             .collect();
         let model_map = ModelMap::from_models(models).reorder(&order);
 
-        Ok(Self::from_parts(
+        Ok(Self::assemble(
             bvh_tree,
             Slab::Owned(simplices),
             model_map,
@@ -231,11 +233,8 @@ impl MeshModel {
     }
 
     /// Assemble a model from arrays already in BVH leaf order.
-    ///
-    /// This is how a model comes back off disk: the index file stores exactly
-    /// these parts, so opening one is a matter of mapping them.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_parts(
+    fn assemble(
         bvh_tree: CompactBvh,
         simplices: Slab<Simplex>,
         model_map: ModelMap,
@@ -259,24 +258,56 @@ impl MeshModel {
         }
     }
 
-    pub(crate) fn bvh(&self) -> &CompactBvh {
-        &self.bvh_tree
+    /// Write this model as a compiled index at `path`.
+    ///
+    /// `fingerprint` is the caller's summary of the source mesh, stored in the
+    /// header for [`index::read_fingerprint`].
+    pub fn write_index(
+        &self,
+        fingerprint: &[u8; index::FINGERPRINT_LEN],
+        path: &Path,
+    ) -> Result<(), IndexError> {
+        let mut writer = SectionWriter::create(path)?;
+        self.bvh_tree.write_sections(&mut writer)?;
+        writer.write(tag::SIMPLICES, &self.simplices)?;
+        self.model_map.write_sections(&mut writer)?;
+        writer.write(tag::QUALITIES, &self.qualities)?;
+        writer.finish(&IndexMeta {
+            model_kind: self.model_map.kind(),
+            root_slot: self.bvh_tree.root_slot(),
+            priority: self.priority,
+            name: &self.name,
+            aabb: self.aabb,
+            transform: self.transform,
+            fingerprint,
+        })
     }
 
-    pub(crate) fn simplices(&self) -> &Slab<Simplex> {
-        &self.simplices
+    /// Open the compiled index at `path` as a memory-mapped model.
+    pub fn open_index(path: &Path) -> Result<Self, IndexError> {
+        let reader = SectionReader::open(path)?;
+        let simplices: Slab<Simplex> = reader.section(tag::SIMPLICES)?;
+        let model_map = ModelMap::read_sections(&reader)?;
+        if model_map.len() != simplices.len() {
+            return Err(IndexError::Corrupt(
+                "model map and simplices differ in length",
+            ));
+        }
+        Ok(Self::assemble(
+            CompactBvh::read_sections(&reader)?,
+            simplices,
+            model_map,
+            reader.section(tag::QUALITIES)?,
+            reader.aabb(),
+            reader.transform(),
+            reader.priority()?,
+            reader.name().to_owned(),
+        ))
     }
 
+    #[cfg(test)]
     pub(crate) fn model_map(&self) -> &ModelMap {
         &self.model_map
-    }
-
-    pub(crate) fn qualities(&self) -> &Slab<Quality> {
-        &self.qualities
-    }
-
-    pub(crate) fn transform(&self) -> Option<Affine3<Real>> {
-        self.transform
     }
 
     /// Whether the model's arrays are memory-mapped from an index file
@@ -405,7 +436,7 @@ impl BHShape<Real, 4> for MeshModel {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use approx::assert_relative_eq;
 
@@ -420,7 +451,7 @@ mod tests {
         ]
     }
 
-    fn mock_quality(val: Real) -> Quality {
+    pub(crate) fn mock_quality(val: Real) -> Quality {
         Quality {
             rho: val,
             vp: val,
@@ -431,7 +462,7 @@ mod tests {
         }
     }
 
-    fn generate_grid(ni: usize, nj: usize, nk: usize) -> Vec<Point3<Real>> {
+    pub(crate) fn generate_grid(ni: usize, nj: usize, nk: usize) -> Vec<Point3<Real>> {
         let mut vertices = Vec::with_capacity(ni * nj * nk);
         for k in 0..nk {
             for j in 0..nj {
