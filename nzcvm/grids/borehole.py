@@ -1,28 +1,17 @@
 """Topography-following borehole grid builder.
 
 Provides :func:`build_borehole` for constructing the set of vertical columns
-described by a :class:`~nzcvm.config.grids.borehole.BoreholeGridConfig`.
-Each site becomes one column of query points, sampled at a strictly fixed Z
-resolution from the topography down to a fixed depth, so a run extracts a
-directly comparable profile per site rather than a filled volume.
+described by a :class:`~nzcvm.config.grids.borehole.BoreholeGridConfig`: one
+column of query points per site, sampled at a fixed Z resolution from the
+topography down to a fixed depth, so a run extracts a directly comparable
+profile per site rather than a filled volume.
 
-Columns are independent, so none of the extent, azimuth or origin metadata
-the volumetric grids record means anything here.  The builder still fills in
-the :class:`~nzcvm.grids.grid.Grid` attributes that name an origin, taking the
-centroid of the sites as the origin and the south-west corner of their
-bounding box as the bottom-left corner.
-
-Longitude and latitude place a site.  The config doesn't reserve any other
-key, so every other key or column becomes a coordinate on the ``i`` axis under
-the name the caller gave it, which is how a station code or a network ends up
-in the layer chain and the output.
-:data:`~nzcvm.grids.grid.RESERVED_COORDINATES` lists the names a label may not
-take, and ``keep_extra_columns = false`` drops the labels altogether.
+See :class:`~nzcvm.config.grids.borehole.BoreholeGridConfig` for what a site
+is and how the builder copies its labels onto the grid.
 """
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import dask.array as da
 import numpy as np
@@ -34,7 +23,7 @@ from nzcvm.config.grids.borehole import SPATIAL_KEYS, BoreholeGridConfig, Site
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids import helpers
 from nzcvm.grids.builder import build_grids_from_config
-from nzcvm.grids.grid import RESERVED_COORDINATES, Grid, GridSchema
+from nzcvm.grids.grid import RESERVED_COORDINATES, Grid
 from nzcvm.models.surface import Surface
 
 #: Name of the one grid a borehole config builds.
@@ -110,12 +99,12 @@ def site_labels(sites: list[Site]) -> dict[str, np.ndarray]:
     Raises
     ------
     ValueError
-        If a label collides with
-        :data:`~nzcvm.grids.grid.RESERVED_COORDINATES`, or if the sites do
-        not agree on which labels they carry.  Disagreement is nearly always
-        a typo, and the alternative is a column of nulls.
+        If a label shadows a grid name, or the sites disagree on which labels they
+        carry.  Disagreement is nearly always a typo, and the alternative is
+        a column of nulls.
     """
     names = list(sites[0].labels)
+    expected = set(names)
 
     reserved = sorted(RESERVED_COORDINATES.intersection(names))
     if reserved:
@@ -126,7 +115,7 @@ def site_labels(sites: list[Site]) -> dict[str, np.ndarray]:
         )
 
     for position, site in enumerate(sites):
-        if set(site.labels) != set(names):
+        if set(site.labels) != expected:
             raise ValueError(
                 f"Site {position} carries labels "
                 f"{sorted(site.labels) or 'none'}, but site 0 carries "
@@ -154,35 +143,6 @@ def _columns(values: np.ndarray, index: np.ndarray, chunk: int) -> xr.DataArray:
     )
 
 
-def _borehole_grid(
-    x_phys: xr.DataArray,
-    y_phys: xr.DataArray,
-    surface: xr.DataArray,
-    depth: float,
-    resolution_z: float,
-    **kwargs: Any,
-) -> Grid:
-    nk = np.round(depth / resolution_z).astype(int) + 1
-
-    # Depth is purely a function of k and resolution_z, identically for every
-    # column, which is what makes the profiles comparable between sites.
-    # Chunking only ever applies to i/j. k always stays one chunk.
-    zeta_depth = xr.DataArray(
-        np.linspace(0.0, depth, num=nk, dtype=np.float32),
-        dims=[Coordinate.K],
-        coords={Coordinate.K: np.arange(nk)},
-    ).chunk({Coordinate.K: -1})
-
-    # Elevation (z) is the surface elevation shifted downward by the fixed
-    # depths, so every column starts at the ground rather than at sea level.
-    x, y, z, column_depth = xr.broadcast(
-        x_phys, y_phys, surface + zeta_depth, zeta_depth
-    )
-    x, y, z, column_depth = helpers.ensure_chunks(x, y, z, column_depth)
-
-    return GridSchema.new(x, y, z, column_depth, **kwargs)
-
-
 @build_grids_from_config.register
 def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
     sites = resolve_sites(config)
@@ -201,9 +161,9 @@ def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
 
     # A borehole grid has no origin of its own, so stand one up from the sites
     # for the benefit of the Grid attributes every writer expects.
-    to_wgs84 = config.projection.to_wgs84
-    origin_lon, origin_lat = to_wgs84.transform(x.mean(), y.mean())
-    min_lon, min_lat = to_wgs84.transform(x.min(), y.min())
+    (origin_lon, min_lon), (origin_lat, min_lat) = config.projection.to_wgs84.transform(
+        [x.mean(), x.min()], [y.mean(), y.min()]
+    )
 
     topographic_surface = Surface.load(config.surface)
     z_surface = helpers.compute_surface_elevation(
@@ -212,12 +172,12 @@ def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
         y_phys,
     )
 
-    grid = _borehole_grid(
+    grid = helpers.topography_following_grid(
         x_phys,
         y_phys,
         z_surface,
         name=GRID_NAME,
-        depth=config.depth,
+        thickness=config.depth,
         resolution_z=config.resolution_z,
         resolution=config.resolution_z,
         geometry=shapely.MultiPoint(np.column_stack((x, y))),
@@ -228,8 +188,7 @@ def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
         bottom_left_lon=min_lon,
         bottom_left_lat=min_lat,
     )
-    # Labelling i is what makes the output readable: without it, the only
-    # route back to a station is the order the config listed it in.
+    # Site labels index i, so the output reads back per station.
     grid = grid.assign_coords(
         {name: (Coordinate.I, values) for name, values in labels.items()}
     )

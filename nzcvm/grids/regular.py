@@ -6,61 +6,16 @@ The builder returns :class:`xarray.DataTree` nodes with chunked coordinates
 and topography-following ``z`` / ``depth`` arrays at a strictly fixed Z resolution.
 """
 
-from typing import Any
-
 import dask
 import numpy as np
-import xarray as xr
 from scipy.spatial.transform import Rotation
 
 from nzcvm import coordinates
 from nzcvm.config.grids.regular import RegularGridConfig
-from nzcvm.coordinates import Coordinate
 from nzcvm.grids import helpers
 from nzcvm.grids.builder import build_grids_from_config
-from nzcvm.grids.grid import Grid, GridSchema
+from nzcvm.grids.grid import Grid
 from nzcvm.models.surface import Surface
-
-
-def _regular_grid(
-    x_phys: xr.DataArray,
-    y_phys: xr.DataArray,
-    surface: xr.DataArray,
-    thickness: float,
-    resolution_z: float,
-    **kwargs: Any,
-) -> Grid:
-    nk = np.round(thickness / resolution_z).astype(int) + 1
-    k = np.arange(nk)
-
-    # Depth is purely a function of k and resolution_z
-    depth_values = np.linspace(0.0, thickness, num=nk, dtype=np.float32)
-
-    # Chunking only ever applies to i/j. k always stays one chunk.
-    zeta_depth = xr.DataArray(
-        depth_values,
-        dims=[Coordinate.K],
-        coords={Coordinate.K: k},
-    ).chunk({Coordinate.K: -1})
-
-    # Elevation (z) is the surface elevation shifted downward by the fixed depths.
-    # The bottom then follows the topography exactly.
-    z = surface + zeta_depth
-
-    # Same idiomatic trick as the SW4 template to ensure coordinate ordering (i, j, k)
-    depth = zeta_depth
-
-    x, y, z, depth = xr.broadcast(x_phys, y_phys, z, depth)
-
-    x, y, z, depth = helpers.ensure_chunks(x, y, z, depth)
-
-    return GridSchema.new(
-        x,
-        y,
-        z,
-        depth,
-        **kwargs,
-    )
 
 
 @build_grids_from_config.register
@@ -112,7 +67,7 @@ def build_regular(config: RegularGridConfig) -> dict[str, Grid]:
         y_phys,
     )
 
-    grid = _regular_grid(
+    grid = helpers.topography_following_grid(
         x_phys,
         y_phys,
         z_surface,

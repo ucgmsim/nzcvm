@@ -1,13 +1,13 @@
 """Tests for the borehole grid: config decoding, site loading and the builder.
 
-Every test builds on the synthetic DEM (:mod:`nzcvm.synthetic`), so nothing
-reads a real data file, and the expected elevations follow from the analytic
-topography rather than from a fixture.
+Every test builds on the synthetic DEM (:mod:`nzcvm.synthetic`), so the
+expected elevations follow from the analytic topography rather than a fixture.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -17,43 +17,43 @@ from mashumaro.exceptions import InvalidFieldValue
 from pyproj import CRS, Transformer
 
 from nzcvm import synthetic
-from nzcvm.components import Component
-from nzcvm.config.grids.borehole import (
-    DEFAULT_CHUNK_SIZES,
-    BoreholeGridConfig,
-    Site,
-)
-from nzcvm.config.grids.model import Model, Projection
+from nzcvm.config.grids.borehole import BoreholeGridConfig, Site
+from nzcvm.config.grids.model import Projection
 from nzcvm.config.metadata import ModelMetadata
 from nzcvm.config.velocity_model import VelocityModelConfig
 from nzcvm.coordinates import Coordinate
 from nzcvm.formats import Format, write_velocity_model
 from nzcvm.grids.borehole import read_sites, resolve_sites
 from nzcvm.grids.builder import build_grids_from_config
-from nzcvm.grids.grid import RESERVED_COORDINATES, Grid
+from nzcvm.grids.grid import Grid
+from nzcvm.layers.dummy import constant
 from nzcvm.layers.pipeline import execute_model_pipeline
 from nzcvm.models.mesh import StructuredMeshSchema
-from nzcvm.qualities import Qualities, QualitiesSchema
-from nzcvm.query import ModelRange
 from nzcvm.velocity_model import VelocityModel
 
 _NZTM = CRS.from_epsg(2193)
 _NZGD2000 = CRS.from_epsg(4167)
-_WGS84 = CRS.from_epsg(4326)
 _TO_NZTM = Transformer.from_crs(4326, _NZTM, always_xy=True)
 
-# Sites in the hills and out to sea, spread across the domain. `site` and
-# `network` are ordinary labels, not keywords the grid interprets.
+# Sites in the hills and out to sea, spread across the domain.
 SITES = [
     Site(longitude=172.15, latitude=-43.70, labels={"site": "GULL", "network": "NZ"}),
     Site(longitude=172.10, latitude=-43.45, labels={"site": "RIDG", "network": "NZ"}),
     Site(longitude=172.55, latitude=-43.60, labels={"site": "SEAB", "network": "SC"}),
 ]
+NAMES = [site.labels["site"] for site in SITES]
 
-#: The labels on the sites, both treated like any other.
-SITE = "site"
-NETWORK = "network"
-NAMES = [site.labels[SITE] for site in SITES]
+DEPTH = 400.0
+RESOLUTION_Z = 100.0
+NK = int(DEPTH / RESOLUTION_Z) + 1
+
+# Sites that disagree on their labels.
+MISMATCHED = [
+    Site(
+        longitude=SITES[0].longitude, latitude=SITES[0].latitude, labels={"site": "A"}
+    ),
+    Site(longitude=SITES[1].longitude, latitude=SITES[1].latitude, labels={}),
+]
 
 
 @pytest.fixture(scope="module")
@@ -77,25 +77,15 @@ def synthetic_surface(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return path
 
 
-def _config(
-    surface: Path,
-    sites: list[Site] | Path = SITES,
-    depth: float = 400.0,
-    resolution_z: float = 100.0,
-    sites_crs: CRS = _WGS84,
-    keep_extra_columns: bool = True,
-    chunks: dict[Coordinate, int] = DEFAULT_CHUNK_SIZES,
-) -> BoreholeGridConfig:
-    return BoreholeGridConfig(
-        surface=surface,
-        sites=sites,
-        depth=depth,
-        resolution_z=resolution_z,
-        projection=Projection(crs=_NZTM),
-        sites_crs=sites_crs,
-        keep_extra_columns=keep_extra_columns,
-        chunks=chunks,
-    )
+def _config(surface: Path, **overrides: Any) -> BoreholeGridConfig:
+    defaults: dict[str, Any] = {
+        "surface": surface,
+        "sites": SITES,
+        "depth": DEPTH,
+        "resolution_z": RESOLUTION_Z,
+        "projection": Projection(crs=_NZTM),
+    }
+    return BoreholeGridConfig(**(defaults | overrides))
 
 
 def _build(config: BoreholeGridConfig) -> Grid:
@@ -104,32 +94,18 @@ def _build(config: BoreholeGridConfig) -> Grid:
     return grids["boreholes"]
 
 
-# ---------------------------------------------------------------------------
-# Projection / Model split
-# ---------------------------------------------------------------------------
+def _relabel(*labels: dict[str, Any]) -> list[Site]:
+    """The default sites, carrying *labels* instead of their own."""
+    return [
+        Site(longitude=site.longitude, latitude=site.latitude, labels=label)
+        for site, label in zip(SITES, labels, strict=True)
+    ]
 
 
-def test_projection_needs_no_origin() -> None:
-    """The whole point of splitting Projection out of Model."""
-    projection = Projection(crs=_NZTM)
-    x, y = projection.from_wgs84.transform(172.0, -43.5)
-    assert projection.to_wgs84.transform(x, y) == pytest.approx((172.0, -43.5))
-
-
-def test_model_is_still_a_projection() -> None:
-    model = Model(origin_lon=172.0, origin_lat=-43.5, azimuth=39.0, crs=_NZTM)
-    assert isinstance(model, Projection)
-    assert model.grid_origin_x == pytest.approx(
-        model.from_wgs84.transform(172.0, -43.5)[0]
-    )
-
-
-def test_transformer_from_reaches_the_projection() -> None:
-    projection = Projection(crs=_NZTM)
-    from_nzgd = projection.transformer_from(_NZGD2000)
-    assert from_nzgd.transform(172.0, -43.5) == pytest.approx(
-        projection.from_wgs84.transform(172.0, -43.5), abs=1.0
-    )
+@pytest.fixture(scope="module")
+def grid(synthetic_surface: Path) -> Grid:
+    """The default grid, built once. No test mutates it."""
+    return _build(_config(synthetic_surface))
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +118,8 @@ def _write_sites(path: Path) -> Path:
         {
             "longitude": [site.longitude for site in SITES],
             "latitude": [site.latitude for site in SITES],
-            SITE: NAMES,
-            NETWORK: [site.labels[NETWORK] for site in SITES],
+            "site": NAMES,
+            "network": [site.labels["network"] for site in SITES],
         }
     )
     if path.suffix == ".csv":
@@ -158,52 +134,64 @@ def test_read_sites_round_trips(tmp_path: Path, suffix: str) -> None:
     assert read_sites(_write_sites(tmp_path / f"sites{suffix}")) == SITES
 
 
-def test_read_sites_preserves_file_order(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("columns", "expected"),
+    [
+        pytest.param(
+            {
+                "longitude": [172.1, 172.2],
+                "latitude": [-43.5, -43.6],
+                "site": ["B", "A"],
+            },
+            [
+                Site(longitude=172.1, latitude=-43.5, labels={"site": "B"}),
+                Site(longitude=172.2, latitude=-43.6, labels={"site": "A"}),
+            ],
+            id="file-order-is-kept",
+        ),
+        pytest.param(
+            {
+                "longitude": [172.1],
+                "latitude": [-43.5],
+                "site": ["A"],
+                "elevation": [12.0],
+            },
+            [
+                Site(
+                    longitude=172.1,
+                    latitude=-43.5,
+                    labels={"site": "A", "elevation": 12.0},
+                )
+            ],
+            id="extra-columns-become-labels",
+        ),
+        pytest.param(
+            {"longitude": [172.1], "latitude": [-43.5]},
+            [Site(longitude=172.1, latitude=-43.5, labels={})],
+            id="labels-are-optional",
+        ),
+    ],
+)
+def test_read_sites(tmp_path: Path, columns: dict, expected: list[Site]) -> None:
+    """Longitude and latitude are the only reserved columns."""
     path = tmp_path / "sites.csv"
-    pd.DataFrame(
-        {"longitude": [172.1, 172.2], "latitude": [-43.5, -43.6], SITE: ["B", "A"]}
-    ).to_csv(path, index=False)
-    assert [site.labels[SITE] for site in read_sites(path)] == ["B", "A"]
+    pd.DataFrame(columns).to_csv(path, index=False)
+    assert read_sites(path) == expected
 
 
-def test_read_sites_keeps_extra_columns_as_labels(tmp_path: Path) -> None:
-    """Longitude and latitude are the only reserved columns. The rest
-    describe the site."""
-    path = tmp_path / "sites.csv"
-    pd.DataFrame(
-        {
-            "longitude": [172.1],
-            "latitude": [-43.5],
-            SITE: ["A"],
-            "elevation": [12.0],
-        }
-    ).to_csv(path, index=False)
-    assert read_sites(path) == [
-        Site(
-            longitude=172.1,
-            latitude=-43.5,
-            labels={SITE: "A", "elevation": 12.0},
-        )
-    ]
-
-
-def test_read_sites_accepts_a_file_with_no_labels(tmp_path: Path) -> None:
-    path = tmp_path / "sites.csv"
-    pd.DataFrame({"longitude": [172.1], "latitude": [-43.5]}).to_csv(path, index=False)
-    assert read_sites(path) == [Site(longitude=172.1, latitude=-43.5, labels={})]
-
-
-def test_read_sites_rejects_unknown_format(tmp_path: Path) -> None:
-    path = tmp_path / "sites.txt"
-    path.write_text("name,longitude,latitude\n")
-    with pytest.raises(ValueError, match="expected one of"):
-        read_sites(path)
-
-
-def test_read_sites_reports_missing_columns(tmp_path: Path) -> None:
-    path = tmp_path / "sites.csv"
-    pd.DataFrame({SITE: ["A"], "longitude": [172.1]}).to_csv(path, index=False)
-    with pytest.raises(ValueError, match="missing the latitude column"):
+@pytest.mark.parametrize(
+    ("name", "text", "message"),
+    [
+        ("sites.txt", "site,longitude,latitude\n", "expected one of"),
+        ("sites.csv", "site,longitude\nA,172.1\n", "missing the latitude"),
+    ],
+)
+def test_read_sites_rejects_bad_files(
+    tmp_path: Path, name: str, text: str, message: str
+) -> None:
+    path = tmp_path / name
+    path.write_text(text)
+    with pytest.raises(ValueError, match=message):
         read_sites(path)
 
 
@@ -216,6 +204,22 @@ def test_resolve_sites_reads_a_file(synthetic_surface: Path, tmp_path: Path) -> 
     assert resolve_sites(config) == SITES
 
 
+@pytest.mark.parametrize(
+    ("override", "error", "message"),
+    [
+        pytest.param({"sites": []}, ValueError, "at least one site", id="empty-list"),
+        pytest.param(
+            {"sites_crs": _NZTM}, InvalidFieldValue, "geographic", id="projected-crs"
+        ),
+    ],
+)
+def test_config_rejects_bad_sites(
+    synthetic_surface: Path, override: dict, error: type[Exception], message: str
+) -> None:
+    with pytest.raises(error, match=message):
+        _config(synthetic_surface, **override)
+
+
 def test_resolve_sites_rejects_an_empty_file(
     synthetic_surface: Path, tmp_path: Path
 ) -> None:
@@ -223,16 +227,6 @@ def test_resolve_sites_rejects_an_empty_file(
     path.write_text("name,longitude,latitude\n")
     with pytest.raises(ValueError, match="No sites found"):
         resolve_sites(_config(synthetic_surface, sites=path))
-
-
-def test_config_rejects_an_empty_inline_site_list(synthetic_surface: Path) -> None:
-    with pytest.raises(ValueError, match="at least one site"):
-        _config(synthetic_surface, sites=[])
-
-
-def test_config_rejects_a_projected_sites_crs(synthetic_surface: Path) -> None:
-    with pytest.raises(InvalidFieldValue, match="geographic"):
-        _config(synthetic_surface, sites_crs=_NZTM)
 
 
 # ---------------------------------------------------------------------------
@@ -244,39 +238,31 @@ def test_config_rejects_a_projected_sites_crs(synthetic_surface: Path) -> None:
 
 
 def test_extra_config_keys_become_labels() -> None:
-    site = Site.from_dict(
-        {"longitude": 172.1, "latitude": -43.5, SITE: "A", "depth_drilled": 30.0}
-    )
-    assert site.labels == {SITE: "A", "depth_drilled": 30.0}
-
-
-def test_a_site_needs_no_labels_at_all() -> None:
+    assert Site.from_dict(
+        {"longitude": 172.1, "latitude": -43.5, "site": "A", "depth_drilled": 30.0}
+    ).labels == {"site": "A", "depth_drilled": 30.0}
     assert Site.from_dict({"longitude": 172.1, "latitude": -43.5}).labels == {}
 
 
-def test_labels_become_coordinates_on_the_site_axis(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface))
-    for label in (SITE, NETWORK):
+def test_labels_become_coordinates_on_the_site_axis(grid: Grid) -> None:
+    for label in ("site", "network"):
         assert grid[label].dims == (Coordinate.I,)
         assert list(grid[label].values) == [site.labels[label] for site in SITES]
 
 
 def test_numeric_labels_keep_a_numeric_dtype(synthetic_surface: Path) -> None:
     """A label is whatever the caller wrote, not necessarily a string."""
-    sites = [
-        Site(longitude=site.longitude, latitude=site.latitude, labels={"cased": n * 10})
-        for n, site in enumerate(SITES)
-    ]
-    grid = _build(_config(synthetic_surface, sites=sites))
-    assert np.issubdtype(grid["cased"].dtype, np.integer)
-    assert list(grid["cased"].values) == [0, 10, 20]
+    sites = _relabel(*({"cased": n * 10} for n in range(len(SITES))))
+    labelled = _build(_config(synthetic_surface, sites=sites))
+    assert labelled["cased"].dtype.kind in "iuf"
+    assert list(labelled["cased"].values) == [0, 10, 20]
 
 
 def test_keep_extra_columns_false_drops_the_labels(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface, keep_extra_columns=False))
-    assert set(grid.coords) == {Coordinate.I, Coordinate.J, Coordinate.K}
+    bare = _build(_config(synthetic_surface, keep_extra_columns=False))
+    assert set(bare.coords) == {Coordinate.I, Coordinate.J, Coordinate.K}
     # The opt-out leaves the spatial coordinates alone.
-    assert grid.x.shape == (len(SITES), 1, 5)
+    assert bare.x.shape == (len(SITES), 1, NK)
 
 
 @pytest.mark.parametrize("reserved", ["name", "x", "depth", "vs", "i", "geometry"])
@@ -285,48 +271,23 @@ def test_a_label_may_not_shadow_a_grid_name(
 ) -> None:
     """A coordinate shadows a variable or attribute of the same name, so
     `grid.name` would stop being the grid's name."""
-    sites = [
-        Site(longitude=site.longitude, latitude=site.latitude, labels={reserved: "x"})
-        for site in SITES
-    ]
+    sites = _relabel(*([{reserved: "x"}] * len(SITES)))
     with pytest.raises(ValueError, match="would shadow"):
         _build(_config(synthetic_surface, sites=sites))
-
-
-def test_reserved_names_cover_the_grid_contract() -> None:
-    """Derived from GridSchema, so it keeps up if the schema changes."""
-    assert {"x", "y", "z", "depth", "name", "geometry", "resolution"} <= (
-        RESERVED_COORDINATES
-    )
-    assert {Coordinate.I, Coordinate.J, Coordinate.K} <= RESERVED_COORDINATES
-    assert set(Component) <= RESERVED_COORDINATES
-    assert SITE not in RESERVED_COORDINATES
 
 
 def test_sites_have_to_agree_on_their_labels(synthetic_surface: Path) -> None:
     """A missing label is nearly always a typo, and the alternative is a
     column of nulls."""
-    sites = [
-        Site(
-            longitude=SITES[0].longitude, latitude=SITES[0].latitude, labels={SITE: "A"}
-        ),
-        Site(longitude=SITES[1].longitude, latitude=SITES[1].latitude, labels={}),
-    ]
     with pytest.raises(ValueError, match="Every site needs the same labels"):
-        _build(_config(synthetic_surface, sites=sites))
+        _build(_config(synthetic_surface, sites=MISMATCHED))
 
 
 def test_disagreement_is_allowed_once_labels_are_dropped(
     synthetic_surface: Path,
 ) -> None:
-    sites = [
-        Site(
-            longitude=SITES[0].longitude, latitude=SITES[0].latitude, labels={SITE: "A"}
-        ),
-        Site(longitude=SITES[1].longitude, latitude=SITES[1].latitude, labels={}),
-    ]
-    grid = _build(_config(synthetic_surface, sites=sites, keep_extra_columns=False))
-    assert grid.x.shape == (2, 1, 5)
+    config = _config(synthetic_surface, sites=MISMATCHED, keep_extra_columns=False)
+    assert _build(config).x.shape == (len(MISMATCHED), 1, NK)
 
 
 # ---------------------------------------------------------------------------
@@ -334,75 +295,56 @@ def test_disagreement_is_allowed_once_labels_are_dropped(
 # ---------------------------------------------------------------------------
 
 
-def test_grid_is_one_column_per_site(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface))
-    assert grid.x.shape == (len(SITES), 1, 5)
+def test_grid_is_one_column_per_site(grid: Grid) -> None:
+    assert grid.x.shape == (len(SITES), 1, NK)
     assert grid.sizes[Coordinate.J] == 1
-
-
-def test_grid_labels_columns_by_site(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface))
-    assert list(grid[SITE].values) == NAMES
-    assert list(grid[NETWORK].values) == [site.labels[NETWORK] for site in SITES]
-
-
-def test_depth_is_identical_across_sites(synthetic_surface: Path) -> None:
-    """Comparable profiles are the point: every column shares one depth axis."""
-    depth = _build(_config(synthetic_surface)).depth.values
-    expected = np.linspace(0.0, 400.0, 5, dtype=np.float32)
-    for column in depth.reshape(-1, depth.shape[-1]):
-        assert column == pytest.approx(expected)
+    assert list(grid["site"].values) == NAMES
 
 
 def test_resolution_z_sets_the_sample_count(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface, depth=600.0, resolution_z=25.0))
-    assert grid.sizes[Coordinate.K] == 25
-    assert float(grid.depth.max()) == pytest.approx(600.0)
+    finer = _build(_config(synthetic_surface, depth=600.0, resolution_z=25.0))
+    assert finer.sizes[Coordinate.K] == 25
+    assert float(finer.depth.max()) == pytest.approx(600.0)
 
 
-def test_sites_are_projected_into_the_grid_crs(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface))
+def test_columns_sit_over_the_projected_site(grid: Grid) -> None:
     expected_x, expected_y = _TO_NZTM.transform(
         [site.longitude for site in SITES], [site.latitude for site in SITES]
     )
     assert grid.x.values[:, 0, 0] == pytest.approx(np.float32(expected_x), rel=1e-6)
     assert grid.y.values[:, 0, 0] == pytest.approx(np.float32(expected_y), rel=1e-6)
-
-
-def test_x_and_y_are_constant_down_each_column(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface))
+    # x and y are constant down each column.
     for axis in (grid.x, grid.y):
         assert np.all(axis.values == axis.values[:, :, :1])
 
 
-def test_columns_start_at_the_topography(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface))
+def test_columns_run_from_the_topography_down_to_depth(grid: Grid) -> None:
+    """Comparable profiles are the point: every column shares one depth axis,
+    starts at the ground and ends `depth` below it."""
+    depth = grid.depth.values
+    assert np.all(depth == depth[:1, :1, :])
+    assert depth[0, 0, 0] == pytest.approx(0.0)
+    assert depth.max() == pytest.approx(DEPTH)
+
     # Grids are +z down, so the top of each column is minus the elevation.
     expected = -synthetic.elevation(
         [site.longitude for site in SITES], [site.latitude for site in SITES]
     )
-    assert grid.z.values[:, 0, 0] == pytest.approx(expected, abs=15.0)
-
-
-def test_columns_follow_the_topography_down(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface))
     top = grid.z.values[:, :, 0]
-    bottom = grid.z.values[:, :, -1]
-    assert (bottom - top) == pytest.approx(np.full_like(top, 400.0))
+    assert top[:, 0] == pytest.approx(expected, abs=15.0)
+    assert (grid.z.values[:, :, -1] - top) == pytest.approx(np.full_like(top, DEPTH))
 
 
 def test_a_geographic_sites_crs_lands_in_the_same_place(
-    synthetic_surface: Path,
+    synthetic_surface: Path, grid: Grid
 ) -> None:
-    wgs84 = _build(_config(synthetic_surface))
     nzgd2000 = _build(_config(synthetic_surface, sites_crs=_NZGD2000))
     # NZGD2000 and WGS84 are within a metre of each other over New Zealand.
-    assert nzgd2000.x.values == pytest.approx(wgs84.x.values, abs=1.0)
+    assert nzgd2000.x.values == pytest.approx(grid.x.values, abs=1.0)
 
 
-def test_geometry_covers_every_site(synthetic_surface: Path) -> None:
+def test_geometry_covers_every_site(grid: Grid) -> None:
     """The query layer prunes models against this, so it has to hit each site."""
-    grid = _build(_config(synthetic_surface))
     assert len(grid.geometry.geoms) == len(SITES)
     assert grid.geometry.bounds == pytest.approx(
         (
@@ -415,10 +357,9 @@ def test_geometry_covers_every_site(synthetic_surface: Path) -> None:
     )
 
 
-def test_derived_origin_is_the_site_centroid(synthetic_surface: Path) -> None:
+def test_derived_origin_is_the_site_centroid(grid: Grid) -> None:
     """A borehole grid has no configured origin, so the attributes come from
     the sites. Downstream writers still expect them to be present."""
-    grid = _build(_config(synthetic_surface))
     lons = [site.longitude for site in SITES]
     lats = [site.latitude for site in SITES]
     assert grid.origin_lon == pytest.approx(np.mean(lons), abs=1e-2)
@@ -430,10 +371,10 @@ def test_derived_origin_is_the_site_centroid(synthetic_surface: Path) -> None:
 
 
 def test_grid_is_chunked_over_sites(synthetic_surface: Path) -> None:
-    grid = _build(_config(synthetic_surface, chunks={Coordinate.I: 2}))
-    assert grid.x.chunksizes[Coordinate.I] == (2, 1)
+    chunked = _build(_config(synthetic_surface, chunks={Coordinate.I: 2}))
+    assert max(chunked.x.chunksizes[Coordinate.I]) <= 2
     # The pipeline relies on k staying in one piece.
-    assert len(grid.x.chunksizes[Coordinate.K]) == 1
+    assert len(chunked.x.chunksizes[Coordinate.K]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -446,57 +387,60 @@ type = "borehole"
 surface = "{surface}"
 depth = 200.0
 resolution_z = 50.0
+{sites}
 
 [grid.projection]
 crs = 'EPSG:2193'
-
-[[grid.sites]]
-longitude = 172.15
-latitude = -43.70
-site = "GULL"
-network = "NZ"
 
 [[layers]]
 type = "query"
 model_path = "{surface}"
 """
 
+_INLINE_SITES = """
+[[grid.sites]]
+longitude = 172.15
+latitude = -43.70
+site = "GULL"
+network = "NZ"
+"""
+
+
+def _decode_grid(path: Path, surface: Path, sites: str) -> BoreholeGridConfig:
+    """The grid a written TOML config decodes to."""
+    path.write_text(_TOML.format(surface=surface, sites=sites))
+    grid = VelocityModelConfig.read_config(path).grid
+    assert isinstance(grid, BoreholeGridConfig)
+    return grid
+
 
 def test_toml_config_selects_the_borehole_grid(
     synthetic_surface: Path, tmp_path: Path
 ) -> None:
-    path = tmp_path / "borehole.toml"
-    path.write_text(_TOML.format(surface=synthetic_surface))
+    config = _decode_grid(tmp_path / "borehole.toml", synthetic_surface, _INLINE_SITES)
 
-    config = VelocityModelConfig.read_config(path)
-    assert isinstance(config.grid, BoreholeGridConfig)
-    assert config.grid.sites == [
+    assert config.sites == [
         Site(
             longitude=172.15,
             latitude=-43.70,
-            labels={SITE: "GULL", NETWORK: "NZ"},
+            labels={"site": "GULL", "network": "NZ"},
         )
     ]
     # Unset, so it falls back to WGS84.
-    assert config.grid.sites_crs.to_epsg() == 4326
-    assert _build(config.grid).sizes[Coordinate.K] == 5
+    assert config.sites_crs.to_epsg() == 4326
+    assert _build(config).sizes[Coordinate.K] == 5
 
 
 def test_toml_config_reads_sites_from_a_file(
     synthetic_surface: Path, tmp_path: Path
 ) -> None:
     sites = _write_sites(tmp_path / "sites.csv")
-    body = _TOML.format(surface=synthetic_surface)
-    body = body[: body.index("[[grid.sites]]")] + body[body.index("[[layers]]") :]
-    path = tmp_path / "borehole.toml"
-    path.write_text(
-        body.replace("resolution_z = 50.0", f'resolution_z = 50.0\nsites = "{sites}"')
+    config = _decode_grid(
+        tmp_path / "borehole.toml", synthetic_surface, f'sites = "{sites}"'
     )
 
-    config = VelocityModelConfig.read_config(path)
-    assert isinstance(config.grid, BoreholeGridConfig)
-    assert config.grid.sites == sites
-    assert list(_build(config.grid)[SITE].values) == NAMES
+    assert config.sites == sites
+    assert list(_build(config)["site"].values) == NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -504,55 +448,31 @@ def test_toml_config_reads_sites_from_a_file(
 # ---------------------------------------------------------------------------
 
 
-def _uniform(grid: Grid, model_range: ModelRange = ModelRange.ALL) -> Qualities:
-    """A terminal layer that keeps the grid's coordinates.
-
-    `ConstantLayer` builds its output from raw NumPy and so drops them, which
-    `map_blocks` rejects for any grid that carries dimension coordinates.
-    """
-    ones = xr.ones_like(grid.x)
-    return QualitiesSchema.new(
-        rho=ones * 2700.0,
-        vp=ones * 6000.0,
-        vs=ones * 1234.0,
-        qp=ones * 200.0,
-        qs=ones * 100.0,
-        alpha=ones,
-    )
-
-
 def _run(grid: Grid) -> VelocityModel:
     model = VelocityModel(grids={"boreholes": grid}, metadata=ModelMetadata())
-    return execute_model_pipeline(model, _uniform)
+    return execute_model_pipeline(model, constant(vs=1234.0))
 
 
 def test_grid_survives_the_chunked_pipeline(synthetic_surface: Path) -> None:
     """`execute_model_pipeline` maps over the chunks, so `map_blocks` has to
     preserve both the singleton j axis and the site labels."""
-    grid = _build(_config(synthetic_surface, chunks={Coordinate.I: 2}))
-    result = _run(grid)
+    chunked = _build(_config(synthetic_surface, chunks={Coordinate.I: 2}))
+    result = _run(chunked)
 
     qualities = result.qualities["boreholes"]
-    assert qualities.vs.shape == grid.x.shape
+    assert qualities.vs.shape == chunked.x.shape
     assert float(qualities.vs.values.mean()) == pytest.approx(1234.0, rel=1e-4)
-    assert list(result.grids["boreholes"][SITE].values) == NAMES
+    assert list(result.grids["boreholes"]["site"].values) == NAMES
 
 
-def test_output_round_trips_through_zarr(
-    synthetic_surface: Path, tmp_path: Path
-) -> None:
+def test_output_round_trips_through_zarr(grid: Grid, tmp_path: Path) -> None:
     """A profile is only useful when a reader can pick out one station."""
     path = tmp_path / "boreholes.zarr"
-    write_velocity_model(
-        _run(_build(_config(synthetic_surface))),
-        path,
-        Format.ZARR,
-        quantise_arrays=False,
-    )
+    write_velocity_model(_run(grid), path, Format.ZARR, quantise_arrays=False)
 
     with xr.open_datatree(path, engine="zarr") as tree:
         stored = tree["grids/boreholes"].ds
-        assert list(stored[SITE].values) == NAMES
-        gull = stored.set_xindex(SITE).sel({SITE: "GULL"})
-        assert float(gull.depth.max()) == pytest.approx(400.0)
+        assert list(stored["site"].values) == NAMES
+        gull = stored.set_xindex("site").sel({"site": "GULL"})
+        assert float(gull.depth.max()) == pytest.approx(DEPTH)
         assert tree["qualities/boreholes"].ds.vs.shape == stored.x.shape

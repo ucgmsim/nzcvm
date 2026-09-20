@@ -1,11 +1,7 @@
 """Tests for the synthetic dataset and the commands that write it out.
 
-Closed-form data is data a reader can check by hand. These tests assert the
-analytic properties the rest of the suite relies on: the shoreline sits where
-elevation crosses zero, and a basin closes to zero thickness on its own
-outline. They then read each written file back through the production reader
-that consumes it.
-
+Each test reads the written file back through the production reader that
+consumes it.
 ``just synthetic`` builds the basin meshes themselves, since that goes through
 gmsh and runs far too slowly for a unit test.
 """
@@ -29,6 +25,7 @@ from nzcvm.scripts.convert_tomography import (
     ModelType,
     data_frame_to_mesh,
 )
+from nzcvm.scripts.surface_cli import read_surface_file as read_scalar_surface
 from nzcvm.scripts.synthetic import app
 
 runner = CliRunner()
@@ -115,25 +112,24 @@ def test_vs30_stays_within_bounds(lon: float, lat: float) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", list(synthetic.BasinName))
-def test_basin_closes_on_its_outline(name: synthetic.BasinName) -> None:
-    basin = synthetic.BASINS[name]
+@pytest.fixture(params=list(synthetic.BasinName), ids=lambda name: name.value)
+def basin(request: pytest.FixtureRequest) -> synthetic.Basin:
+    return synthetic.BASINS[request.param]
+
+
+def test_basin_closes_on_its_outline(basin: synthetic.Basin) -> None:
     outline = basin.outline()
     sediment = basin.sediment(outline[:, 0], outline[:, 1])
     assert sediment == pytest.approx(np.zeros(len(outline)), abs=1e-9)
 
 
-@pytest.mark.parametrize("name", list(synthetic.BasinName))
-def test_basin_is_deepest_at_its_centre(name: synthetic.BasinName) -> None:
-    basin = synthetic.BASINS[name]
+def test_basin_is_deepest_at_its_centre(basin: synthetic.Basin) -> None:
     assert basin.sediment(basin.centre_lon, basin.centre_lat) == pytest.approx(
         basin.thickness
     )
 
 
-@pytest.mark.parametrize("name", list(synthetic.BasinName))
-def test_basement_never_rises_above_topography(name: synthetic.BasinName) -> None:
-    basin = synthetic.BASINS[name]
+def test_basement_never_rises_above_topography(basin: synthetic.Basin) -> None:
     lon, lat = synthetic.DOMAIN.sample(21, 21)
     mesh_lon, mesh_lat = np.meshgrid(lon, lat)
     assert np.all(
@@ -141,9 +137,8 @@ def test_basement_never_rises_above_topography(name: synthetic.BasinName) -> Non
     )
 
 
-@pytest.mark.parametrize("name", list(synthetic.BasinName))
-def test_basin_sits_inside_the_domain(name: synthetic.BasinName) -> None:
-    outline = shapely.Polygon(synthetic.BASINS[name].outline())
+def test_basin_sits_inside_the_domain(basin: synthetic.Basin) -> None:
+    outline = shapely.Polygon(basin.outline())
     assert synthetic.DOMAIN.polygon.contains(outline)
 
 
@@ -169,9 +164,10 @@ def test_tomography_starts_above_sea_level() -> None:
 
 def test_tomography_converts_to_a_mesh() -> None:
     """The converter rejects anything that isn't a full rectilinear grid."""
-    frame = synthetic.tomography(n_horizontal=4, n_depth=3)
+    n_horizontal, n_depth = 4, 3
+    frame = synthetic.tomography(n_horizontal=n_horizontal, n_depth=n_depth)
     mesh = data_frame_to_mesh("synthetic", frame, MODEL_COLUMNS[ModelType.EP2020])
-    assert mesh.sizes["i"] == 4 * 4 * 3
+    assert mesh.sizes["i"] == n_horizontal**2 * n_depth
     assert np.all(mesh.vs.values > 0.0)
     assert np.all(mesh.vp.values > mesh.vs.values)
 
@@ -209,9 +205,7 @@ def test_vs30_reads_back_unflipped(tmp_path: Path) -> None:
     path = tmp_path / "vs30.h5"
     _invoke("vs30", path, "--samples", "16")
 
-    from nzcvm.scripts.surface_cli import read_surface_file
-
-    _, _, values = read_surface_file(path, scalar_key="vs30", flip=False)
+    _, _, values = read_scalar_surface(path, scalar_key="vs30", flip=False)
     assert values.min() >= synthetic.VS30_MIN
     assert values.max() <= synthetic.VS30_MAX
 

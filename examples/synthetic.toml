@@ -5,9 +5,8 @@
 #     just synthetic
 #     uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
 #
-# Everything it reads comes from `nzcvm synthetic`, so no NZCVM_DATA_ROOT and
-# no model download is needed. The domain sits over the synthetic coast, with
-# the `gully` and `terrace` basins inside it.
+# The domain sits over the synthetic coast, with the `gully` and `terrace`
+# basins inside it.
 
 [metadata]
 title = "Synthetic domain for local testing"

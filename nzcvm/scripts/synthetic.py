@@ -10,6 +10,7 @@ and a 2-D scalar. ``nzcvm surface convert`` then turns that into the Zarr
 surface mesh that ``grid.surface`` and the Ely layer read.
 """
 
+import functools
 import gzip
 from pathlib import Path
 from typing import Annotated
@@ -30,7 +31,12 @@ app = typer.Typer(help="Generate a small synthetic dataset for local testing.")
 #: Default surface sampling, about 750 m across the domain.
 DEFAULT_SAMPLES = 64
 
-TO_NZTM = pyproj.Transformer.from_crs(WGS84_EPSG, CRS_NZTM, always_xy=True)
+
+@functools.cache
+def _to_nztm() -> pyproj.Transformer:
+    """Only the coastline command needs this, so don't build it at import."""
+    return pyproj.Transformer.from_crs(WGS84_EPSG, CRS_NZTM, always_xy=True)
+
 
 Output = Annotated[Path, typer.Argument(help="Output path.", dir_okay=False)]
 Samples = Annotated[int, typer.Option(help="Surface samples along each axis.", min=2)]
@@ -77,7 +83,7 @@ def write_wgs84_polygon(path: Path, vertices: np.ndarray) -> shapely.Polygon:
     shapely.Polygon
         The projected polygon this wrote.
     """
-    projected = shapely.ops.transform(TO_NZTM.transform, shapely.Polygon(vertices))
+    projected = shapely.ops.transform(_to_nztm().transform, shapely.Polygon(vertices))
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wb") as handle:
         handle.write(shapely.to_wkb(projected))

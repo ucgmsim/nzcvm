@@ -187,22 +187,16 @@ a key of that table.
 Longitude and latitude place a site, and the config reserves nothing else.
 Every other key, and every other column of a site file, becomes a coordinate
 on the grid's `i` axis under the name the caller gave it, which the writers
-keep. Neither `site` nor `network` in the preceding example is a
-keyword the grid interprets. Both end up in the output because nothing
-reserves them. Rename them, add a driller's reference, drop them entirely: the
-grid doesn't care.
+keep. In the preceding example, `site` and `network` are labels rather than
+keywords.
 
 A label keeps the type the caller wrote, so a numeric column arrives numeric.
 Each site needs the same set of labels, since the alternative is a column of
 nulls where one site was missing a key.
 
-`nzcvm.grids.grid.RESERVED_COORDINATES` lists the names a label may not take:
-the variables and attributes `GridSchema` declares (`x`, `y`, `z`, `depth`,
-`name`, `geometry`, …), the `(i, j, k)` index, and the components that share
-that index with the grid. A coordinate shadows a variable of the
-same name, so
-a label called `name` would turn `grid.name` from the grid's name into an
-array. Naming one of those raises rather than corrupting the grid.
+A label may not take a name in `nzcvm.grids.grid.RESERVED_COORDINATES`, which
+covers everything `GridSchema` declares, the `(i, j, k)` index, and the
+component names. Naming one raises rather than corrupting the grid.
 
 To drop the labels and keep only the spatial coordinates:
 
@@ -428,10 +422,7 @@ takes about a minute, most of it meshing the basins, and needs no
 
 Every field is a closed-form expression over a 48 × 44 km patch of coast, so
 the data regenerates identically anywhere and a test can work out the expected
-answer by hand. `nzcvm/synthetic.py` documents the world. Elevation falls west
-to east and crosses sea level three quarters of the way across, and Vs30
-tracks elevation. A pair of paraboloid basins sit inland, over a tomography
-block whose velocity increases with depth.
+answer by hand. `nzcvm/synthetic.py` documents the world it describes.
 
 The pieces are importable, so a test can use a field directly rather than
 going through a file:
@@ -594,13 +585,10 @@ contract every layer relies on: `x`, `y`, `z` and `depth` on the logical
 `(i, j, k)` index (metres, projected CRS, `z` positive down), plus the
 attributes below.
 
-Those four variables and the attributes are the whole of what `GridSchema`
-accepts, so a builder can't pass an extra *data variable*. It can attach extra
-*coordinates* after construction, though, and every stage keeps them: layers,
-`map_blocks`, the Zarr and NetCDF writers, and the read back through
-`GridSchema.from_dataset`. xarray keeps a coordinate on each data variable it
-indexes, so anything that reassembles a dataset from those variables picks it
-up again. The borehole grid labels its columns this way:
+`GridSchema` fixes the data variables, but a builder can attach extra
+*coordinates* after construction, and every stage keeps them: layers,
+`map_blocks`, and the Zarr and NetCDF writers. The borehole grid labels its
+columns this way:
 
 ```python
 grid = grid.assign_coords(site=("i", ["GULL", "TERR"]))
@@ -722,6 +710,6 @@ bottom = 500.0
 dz = 100.0
 ```
 
-`nzcvm.grids.borehole` is the same pattern, done properly: a registered
+`nzcvm.grids.borehole` is the built-in version of this pattern: a registered
 `GridConfig` whose builder reads its own sites and DEM, over Dask-backed
 coordinates.
