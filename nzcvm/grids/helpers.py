@@ -66,10 +66,10 @@ def topography_following_grid(
 ) -> Grid:
     """Hang a fixed-resolution depth axis off *surface*.
 
-    Depth is purely a function of k and *resolution_z*, identically for every
-    column, so every column runs from the topography down to *thickness* and
-    the bottom follows the topography exactly.  Chunking only ever applies to
-    i/j, and k always stays one chunk.
+    Depth is purely a function of k and *resolution_z*, identical from column
+    to column.  A column starts at the topography and ends *thickness* below
+    it, with the bottom following the topography exactly.  Chunking only ever
+    applies to i/j, and k always stays one chunk.
 
     Parameters
     ----------

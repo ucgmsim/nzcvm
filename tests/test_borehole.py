@@ -319,8 +319,8 @@ def test_columns_sit_over_the_projected_site(grid: Grid) -> None:
 
 
 def test_columns_run_from_the_topography_down_to_depth(grid: Grid) -> None:
-    """Comparable profiles are the point: every column shares one depth axis,
-    starts at the ground and ends `depth` below it."""
+    """Comparable profiles need one shared depth axis. A column starts at the
+    ground and ends `depth` below it."""
     depth = grid.depth.values
     assert np.all(depth == depth[:1, :1, :])
     assert depth[0, 0, 0] == pytest.approx(0.0)
@@ -358,8 +358,8 @@ def test_geometry_covers_every_site(grid: Grid) -> None:
 
 
 def test_derived_origin_is_the_site_centroid(grid: Grid) -> None:
-    """A borehole grid has no configured origin, so the attributes come from
-    the sites. Downstream writers still expect them to be present."""
+    """A borehole grid has no configured origin. The attributes come from the
+    sites, since downstream writers still expect them to be present."""
     lons = [site.longitude for site in SITES]
     lats = [site.latitude for site in SITES]
     assert grid.origin_lon == pytest.approx(np.mean(lons), abs=1e-2)
