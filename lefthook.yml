@@ -86,3 +86,7 @@ pre-push:
     rustfmt:
       glob: "*.rs"
       run: cargo fmt --all --check
+
+    vale:
+      glob: "*.{rs,py,md}"
+      run: vale --output=line {push_files}
