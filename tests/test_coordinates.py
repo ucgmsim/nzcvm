@@ -33,11 +33,7 @@ from nzcvm.coordinates import apply_affine_transform, reflect_x, scale, translat
     dy=st.floats(-1e6, 1e6, allow_nan=False, allow_infinity=False),
 )
 def test_translate_2d_encodes_offsets(dx: float, dy: float) -> None:
-    """translate(dx, dy) must place dx at [0,2] and dy at [1,2].
-
-    The matrix stores values as float32, so the assertion compares against the
-    float32-rounded input rather than the original float64.
-    """
+    """translate(dx, dy) must place dx at [0,2] and dy at [1,2]."""
     T = translate(dx, dy)
     assert T.shape == (3, 3)
     assert T[0, 2] == np.float32(dx)

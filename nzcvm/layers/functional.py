@@ -101,14 +101,9 @@ class GeneratedLayer(Protocol):
 def _recompile_mashumaro_codecs(cls: type) -> None:
     """Recompile mashumaro packer/unpacker codecs for *cls*.
 
-    On Python 3.14, :func:`dataclasses.make_dataclass` sets ``__annotate__``
-    *after* :func:`types.new_class` returns.  Mashumaro's
-    ``__init_subclass__`` hook runs during class creation, before the
-    annotations are readable, so the generated codecs come out empty.
-
     This function replays the same ancestor walk that ``__init_subclass__``
     performs, picking up every mixin's builder params (dict, JSON, TOML,
-    YAML, …) so that all serialisation formats work correctly.
+    YAML, ...) so that all serialisation formats work correctly.
     """
     # Walk from the most-base ancestor down to the direct parent, mirroring
     # the order mashumaro's own __init_subclass__ uses.

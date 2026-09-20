@@ -363,8 +363,6 @@ def test_derived_layer_fields_survive_a_round_trip() -> None:
 
 
 def test_omit_none_drops_unset_metadata() -> None:
-    """The metadata goes onto the output as dataset attributes, where a null
-    is worth nothing."""
     metadata = ModelMetadata(title="A title").to_dict()
     assert metadata["title"] == "A title"
     assert "creator_name" not in metadata
