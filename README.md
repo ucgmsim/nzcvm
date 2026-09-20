@@ -226,8 +226,7 @@ groups, each with one node per grid:
 ```
 
 `x`, `y`, `z` and `depth` are *data variables* on the logical `(i, j, k)`
-index, not dimension coordinates. The grid is curvilinear, so every point
-carries its own position.
+index, not dimension coordinates. The grid is curvilinear so each coordinate is a 3D array.
 
 ```python
 import matplotlib.pyplot as plt

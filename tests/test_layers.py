@@ -35,9 +35,7 @@ from nzcvm.qualities import Qualities
 from nzcvm.query import ModelRange
 from tests.conftest import make_grid
 
-# Layers carry a spatial domain (``Layer.geometry``), but as of writing no
-# layer consults it when evaluating a grid; see
-# ``test_layer_geometry_masks_output`` below.  Any covering geometry works.
+# Layers have a spatial domain (``Layer.geometry``).
 GEOM = shapely.box(171.9, -43.6, 172.1, -43.4)
 
 # A geometry that doesn't overlap the grids built by ``make_grid``.
@@ -451,7 +449,6 @@ def test_adhoc_functional_layer_deserialises(isolated_layer_registry: None) -> N
         z = np.zeros(shape, dtype=np.float32)
         return QualitiesSchema.new(rho=z, vp=z, vs=z, qp=z, qs=z, alpha=z)
 
-    # Config must carry the right type tag
     cfg = zeros.config_cls()
     assert cfg.type == "zeros"  # ty: ignore[unresolved-attribute]
 
