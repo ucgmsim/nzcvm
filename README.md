@@ -150,7 +150,7 @@ a bare `[grid.projection]` instead: just a CRS.
 
 `grid.type = "borehole"` extracts one vertical profile per site rather than
 filling a volume. Each column runs from the topography down to `depth` at a
-fixed `resolution_z`, so the profiles line up sample for sample and compare
+fixed `resolution_z`. The profiles line up sample for sample and compare
 directly.
 
 ```toml
@@ -190,7 +190,8 @@ on the grid's `i` axis under the name the caller gave it, which the writers
 keep. In the preceding example, `site` and `network` are labels rather than
 keywords.
 
-A label keeps the type the caller wrote, so a numeric column arrives numeric.
+A label keeps the type the caller wrote: the writers store a numeric column
+as numbers, not as text.
 Each site needs the same set of labels, since the alternative is a column of
 nulls where one site was missing a key.
 

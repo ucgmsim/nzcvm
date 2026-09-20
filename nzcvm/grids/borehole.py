@@ -3,7 +3,7 @@
 Provides :func:`build_borehole` for constructing the set of vertical columns
 described by a :class:`~nzcvm.config.grids.borehole.BoreholeGridConfig`: one
 column of query points per site, sampled at a fixed Z resolution from the
-topography down to a fixed depth, so a run extracts a directly comparable
+topography down to a fixed depth.  A run extracts a directly comparable
 profile per site rather than a filled volume.
 
 See :class:`~nzcvm.config.grids.borehole.BoreholeGridConfig` for what a site
@@ -188,7 +188,7 @@ def build_borehole(config: BoreholeGridConfig) -> dict[str, Grid]:
         bottom_left_lon=min_lon,
         bottom_left_lat=min_lat,
     )
-    # Site labels index i, so the output reads back per station.
+    # Site labels index i. The output then reads back per station.
     grid = grid.assign_coords(
         {name: (Coordinate.I, values) for name, values in labels.items()}
     )

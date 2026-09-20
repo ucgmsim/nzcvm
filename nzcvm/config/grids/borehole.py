@@ -30,9 +30,9 @@ class Site(ConfigObject):
     """One borehole location, in the global CRS, plus whatever labels it has.
 
     Longitude and latitude place the site, and the config doesn't reserve any
-    other key, so a site takes as much or as little description as the caller
-    has to give it. Each label becomes a coordinate on the grid's ``i`` axis,
-    which the writers keep.
+    other key. A site takes as much or as little description as the caller has
+    to give it. Each label becomes a coordinate on the grid's ``i`` axis, which
+    the writers keep.
 
     Attributes
     ----------
@@ -85,8 +85,8 @@ class BoreholeGridConfig(GridConfig):
     Attributes
     ----------
     surface :
-        Path to the topographic surface mesh file.  Used to translate depth
-        to elevation, so each column starts at the ground.
+        Path to the topographic surface mesh file.  Translates depth to
+        elevation, which starts a column at the ground.
     sites :
         Either an inline list of :class:`Site` objects, or a path to a CSV or
         Parquet file with ``longitude`` and ``latitude`` columns.  Any other
