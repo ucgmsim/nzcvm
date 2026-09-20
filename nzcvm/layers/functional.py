@@ -104,7 +104,7 @@ def _recompile_mashumaro_codecs(cls: type) -> None:
     On Python 3.14, :func:`dataclasses.make_dataclass` sets ``__annotate__``
     *after* :func:`types.new_class` returns.  Mashumaro's
     ``__init_subclass__`` hook runs during class creation, before the
-    annotations are readable, so the generated codecs come out empty.
+    annotations are readable. The generated codecs then come out empty.
 
     This function replays the same ancestor walk that ``__init_subclass__``
     performs, picking up every mixin's builder params (dict, JSON, TOML,

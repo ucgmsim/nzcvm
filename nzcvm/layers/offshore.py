@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 # Room to speed this up: segments beyond the maximum distance from the
-# shoreline never need an exact distance. Worth revisiting with a BVHTree from
-# the Rust side.
+# shoreline never need an exact distance. A BVHTree from the Rust side would
+# skip them.
 
 
 def step_interpolator(

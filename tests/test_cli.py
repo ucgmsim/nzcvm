@@ -23,6 +23,7 @@ runner = CliRunner()
         ["surface"],
         ["tree-stats"],
         ["view"],
+        ["synthetic"],
     ],
 )
 def test_help_exits_cleanly(args: list[str]) -> None:

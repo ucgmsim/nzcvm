@@ -78,7 +78,7 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
 
     # The SW4 file format imposes that outermost axis (the i-axis in this
     # codebase) of the is due north. This code base asserts that i, j, k = x, y,
-    # z = east, north, down, so the writer changes the orientation to match.
+    # z = east, north, down. The writer changes the orientation to match.
     velocity_model = velocity_model.orient(Coordinate.J, Coordinate.I, Coordinate.K)
 
     writer = AsyncHDF5Writer(filename)
