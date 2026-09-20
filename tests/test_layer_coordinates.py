@@ -382,17 +382,14 @@ def test_full_chain_survives_map_blocks(
 
 
 # ---------------------------------------------------------------------------
-# The failure mode this guards against
+# The constant terminal layer
 # ---------------------------------------------------------------------------
 
 
-def test_a_numpy_terminal_drops_the_label(concrete_grid: Grid) -> None:
-    """Documents why the preceding tests exist rather than trusting the contract.
-
-    `nzcvm.layers.dummy.constant` builds its output from `np.ones`, so the
-    result has no coordinates and `map_blocks` refuses it.
-    """
+def test_the_constant_terminal_keeps_the_label(concrete_grid: Grid) -> None:
+    """`constant` builds its output with `ones_like`, so it keeps the grid's
+    coordinates and `map_blocks` accepts the result."""
     from nzcvm.layers.dummy import ConstantLayer
 
     qualities = ConstantLayer(vs=1234.0)(concrete_grid)
-    assert SITE not in qualities.coords
+    assert list(qualities[SITE].values) == list(concrete_grid[SITE].values)
