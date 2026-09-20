@@ -24,7 +24,6 @@ dependencies = [
   "hdf5plugin>=6.0.0",
   "joblib>=1.5.3",
   "mashumaro[toml,yaml]>=3.20",
-  "numba>=0.65.0",
   "numcodecs>=0.16.5",
   "numpy>=2.4.4",
   "pandas[parquet]>=2.0",
