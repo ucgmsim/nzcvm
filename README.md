@@ -236,8 +236,8 @@ groups, each with one node per grid:
 ```
 
 `x`, `y`, `z` and `depth` are *data variables* on the logical `(i, j, k)`
-index, not dimension coordinates. The grid is curvilinear, so every point
-carries its own position.
+index, not dimension coordinates. The grid is curvilinear, and each point has
+its own position.
 
 ```python
 import matplotlib.pyplot as plt
@@ -396,7 +396,7 @@ Builds 3D curvilinear meshes (`sw4`, `regular` or `emod3d`) as xarray
 `DataTree` nodes, chunked lazily with Dask and assembled from a `GridConfig`
 by the `build_grids_from_config` single-dispatch function.
 
-`Qualities` (in `nzcvm.qualities`) is an `xr.Dataset` subclass carrying the
+`Qualities` (in `nzcvm.qualities`) is an `xr.Dataset` subclass holding the
 typed velocity, density and quality-factor arrays returned by every layer.
 
 ---

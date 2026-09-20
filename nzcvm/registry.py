@@ -4,7 +4,7 @@ With the dask ``distributed`` scheduler running ``processes=False`` (thread
 workers only), all workers share the same Python process.  This module exposes:
 
 * :data:`REGISTRY` -- a global ``{uuid → object}`` dictionary.  Every key is a
-  UUID string minted at serialisation time.
+  UUID string created at serialisation time.
 
 * :func:`register_dask_type` -- registers custom ``dask_serialize`` /
   ``dask_deserialize`` handlers for a type.  When distributed encounters an
