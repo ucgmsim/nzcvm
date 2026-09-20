@@ -50,12 +50,7 @@ from nzcvm.grids.grid import Grid
 from nzcvm.layers.core import layer_from_config
 from nzcvm.layers.pipeline import build_pipeline, execute_model_pipeline
 from nzcvm.models.mesh import StructuredMeshSchema
-from nzcvm.scripts.convert_tomography import (
-    MODEL_COLUMNS,
-    ModelType,
-    data_frame_to_mesh,
-)
-from tests.conftest import Terminal
+from tests.conftest import Terminal, write_synthetic_tomography
 
 _NZTM = CRS.from_epsg(2193)
 _TO_NZTM = Transformer.from_crs(4326, _NZTM, always_xy=True)
@@ -114,12 +109,7 @@ def resources(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
 
     models = root / "models"
     models.mkdir()
-    mesh = data_frame_to_mesh(
-        "tomography",
-        synthetic.tomography(n_horizontal=6, n_depth=5),
-        MODEL_COLUMNS[ModelType.EP2020],
-    )
-    mesh.to_zarr(models / "tomography.zarr", mode="w")
+    write_synthetic_tomography(models / "tomography.zarr")
 
     return {"dem": dem, "vs30": vs30, "coastline": coastline, "models": models}
 

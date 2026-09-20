@@ -4,6 +4,7 @@ use bvh::bounding_hierarchy::BHShape;
 use deepsize::{Context, DeepSizeOf};
 
 use nalgebra::{Matrix3, Point3, Point4};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 /// Tolerance applied to each barycentric coordinate in the point-in-simplex
 /// test (`contains`).
@@ -38,11 +39,21 @@ const CONTAINMENT_EPS: Real = 1e-4;
 /// needed only while *building* the BVH (AABB, node bookkeeping) lives in
 /// [`BuildSimplex`] and is discarded after construction.  A simplex is
 /// identified by its position in the mesh's simplex array.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, FromBytes, IntoBytes, KnownLayout, Immutable)]
+#[repr(C)]
 pub struct Simplex {
-    pub c3: Point3<Real>,
-    inv_matrix: Matrix3<Real>,
+    /// The anchor vertex.
+    c3: [Real; 3],
+    /// Inverse of `[c0-c3, c1-c3, c2-c3]`, stored column by column.
+    ///
+    /// Arrays rather than nalgebra types because the record is also the
+    /// on-disk format: `zerocopy` derives cannot see through a foreign type,
+    /// and `Matrix3::from` on the array is a load the optimiser folds away.
+    inv_matrix: [[Real; 3]; 3],
 }
+
+#[cfg(not(feature = "high_precision"))]
+const _: () = assert!(size_of::<Simplex>() == 48);
 
 impl DeepSizeOf for Simplex {
     fn deep_size_of_children(&self, _context: &mut Context) -> usize {
@@ -68,7 +79,20 @@ impl Simplex {
         let m = Matrix3::from_columns(&[c0 - c3, c1 - c3, c2 - c3]);
         let inv_matrix = m.try_inverse()?;
 
-        Some(Self { c3, inv_matrix })
+        Some(Self {
+            c3: c3.into(),
+            inv_matrix: inv_matrix.into(),
+        })
+    }
+
+    /// The anchor vertex.
+    fn c3(&self) -> Point3<Real> {
+        Point3::from(self.c3)
+    }
+
+    #[inline(always)]
+    fn inv_matrix(&self) -> Matrix3<Real> {
+        Matrix3::from(self.inv_matrix)
     }
 
     /// Return the barycentric coordinates of `p` with respect to this simplex.
@@ -92,8 +116,8 @@ impl Simplex {
     /// assert!((sum - 1.0).abs() < 1e-5);
     /// ```
     pub fn barycentric_coordinates(&self, p: Point3<Real>) -> Point4<Real> {
-        let diff = p - self.c3;
-        let l = self.inv_matrix * diff;
+        let diff = p - self.c3();
+        let l = self.inv_matrix() * diff;
 
         let l0 = l.x;
         let l1 = l.y;
@@ -108,12 +132,12 @@ impl Simplex {
     // This one inline statement speeds up calculations by 6%!
     #[inline(always)]
     pub fn contains(&self, query_point: &Point3<Real>) -> bool {
-        let diff = query_point - self.c3;
+        let diff = query_point - self.c3();
         // This duplication of the matrix multiply from
         // `barycentric_coordinates` is deliberate. `l3` is not needed here, so
         // the subtraction is skipped.
 
-        let l = self.inv_matrix * diff;
+        let l = self.inv_matrix() * diff;
 
         let sum = l.x + l.y + l.z;
 

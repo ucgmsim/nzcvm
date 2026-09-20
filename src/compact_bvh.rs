@@ -22,8 +22,11 @@ use deepsize::{Context, DeepSizeOf};
 use nalgebra::Point3;
 use smallvec::SmallVec;
 
+use crate::index::{IndexError, SectionReader, SectionWriter, tag};
 use crate::real::Real;
 use crate::simplex::Simplex;
+use crate::slab::Slab;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 /// Maximum number of simplices collapsed into a single leaf.
 ///
@@ -109,32 +112,69 @@ impl ChildSlot {
 }
 
 /// One child of an internal node: its bounding box and where it lives.
-#[derive(Clone, Copy)]
-struct ChildRef {
-    aabb: Aabb<Real, 3>,
-    slot: ChildSlot,
+///
+/// Plain arrays and a raw `u32` rather than `Aabb` and `ChildSlot`, because
+/// this record is also the on-disk format and `zerocopy` has to be able to
+/// cast it.  [`ChildRef::slot`] unpacks the slot on demand.
+#[derive(Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable)]
+#[repr(C)]
+pub struct ChildRef {
+    min: [Real; 3],
+    max: [Real; 3],
+    slot: u32,
+    /// With `Real = f64` the record would otherwise end on a 4-byte field
+    /// and pick up implicit tail padding, which the on-disk cast forbids.
+    #[cfg(feature = "high_precision")]
+    _pad: u32,
+}
+
+impl ChildRef {
+    fn new(aabb: &Aabb<Real, 3>, slot: ChildSlot) -> Self {
+        Self {
+            min: aabb.min.into(),
+            max: aabb.max.into(),
+            slot: slot.into_bits(),
+            #[cfg(feature = "high_precision")]
+            _pad: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn slot(&self) -> ChildSlot {
+        ChildSlot::from_bits(self.slot)
+    }
+
+    /// The child's bounds, for the same containment test the rest of the
+    /// crate uses.  Building the `Aabb` is two loads the optimiser folds away.
+    #[inline(always)]
+    fn contains(&self, p: &Point3<Real>) -> bool {
+        Aabb::with_bounds(Point3::from(self.min), Point3::from(self.max)).contains(p)
+    }
 }
 
 /// One internal node: both of its children.
-#[derive(Clone, Copy)]
-struct CompactNode {
+#[derive(Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable)]
+#[repr(C)]
+pub struct CompactNode {
     left: ChildRef,
     right: ChildRef,
 }
 
-#[cfg(not(feature = "high_precision"))]
-const _: () = assert!(std::mem::size_of::<CompactNode>() == 56);
+// Each child is six reals of corners and one real's worth of slot: the `f64`
+// build spells out the pad that `repr(C)` would otherwise add silently, so
+// the record is exactly as wide at either width and the file layout is pinned.
+const _: () = assert!(size_of::<CompactNode>() == 14 * size_of::<Real>());
 
 pub struct CompactBvh {
-    nodes: Vec<CompactNode>,
+    nodes: Slab<CompactNode>,
     /// The root child slot (a leaf for meshes of ≤ `MAX_LEAF_SIZE`
     /// simplices), or `None` for an empty mesh.
     root: Option<ChildSlot>,
 }
 
 impl DeepSizeOf for CompactBvh {
-    fn deep_size_of_children(&self, _context: &mut Context) -> usize {
-        self.nodes.capacity() * std::mem::size_of::<CompactNode>()
+    fn deep_size_of_children(&self, context: &mut Context) -> usize {
+        self.nodes.deep_size_of_children(context)
     }
 }
 
@@ -188,7 +228,7 @@ impl CompactBvh {
         if num_shapes == 0 {
             return (
                 Self {
-                    nodes: Vec::new(),
+                    nodes: Slab::Owned(Vec::new()),
                     root: None,
                 },
                 Vec::new(),
@@ -230,19 +270,13 @@ impl CompactBvh {
             let index = nodes.len() as u32;
             let placeholder = ChildSlot::node(0);
             nodes.push(CompactNode {
-                left: ChildRef {
-                    aabb: child_l_aabb,
-                    slot: placeholder,
-                },
-                right: ChildRef {
-                    aabb: child_r_aabb,
-                    slot: placeholder,
-                },
+                left: ChildRef::new(&child_l_aabb, placeholder),
+                right: ChildRef::new(&child_r_aabb, placeholder),
             });
             let left = emit(src, counts, nodes, order, child_l_index);
             let right = emit(src, counts, nodes, order, child_r_index);
-            nodes[index as usize].left.slot = left;
-            nodes[index as usize].right.slot = right;
+            nodes[index as usize].left.slot = left.into_bits();
+            nodes[index as usize].right.slot = right.into_bits();
             ChildSlot::node(index)
         }
 
@@ -250,11 +284,29 @@ impl CompactBvh {
         nodes.shrink_to_fit();
         (
             Self {
-                nodes,
+                nodes: Slab::Owned(nodes),
                 root: Some(root),
             },
             order,
         )
+    }
+
+    /// The packed root slot, or `None` for an empty mesh.
+    pub(crate) fn root_slot(&self) -> Option<u32> {
+        self.root.map(ChildSlot::into_bits)
+    }
+
+    /// Append the node records to an index being written.
+    pub(crate) fn write_sections(&self, writer: &mut SectionWriter) -> Result<(), IndexError> {
+        writer.write(tag::NODES, &self.nodes)
+    }
+
+    /// Map the node records back out of an opened index.
+    pub(crate) fn read_sections(reader: &SectionReader) -> Result<Self, IndexError> {
+        Ok(Self {
+            nodes: reader.section(tag::NODES)?,
+            root: reader.root_slot().map(ChildSlot::from_bits),
+        })
     }
 
     /// Iterator over the indices of all simplices that contain `point`.
@@ -268,7 +320,7 @@ impl CompactBvh {
             stack.push(root);
         }
         ContainingIndices {
-            nodes: &self.nodes,
+            nodes: &self.nodes[..],
             simplices,
             point,
             stack,
@@ -284,11 +336,11 @@ impl CompactBvh {
                 Child::Leaf(_) => 0,
                 Child::Node(index) => {
                     let node = &nodes[index as usize];
-                    1 + go(nodes, node.left.slot).max(go(nodes, node.right.slot))
+                    1 + go(nodes, node.left.slot()).max(go(nodes, node.right.slot()))
                 }
             }
         }
-        self.root.map_or(0, |root| go(&self.nodes, root))
+        self.root.map_or(0, |root| go(&self.nodes[..], root))
     }
 }
 
@@ -322,11 +374,11 @@ impl Iterator for ContainingIndices<'_> {
                 }
                 Child::Node(index) => {
                     let node = &self.nodes[index as usize];
-                    if node.left.aabb.contains(&self.point) {
-                        self.stack.push(node.left.slot);
+                    if node.left.contains(&self.point) {
+                        self.stack.push(node.left.slot());
                     }
-                    if node.right.aabb.contains(&self.point) {
-                        self.stack.push(node.right.slot);
+                    if node.right.contains(&self.point) {
+                        self.stack.push(node.right.slot());
                     }
                 }
             }

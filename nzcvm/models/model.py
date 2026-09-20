@@ -14,8 +14,10 @@ nzcvm.layers : Pipeline layers for coordinate transforms and model queries.
 nzcvm.models.mesh : Mesh I/O utilities used by :meth:`ModelTree.load_models`.
 """
 
+import hashlib
 import logging
-from collections.abc import Iterable
+import os
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -186,9 +188,51 @@ class MeshModel:
 
     @classmethod
     def from_path(cls, path: Path) -> Self:
-        mesh_dataset = TetrahedralMeshSchema.from_dataset(xr.load_dataset(path))
+        """Load the mesh at *path*, mapping its compiled index when there is one.
 
+        A current index (see :func:`index_path` and :meth:`compile_index`)
+        turns the load into a header read and an ``mmap``. Without one, or
+        with one whose fingerprint no longer matches the mesh, the loader reads
+        the mesh and builds its BVH in memory as before.
+        """
+        path = Path(path)
+        index = current_index(path)
+        if index is not None:
+            return cls(nzcvm.mesh_model_open(index))
+        return cls._build(path)
+
+    @classmethod
+    def _build(cls, path: Path) -> Self:
+        mesh_dataset = TetrahedralMeshSchema.from_dataset(xr.load_dataset(path))
         return cls(_mesh_model_from_tetra(mesh_dataset))
+
+    @classmethod
+    def compile_index(cls, path: Path, force: bool = False) -> Path:
+        """Build the mesh at *path* and write its index beside it.
+
+        Parameters
+        ----------
+        path :
+            The mesh to compile.
+        force :
+            Rewrite an index whose fingerprint still matches the mesh.
+
+        Returns
+        -------
+        Path
+            The index file, whether this call wrote it or found it current.
+        """
+        path = Path(path)
+        if not force and (index := current_index(path)) is not None:
+            return index
+        index = index_path(path)
+        cls._build(path)._raw.write_index(index, fingerprint(path))
+        return index
+
+    @property
+    def mapped(self) -> bool:
+        """Whether the model's arrays are memory-mapped from an index file."""
+        return self._raw.is_mapped()
 
     @classmethod
     def from_mesh(
@@ -633,6 +677,75 @@ class ModelTree:
         self.__dict__.update(state)
         key = state["inner"]
         self.inner = registry.REGISTRY[key]
+
+
+def index_path(mesh_path: Path) -> Path:
+    """Where the compiled index for the mesh at *mesh_path* lives.
+
+    Beside the mesh, with the ``.nzidx`` suffix in place of ``.zarr``.
+
+    Examples
+    --------
+    >>> index_path(Path("models/Wellington.zarr"))
+    PosixPath('models/Wellington.nzidx')
+    """
+    return Path(mesh_path).with_suffix(".nzidx")
+
+
+def current_index(mesh_path: Path) -> Path | None:
+    """The index beside the mesh at *mesh_path*, if it matches the mesh.
+
+    ``None`` when there is no index, when its fingerprint differs from the
+    mesh's, or when the reader rejects its header. A foreign or truncated
+    file counts as no index rather than an error, since the loader can
+    always build instead.
+    """
+    index = index_path(mesh_path)
+    if not index.exists():
+        return None
+    try:
+        stored = nzcvm.index_fingerprint(index)
+    except (OSError, ValueError):
+        return None
+    return index if stored == fingerprint(mesh_path) else None
+
+
+def fingerprint(mesh_path: Path) -> bytes:
+    """A 32-byte summary of the mesh store at *mesh_path*.
+
+    Hashes the path, size and modification time of every file in the store,
+    plus the contents of each ``zarr.json``. It's a change detector rather
+    than a content hash: it reads metadata rather than the arrays, so checking
+    an index against its mesh costs a directory walk and no array reads. A
+    mesh rewritten with identical contents fails to match its old index, which
+    is the cheap side to err on.
+    """
+    digest = hashlib.blake2b(digest_size=32)
+    for relative, entry in sorted(_walk(Path(mesh_path))):
+        stat = entry.stat()
+        digest.update(relative.encode())
+        digest.update(stat.st_size.to_bytes(8, "little"))
+        digest.update(stat.st_mtime_ns.to_bytes(8, "little", signed=True))
+        if entry.name == "zarr.json":
+            digest.update(Path(entry.path).read_bytes())
+    return digest.digest()
+
+
+def _walk(root: Path, prefix: str = "") -> Iterator[tuple[str, os.DirEntry[str]]]:
+    """Every file under *root* with its path relative to *root*.
+
+    ``scandir`` gets the file type from the directory listing, so a store of a
+    few hundred chunk files costs one ``stat`` per file rather than the two or
+    three a ``rglob`` walk makes. On a network filesystem each of those is a
+    round trip.
+    """
+    with os.scandir(root) as entries:
+        for entry in entries:
+            relative = f"{prefix}{entry.name}"
+            if entry.is_dir(follow_symlinks=False):
+                yield from _walk(Path(entry.path), f"{relative}/")
+            elif entry.is_file(follow_symlinks=False):
+                yield relative, entry
 
 
 def _mesh_model_from_tetra(
