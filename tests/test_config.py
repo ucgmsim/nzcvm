@@ -301,15 +301,6 @@ def test_layer_from_config_clamp() -> None:
     assert layer_from_config(cfg) is ClampLayer
 
 
-# ---------------------------------------------------------------------------
-# Mashumaro reads the settings on ConfigObject
-#
-# Mashumaro looks for a nested class named `Config`. Naming it anything else
-# leaves every setting on it inert, which is a silent failure: the decoder
-# keeps working and simply stops enforcing what the class asked for.
-# ---------------------------------------------------------------------------
-
-
 def _config_of(cls: type) -> type[BaseConfig]:
     """The config class mashumaro resolves for *cls*, however it inherits it."""
     return getattr(cls, "Config", BaseConfig)
