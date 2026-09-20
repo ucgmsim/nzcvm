@@ -88,17 +88,8 @@ class Domain:
     ) -> tuple[np.ndarray, np.ndarray]:
         """Map longitude and latitude onto the unit square.
 
-        Parameters
-        ----------
-        lon, lat :
-            Geographic coordinates in degrees.
-
-        Returns
-        -------
-        tuple[numpy.ndarray, numpy.ndarray]
-            ``(u, v)``, zero at the south-west corner and one at the
-            north-east corner.  Points outside the domain fall outside
-            ``[0, 1]`` rather than clipping to it.
+        Zero at the south-west corner, one at the north-east.  Points outside
+        the domain fall outside ``[0, 1]`` rather than clipping to it.
 
         Examples
         --------
@@ -127,18 +118,8 @@ class Domain:
         return lon, lat
 
     def sample(self, n_lon: int, n_lat: int) -> tuple[np.ndarray, np.ndarray]:
-        """Return 1-D longitude and latitude axes spanning the domain.
-
-        Parameters
-        ----------
-        n_lon, n_lat :
-            Number of samples along each axis.
-
-        Returns
-        -------
-        tuple[numpy.ndarray, numpy.ndarray]
-            Ascending ``(longitude, latitude)`` axes, endpoints included.
-        """
+        """Return ascending 1-D longitude and latitude axes spanning the
+        domain, endpoints included."""
         return (
             np.linspace(self.lon_min, self.lon_max, n_lon),
             np.linspace(self.lat_min, self.lat_max, n_lat),
@@ -171,7 +152,7 @@ def elevation(
     Returns
     -------
     numpy.ndarray
-        Elevation in metres, positive up.  Negative offshore.
+        Negative offshore.
     """
     u, v = domain.normalise(lon, lat)
     ridges = RIDGE_AMPLITUDE * np.sin(RIDGE_PERIODS * np.pi * v)
@@ -344,11 +325,6 @@ PROFILE = pd.DataFrame(
 )
 
 
-def _model_frame() -> Affine:
-    """The EP2020 affine mapping NZTM metres onto tomography model kilometres."""
-    return MODEL_COLUMNS[ModelType.EP2020].affine_inverse
-
-
 def _apply(transform: Affine, points: np.ndarray) -> np.ndarray:
     """Apply a 4×4 homogeneous affine to an ``(N, 3)`` array of points."""
     homogeneous = np.column_stack((points, np.ones(len(points))))
@@ -392,7 +368,8 @@ def tomography(
     to_nztm = Transformer.from_crs(CRS_WGS, CRS_NZTM, always_xy=True)
     to_wgs = Transformer.from_crs(CRS_NZTM, CRS_WGS, always_xy=True)
 
-    inverse = _model_frame()
+    # The EP2020 affine maps NZTM metres onto tomography model kilometres.
+    inverse = MODEL_COLUMNS[ModelType.EP2020].affine_inverse
     forward = np.linalg.inv(inverse)
 
     corners = np.asarray(domain.polygon.exterior.coords)

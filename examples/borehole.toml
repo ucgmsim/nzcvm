@@ -5,12 +5,8 @@
 #
 # A borehole grid extracts one vertical profile per site instead of filling a
 # volume, so it has no extent, no azimuth and no model origin: just a
-# projection to extract the profiles in.
-#
-# Longitude and latitude place a site. Every other key below (`site`,
-# `network`) is one the grid knows nothing about, and rides through to the
-# output as a coordinate on the i axis. Set keep_extra_columns = false to drop
-# them.
+# projection. Longitude and latitude place a site; every other key is a label
+# that rides through to the output. See the README for the details.
 
 [metadata]
 title = "Synthetic borehole profiles"
@@ -25,10 +21,8 @@ surface = "./synthetic/dem.zarr"
 depth = 600.0
 resolution_z = 25.0
 
-# Sites can also come from a CSV or Parquet file with longitude and latitude
-# columns, where the other columns label the sites the same way. It has to
-# stay above the tables below, as TOML would otherwise read it as a key of
-# `[grid.projection]`.
+# Or read sites from a CSV/Parquet file. Keep this above the tables below, or
+# TOML reads it as a key of [grid.projection].
 #
 # sites = "examples/sites.csv"
 

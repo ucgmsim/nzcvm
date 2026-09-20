@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-import numpy as np
+import xarray as xr
 from shapely import Geometry
 
 from nzcvm.config.layers.core import LayerConfig
@@ -70,8 +70,9 @@ def constant(
     next_layer :
         Ignored, because a terminal layer never delegates downstream.
     """
-    shape = grid.x.shape
-    ones = np.ones(shape, dtype=np.float32)
+    # ones_like keeps the grid's coordinates, which map_blocks requires of any
+    # grid carrying dimension coordinates (a borehole grid's site labels, say).
+    ones = xr.ones_like(grid.x)
     return QualitiesSchema.new(
         rho=ones * rho,
         vp=ones * vp,
