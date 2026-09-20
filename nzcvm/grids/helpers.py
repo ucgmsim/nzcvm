@@ -1,3 +1,5 @@
+from typing import Any
+
 import dask.array as da
 import numpy as np
 import shapely
@@ -5,6 +7,7 @@ import xarray as xr
 
 from nzcvm import coordinates
 from nzcvm.coordinates import Affine, Coordinate
+from nzcvm.grids.grid import Grid, GridSchema
 from nzcvm.models.surface import Surface
 
 
@@ -51,6 +54,49 @@ def ensure_chunks(*dsets: xr.DataArray) -> list[xr.DataArray]:
             if dim not in target or len(sizes) > len(target[dim]):
                 target[dim] = sizes
     return [dset.chunk(target) for dset in dsets]
+
+
+def topography_following_grid(
+    x_phys: xr.DataArray,
+    y_phys: xr.DataArray,
+    surface: xr.DataArray,
+    thickness: float,
+    resolution_z: float,
+    **kwargs: Any,
+) -> Grid:
+    """Hang a fixed-resolution depth axis off *surface*.
+
+    Depth is purely a function of k and *resolution_z*, identical from column
+    to column.  A column starts at the topography and ends *thickness* below
+    it, with the bottom following the topography exactly.  Chunking only ever
+    applies to i/j, and k always stays one chunk.
+
+    Parameters
+    ----------
+    x_phys, y_phys :
+        Projected horizontal coordinates, of any shape the depth axis can
+        broadcast against.
+    surface :
+        Surface elevation at those coordinates, positive down.
+    thickness :
+        Depth of the bottom of every column, in metres below the topography.
+    resolution_z :
+        Vertical sample spacing in metres.
+    **kwargs :
+        Passed through to :meth:`~nzcvm.grids.grid.GridSchema.new`.
+    """
+    nk = np.round(thickness / resolution_z).astype(int) + 1
+    zeta_depth = xr.DataArray(
+        np.linspace(0.0, thickness, num=nk, dtype=np.float32),
+        dims=[Coordinate.K],
+        coords={Coordinate.K: np.arange(nk)},
+    ).chunk({Coordinate.K: -1})
+
+    # Broadcasting in this order is what fixes the (i, j, k) coordinate order.
+    x, y, z, depth = xr.broadcast(x_phys, y_phys, surface + zeta_depth, zeta_depth)
+    x, y, z, depth = ensure_chunks(x, y, z, depth)
+
+    return GridSchema.new(x, y, z, depth, **kwargs)
 
 
 def outline(transform: Affine, extent_x: float, extent_y: float) -> shapely.Geometry:
