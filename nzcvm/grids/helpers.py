@@ -40,7 +40,7 @@ def ensure_chunks(*dsets: xr.DataArray) -> list[xr.DataArray]:
     """Rechunk all arrays to the finest common chunk spec across all inputs.
 
     For each dimension the target is the chunk tuple with the most pieces, the
-    finest split any input array carries.  Every output array then has chunks
+    finest split for any input array.  Every output array then has chunks
     along *all* dimensions that any input chunked along, which avoids the
     single-chunk fallback when a 1-D array (a depth coordinate, say) broadcasts
     into a higher-dimensional space.

@@ -35,9 +35,7 @@ from nzcvm.qualities import Qualities
 from nzcvm.query import ModelRange
 from tests.conftest import make_grid
 
-# Layers carry a spatial domain (``Layer.geometry``), but as of writing no
-# layer consults it when evaluating a grid; see
-# ``test_layer_geometry_masks_output`` below.  Any covering geometry works.
+# Layers have a spatial domain (``Layer.geometry``).
 GEOM = shapely.box(171.9, -43.6, 172.1, -43.4)
 
 # A geometry that doesn't overlap the grids built by ``make_grid``.
@@ -150,7 +148,7 @@ def test_clamp_vs_snaps_vp_and_rho_onto_manifold(
 def test_clamp_vs_untouched_leaves_vp_rho_alone() -> None:
     """Where the clamp doesn't move Vs, Vp and density keep their input values."""
     cfg = ClampLayerConfig(clamps={Component.VS: Bound(min=1000.0)})
-    # vs 3500 already satisfies the bound, so the clamp snaps nothing.
+    # vs 3500 already satisfies the bound.
     result = _clamp_over_constant(cfg, vs=3500.0, vp=6000.0, rho=2700.0)
     assert float(result.vp.mean()) == pytest.approx(6000.0, rel=1e-4)
     assert float(result.rho.mean()) == pytest.approx(2700.0, rel=1e-4)
@@ -162,8 +160,7 @@ def test_clamp_vs_untouched_leaves_vp_rho_alone() -> None:
 
 
 # ``min_vp_vs_ratio`` and ``max_vp_vs_ratio`` are the same contract with the
-# comparison reversed, so the test parametrises over
-# ``(config field, comparison)`` rather than duplicating it.  Note @pytest.mark.parametrize must sit *outside* @given.
+# comparison reversed.  Note @pytest.mark.parametrize must sit *outside* @given.
 @pytest.mark.parametrize(
     "field, compare",
     [
@@ -452,7 +449,6 @@ def test_adhoc_functional_layer_deserialises(isolated_layer_registry: None) -> N
         z = np.zeros(shape, dtype=np.float32)
         return QualitiesSchema.new(rho=z, vp=z, vs=z, qp=z, qs=z, alpha=z)
 
-    # Config must carry the right type tag
     cfg = zeros.config_cls()
     assert cfg.type == "zeros"  # ty: ignore[unresolved-attribute]
 
@@ -568,7 +564,7 @@ def test_offshore_suppressed_under_a_basin_that_reaches_the_surface() -> None:
     # but the offshore profile must still stay out of the column.
     assert np.all(np.isclose(vs[0], TOMO_VS))
 
-    # i == 1 is basin-free and offshore, so the profile applies.
+    # i == 1 is basin-free and offshore.
     assert np.all(np.isclose(vs[1], OFFSHORE_VS))
 
 

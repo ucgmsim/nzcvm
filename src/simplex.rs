@@ -124,7 +124,7 @@ impl Simplex {
     }
 }
 
-/// Build-time wrapper around [`Simplex`] carrying the fields the BVH build
+/// Build-time wrapper around [`Simplex`] holding the fields the BVH build
 /// needs (AABB and node bookkeeping).  Discarded once the mesh's
 /// [`CompactBvh`](crate::compact_bvh::CompactBvh) has been constructed.
 pub struct BuildSimplex {

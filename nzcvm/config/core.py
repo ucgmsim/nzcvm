@@ -53,7 +53,7 @@ class ConfigObject(
                         msg=str(e),
                     ) from e
 
-    class Meta(BaseConfig):
+    class Config(BaseConfig):
         serialize_by_alias = True
         omit_none = True
         forbid_extra_keys = True

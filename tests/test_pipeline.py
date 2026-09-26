@@ -17,8 +17,7 @@ from nzcvm.layers.dummy import ConstantLayer
 from nzcvm.layers.pipeline import build_pipeline
 from tests.conftest import make_grid
 
-# Layers now carry a spatial domain; these unit tests don't exercise masking,
-# so any covering geometry works.
+# Layers have a spatial domain. Dummy domain used here for testing.
 GEOM = shapely.box(171.9, -43.6, 172.1, -43.4)
 
 # ---------------------------------------------------------------------------

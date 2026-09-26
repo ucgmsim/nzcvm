@@ -35,7 +35,7 @@ pub struct MeshModelView {
 
 /// A single tetrahedral mesh model with an internal BVH for fast point queries.
 ///
-/// Each simplex in the mesh carries a model (via [`ModelMap`]) that maps a
+/// Each simplex in the mesh has a model (via [`ModelMap`]) that maps a
 /// query point to a [`Quality`].  The outer
 /// [`ModelTree`](crate::model_tree::ModelTree) holds a collection of
 /// `MeshModel`s and dispatches queries via a 4-D BVH (the fourth dimension
