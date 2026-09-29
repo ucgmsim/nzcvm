@@ -1,4 +1,4 @@
-"""Tests for the Banks Peninsula Volcanics GTL taper CLI script.
+"""Tests for the Banks Peninsula Volcanics GTL taper command-line tool.
 
 * :func:`nzcvm.scripts.banks._load_bpv_surface` builds a :class:`Surface`
   from a WGS84 lat/lon/elevation HDF5 file, negating elevation to get the
@@ -62,7 +62,7 @@ def test_load_bpv_surface_negates_elevation_to_z(tmp_path: Path) -> None:
 def test_load_bpv_surface_reprojects_lon_lat_to_projected_bounds(
     tmp_path: Path,
 ) -> None:
-    """The WGS84 lon/lat grid is reprojected to EPSG:2193, not left as degrees."""
+    """Loading reprojects the WGS84 lon/lat grid to EPSG:2193, not degrees."""
     longitude = np.linspace(172.0, 172.2, 4)
     latitude = np.linspace(-43.6, -43.4, 4)
     elevation = np.zeros((len(latitude), len(longitude)))
@@ -72,13 +72,13 @@ def test_load_bpv_surface_reprojects_lon_lat_to_projected_bounds(
     surface = banks._load_bpv_surface(path)
 
     # NZTM (EPSG:2193) easting/northing are in the millions of metres for
-    # this part of the South Island; plain lon/lat degrees would not be.
+    # this part of the South Island. Plain lon/lat degrees never get that large.
     assert surface.bounds[0] > 1_000_000.0
     assert surface.bounds[4] > 1_000_000.0
 
 
 # ---------------------------------------------------------------------------
-# main: end-to-end taper application
+# main: applying the taper end to end
 # ---------------------------------------------------------------------------
 
 
@@ -126,9 +126,7 @@ def dem_zarr(tmp_path: Path, query_point: tuple[float, float]) -> Path:
     return path
 
 
-def _mesh_dataset(
-    x: float, y: float, z_values: list[float], qp_qs: bool
-) -> xr.Dataset:
+def _mesh_dataset(x: float, y: float, z_values: list[float], qp_qs: bool) -> xr.Dataset:
     n = len(z_values)
     data_vars = {
         "x": ("p", np.full(n, x, dtype=np.float32)),
@@ -144,8 +142,9 @@ def _mesh_dataset(
     return xr.Dataset(data_vars, coords={"p": np.arange(n)})
 
 
-# With the fixtures above: dem elevation is 500, bpv basement z is -50.
-# dem_depth = (z - 500).clip(min=0); bpv_depth = (z - (-50)).clip(min=0).
+# With the preceding fixtures: dem elevation is 500, bpv basement z is -50.
+# dem_depth = (z - 500).clip(min=0).
+# bpv_depth = (z - (-50)).clip(min=0).
 # masked point (z=200): dem_depth=0 (<1000), bpv_depth=250 (<350)      -> True
 # unmasked, dem-only culprit (z=2000): dem_depth=1500 (>=1000)         -> False
 # unmasked, bpv-only culprit (z=400): dem_depth=0 (<1000), bpv_depth=450 (>=350) -> False
@@ -204,14 +203,14 @@ def test_main_applies_taper_inside_mask_and_full_values_outside(
 
     out = xr.open_dataset(output_path)
 
-    # Points outside the mask are pinned exactly to the "full" reference
+    # Outside the mask, main pins points exactly to the "full" reference
     # values passed on the command line.
     for i in (1, 2):
         assert out["vs"].values[i] == pytest.approx(vs_full)
         assert out["vp"].values[i] == pytest.approx(vp_full)
         assert out["rho"].values[i] == pytest.approx(rho_full)
-        # qp/qs are left untouched (not overwritten with a "full" constant)
-        # outside the mask.
+        # Outside the mask, main leaves qp/qs untouched rather than
+        # overwriting them with a "full" constant.
         assert out["qp"].values[i] == pytest.approx(999.0)
         assert out["qs"].values[i] == pytest.approx(999.0)
 
@@ -238,7 +237,7 @@ def test_main_applies_taper_inside_mask_and_full_values_outside(
     assert out["qs"].values[0] == pytest.approx(float(expected.qs), rel=1e-4)
 
     # The masked point's tapered vs/vp differ meaningfully from the "full"
-    # constants it would otherwise have been pinned to.
+    # constants that main would otherwise pin it to.
     assert out["vs"].values[0] != pytest.approx(vs_full)
     assert out["vp"].values[0] != pytest.approx(vp_full)
 
