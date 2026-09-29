@@ -9,6 +9,7 @@ from nzcvm.models.mesh import (
     StructuredMesh,
     StructuredMeshSchema,
 )
+from nzcvm.scripts._extras import missing_extra
 
 app = typer.Typer()
 
@@ -35,6 +36,12 @@ def convert_tiff(
 
 @app.command()
 def main(tiff_path: Path, band: int, output_path: Path, downsample: int = 1) -> None:
+    try:
+        # Imported for its side effect: it registers xarray's "rasterio" engine.
+        import rioxarray  # noqa: F401
+    except ImportError as err:
+        raise missing_extra("rioxarray", "raster", "convert-tiff") from err
+
     dset = xr.open_dataset(tiff_path, engine="rasterio")
     surface = convert_tiff(
         output_path.stem, dset["band_data"].sel(band=band), downsample

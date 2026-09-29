@@ -909,7 +909,6 @@ version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "520080814a7a6b4a6e9070823bb24b4531daac8c4627e08ba5de8c5ef2f2752d"
 dependencies = [
- "approx",
  "matrixmultiply",
  "num-complex",
  "num-integer",
@@ -917,7 +916,6 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
- "rayon",
 ]
 
 [[package]]
@@ -1023,7 +1021,6 @@ dependencies = [
  "proptest",
  "pyo3",
  "pythonize",
- "rayon",
  "serde",
  "small-collections",
  "smallvec",

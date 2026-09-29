@@ -17,22 +17,16 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
   "dask[array,diagnostics,distributed]>=2026.3.0",
-  "distributed>=2026.3.0",
-  "geopandas>=1.1.3",
-  "gmsh>=4.15.2",
   "h5py>=3.16.0",
   "hdf5plugin>=6.0.0",
-  "joblib>=1.5.3",
   "mashumaro[toml,yaml]>=3.20",
   "numba>=0.65.0",
   "numcodecs>=0.16.5",
   "numpy>=2.4.4",
   "pandas[parquet]>=2.0",
-  "platformdirs>=4.9.6",
   "psutil>=7.2.2",
   "pyproj>=3.7.2",
   "rich>=14.3.3",
-  "rioxarray>=0.22.0",
   "scipy>=1.17.1",
   "shapely>=2.1.2",
   "tqdm>=4.67.3",
@@ -51,14 +45,19 @@ known-first-party = ["nzcvm"]
 checks = ["GL05", "GL10", "PR02", "PR07", "RT03", "YD01"]
 
 [tool.deptry.per_rule_ignores]
-# Both are used through a plugin registry rather than an import: rioxarray
-# registers the xarray `engine="rasterio"` backend used by
-# nzcvm/scripts/convert_tiff.py, and zfpy backs the numcodecs ZFPY codec used
-# by nzcvm/formats/datatree.py.
-DEP002 = ["rioxarray", "zfpy"]
+# Used through a plugin registry rather than an import: zfpy backs the
+# numcodecs ZFPY codec used by nzcvm/formats/datatree.py.
+DEP002 = ["zfpy"]
 
 [project.optional-dependencies]
 vis = ["pyvista>=0.47.2"]
+# `nzcvm basin`: gmsh triangulates the basin outline.
+mesh = ["gmsh>=4.15.2"]
+# `nzcvm convert-tiff`: rioxarray registers xarray's `engine="rasterio"`.
+raster = ["rioxarray>=0.22.0"]
+# `nzcvm tree-stats`: geopandas reads the land polygon, which joblib caches
+# under the platformdirs user cache directory.
+bench = ["geopandas>=1.1.3", "joblib>=1.5.3", "platformdirs>=4.9.6"]
 
 [project.scripts]
 nzcvm = "nzcvm.scripts.nzcvm_cli:app"
