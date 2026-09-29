@@ -11,7 +11,7 @@ reach a writer.
 So each test here passes a labelled borehole grid to one registered layer,
 and to the whole chain, then checks the label is still on the result.
 :data:`COVERED` has to match
-:attr:`~nzcvm.layers.core.Layer.registry`, so a new layer fails here until
+:attr:`~nzcvm.layers.core.Layer.registry`. A new layer fails here until
 someone covers it.
 """
 
@@ -63,7 +63,7 @@ from nzcvm.scripts.convert_tomography import (
 _NZTM = CRS.from_epsg(2193)
 _TO_NZTM = Transformer.from_crs(4326, _NZTM, always_xy=True)
 
-# One site inland and one offshore, so the coastline-dependent layers see both
+# One site inland and one offshore. The coastline-dependent layers see both
 # sides of the shoreline and can't skip their work.
 SITES = [
     Site(longitude=172.15, latitude=-43.70, labels={"site": "GULL"}),
