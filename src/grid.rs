@@ -13,16 +13,13 @@ use ndarray::Array2;
 /// Tolerance on the local cell coordinates when deciding a point is outside.
 const OUTSIDE_TOLERANCE: f64 = 1e-9;
 
-/// Newton iterations used to invert a cell's bilinear map.
-const NEWTON_ITERATIONS: usize = 8;
-
 /// A structured grid of Cartesian nodes carrying one value per node.
 pub struct StructuredGrid {
     x: Array2<f64>,
     y: Array2<f64>,
     values: Array2<f64>,
-    /// Origin and inverse basis of an affine map from Cartesian coordinates to fractional
-    /// `(j, k)` index, used to guess the cell that contains a point.
+    /// Origin and inverse basis of an affine map from coordinates to
+    /// fractional `(j, k)` index, used to guess the cell containing a point.
     origin: Vector2<f64>,
     inverse_basis: Matrix2<f64>,
 }
@@ -70,34 +67,29 @@ impl StructuredGrid {
     /// Local coordinates `(t, s)` of `p` in cell `(j, k)`, where `t` runs
     /// from row `j` to `j + 1` and `s` from column `k` to `k + 1`.
     ///
-    /// Inverts the cell's bilinear map with Newton's method. Points outside
-    /// the cell give coordinates outside `[0, 1]`.
+    /// Inverts the cell's bilinear map in closed form. Points outside the
+    /// cell give coordinates outside `[0, 1]`.
     fn local_coordinates(&self, j: usize, k: usize, p: Vector2<f64>) -> (f64, f64) {
         let p00 = self.node(j, k);
-        let p01 = self.node(j, k + 1);
-        let p10 = self.node(j + 1, k);
-        let p11 = self.node(j + 1, k + 1);
-        let (mut t, mut s) = (0.5, 0.5);
-        for _ in 0..NEWTON_ITERATIONS {
-            let residual = (1.0 - t) * (1.0 - s) * p00
-                + (1.0 - t) * s * p01
-                + t * (1.0 - s) * p10
-                + t * s * p11
-                - p;
-            let d_dt = (1.0 - s) * (p10 - p00) + s * (p11 - p01);
-            let d_ds = (1.0 - t) * (p01 - p00) + t * (p11 - p10);
-            let Some(step) = Matrix2::from_columns(&[d_dt, d_ds])
-                .try_inverse()
-                .map(|inv| inv * residual)
-            else {
-                break;
-            };
-            t -= step.x;
-            s -= step.y;
-            if step.norm() < 1e-12 {
-                break;
-            }
-        }
+        let a = self.node(j + 1, k) - p00;
+        let b = self.node(j, k + 1) - p00;
+        let c = self.node(j + 1, k + 1) - p00 - a - b;
+        let q = p - p00;
+        // q = t a + s b + t s c. Crossing both sides with b + t c eliminates
+        // s, leaving (a × c) t² + (a × b - q × c) t - q × b = 0.
+        let cross = |u: Vector2<f64>, v: Vector2<f64>| u.x * v.y - u.y * v.x;
+        let quadratic = cross(a, c);
+        let linear = cross(a, b) - cross(q, c);
+        let constant = -cross(q, b);
+        // The cells are nearly parallelograms, so the quadratic coefficient is
+        // nearly zero. This form of the smaller root avoids the cancellation
+        // the textbook formula suffers there, and reduces to the linear
+        // solution when the cell is a parallelogram.
+        let discriminant = (linear * linear - 4.0 * quadratic * constant).max(0.0);
+        let root = -0.5 * (linear + linear.signum() * discriminant.sqrt());
+        let t = constant / root;
+        let d = b + t * c;
+        let s = (q - t * a).dot(&d) / d.norm_squared();
         (t, s)
     }
 
@@ -217,6 +209,28 @@ mod tests {
         let (got, outside) = g.query(-50.0, -50.0, true);
         assert!(outside);
         assert!((got - field(0.0, 0.0)).abs() < 1e-9);
+    }
+
+    /// A cell far from a parallelogram, to check the closed-form inversion
+    /// picks the right root of its quadratic.
+    #[test]
+    fn test_inverts_trapezoid_cell() {
+        let x = Array2::from_shape_vec((2, 2), vec![0.0, 100.0, 30.0, 70.0]).unwrap();
+        let y = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 80.0, 90.0]).unwrap();
+        let values = Array2::from_shape_vec((2, 2), vec![1.0, 2.0, 3.0, 7.0]).unwrap();
+        let g = StructuredGrid::new(x.clone(), y.clone(), values.clone()).unwrap();
+        for (t, s) in [(0.1, 0.2), (0.5, 0.5), (0.9, 0.95), (0.3, 0.8), (1.0, 0.0)] {
+            let weights = [(1.0 - t) * (1.0 - s), (1.0 - t) * s, t * (1.0 - s), t * s];
+            let blend = |a: &Array2<f64>| {
+                weights[0] * a[[0, 0]]
+                    + weights[1] * a[[0, 1]]
+                    + weights[2] * a[[1, 0]]
+                    + weights[3] * a[[1, 1]]
+            };
+            let (got, outside) = g.query(blend(&x), blend(&y), false);
+            assert!(!outside, "({t}, {s}) reported outside");
+            assert!((got - blend(&values)).abs() < 1e-9, "at ({t}, {s})");
+        }
     }
 
     #[test]
