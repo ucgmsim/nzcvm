@@ -77,3 +77,8 @@ YAML
 [Nn]eighbour
 [Nn]earest-neighbour
 [Vv]isualisations?
+GDAL
+[Rr]asterio
+[Gg]eopandas
+[Jj]oblib
+[Pp]latformdirs
