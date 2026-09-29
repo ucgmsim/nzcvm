@@ -7,7 +7,7 @@ from nzcvm.config.validation import (
     UnitIntervalFloat,
 )
 
-from .core import LayerConfig
+from .core import DERIVED, LayerConfig
 
 
 @dataclass
@@ -65,4 +65,6 @@ class OffshoreBasinConfig(LayerConfig):
     basin_depth: list[DepthModel]
     model: list[VelocityModel1D]
     type: str = "offshore"
-    requires: list[str] = field(default_factory=lambda: ["coastline"], init=False)
+    requires: list[str] = field(
+        default_factory=lambda: ["coastline"], init=False, metadata=DERIVED
+    )

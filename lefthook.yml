@@ -1,14 +1,23 @@
 # lefthook.yml
-pre-push:
+#
+# A local mirror of .github/workflows/ci.yml, so the shared meta-ci-action
+# workflow is not the thing that tells you about a formatting slip.
+#
+#   uvx lefthook install
+#
+# Adapted from ucgmsim/nzcvm, with the autofix commands split onto pre-commit
+# and the gates onto pre-push. The nzcvm config runs everything on pre-push
+# against {staged_files}, but nothing is staged at push time: those commands
+# report "no files for inspection" and skip, and the two that do not reference
+# the template (clippy, rustfmt) run over the whole crate on every push.
+# {push_files} is the pre-push equivalent — what this branch adds over the
+# upstream ref.
+
+# Autofix, on what is about to be committed. Kept to the commands that finish
+# in well under a second; the slower checks are on pre-push below.
+pre-commit:
   parallel: true
   commands:
-    ty:
-      # Use uv run when you want a command to run in your environment.
-      # Here we want ty to have access to the stubs packages installed
-      # for type checking.
-      run: uv run ty check {staged_files}
-      glob: "*.py"
-
     ruff:
       # Use uvx here because it is independent of the environment.
       # can also use uv run it is just more portable.
@@ -18,20 +27,66 @@ pre-push:
       # deleting/rearranging unused imports)
       stage_fixed: true
 
+    ruff-format:
+      run: uvx ruff format {staged_files}
+      glob: "*.py"
+      stage_fixed: true
+
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all
+      # Once again, rustfmt will fix the problem outright, so we automatically
+      # stage the changes.
+      stage_fixed: true
+
+# The CI gate, on everything the push is about to add. One command per job in
+# the shared workflow.
+pre-push:
+  parallel: true
+  commands:
+    ruff:
+      run: uvx ruff check {push_files}
+      glob: "*.py"
+
+    ruff-format:
+      run: uvx ruff format --check {push_files}
+      glob: "*.py"
+
+    ty:
+      # Use uv run when you want a command to run in your environment.
+      # Here we want ty to have access to the stubs packages installed
+      # for type checking.
+      run: uv run ty check {push_files}
+      glob: "*.py"
+
+    numpydoc:
+      # The one CI check with no autofix: docstring sections have to be
+      # written by hand, so catching it before the push is worth the second.
+      run: uv run numpydoc lint {push_files}
+      glob: "IM/**.py"
+      exclude:
+        - "IM/**/__init__.py"
+        - "IM/__init__.py"
+
     yaml:
-      run: uvx yamllint {staged_files}
-      glob: "*.{yaml, yml}"
+      # Upstream writes this glob as "*.{yaml, yml}". The space is inside the
+      # alternation, so the second branch only matches a file named "* yml"
+      # and the hook never fires on a .yml.
+      run: uvx yamllint {push_files}
+      glob: "*.{yaml,yml}"
 
     clippy:
-      # Unless you have a rust package in the repo this is skipped
+      # Unless you have a rust package in the repo this is skipped. Whole-crate
+      # rather than per-file, which is what clippy takes.
       glob: "*.rs"
       env:
         RUSTFLAGS: "-Dwarnings"
-      run: cargo clippy --fix --allow-dirty --allow-staged
-      # Once again, clippy will auto fix some problems, so we
-      # automatically stage the changes.
-      stage_fixed: true
+      run: cargo clippy --all-targets -- -D warnings
+
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all --check
 
     vale:
-      run: vale {staged_files}
-      glob: "*.{py,md,rs}"
+      glob: "*.{rs,py,md}"
+      run: vale --output=line {push_files}

@@ -342,9 +342,9 @@ mod tests {
 
     use proptest::prelude::*;
 
-    /// Material magnitudes spanning the range the model actually carries
-    /// (densities ~2700, velocities ~6000, Q ~100).  Strictly positive because
-    /// `blend` takes the reciprocal of `qp`/`qs`.
+    /// Material magnitudes spanning the range the model uses (densities ~2700,
+    /// velocities ~6000, Q ~100). Strictly positive because `blend` takes the
+    /// reciprocal of `qp`/`qs`.
     fn material() -> impl Strategy<Value = Real> {
         (1.0 as Real)..10_000.0
     }

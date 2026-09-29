@@ -1,4 +1,4 @@
-# The sdist has to carry enough to run `cargo build`. benches/ is included
+# The sdist has enough to run `cargo build`. benches/ is included
 # because Cargo.toml declares a [[bench]] target and cargo errors out during
 # target discovery if the file is missing.
 graft src
