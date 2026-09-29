@@ -51,6 +51,11 @@ def pipeline_context():
     with this context, so that leaving the block releases every object
     :data:`REGISTRY` still caches.
 
+    Yields
+    ------
+    None
+        Control returns to the ``with`` block.
+
     Examples
     --------
     >>> with pipeline_context():  # doctest: +SKIP

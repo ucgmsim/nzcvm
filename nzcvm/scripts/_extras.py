@@ -1,14 +1,15 @@
 """Helpful errors for subcommands whose dependencies live in an optional extra.
 
-The heavy, single-purpose dependencies (gmsh, rioxarray/GDAL, geopandas...)
-are not installed with the base package, so each subcommand that needs one
-imports it lazily and raises :func:`missing_extra` if it is absent. The base
-``nzcvm`` CLI then still starts, and ``--help`` works, without them.
+The base package doesn't install the heavy, single-purpose dependencies
+(gmsh, rioxarray/GDAL, geopandas...), so each subcommand that needs one
+imports it lazily and raises :func:`missing_extra` if it's absent. The base
+``nzcvm`` command-line tool then still starts, and ``--help`` works, without
+them.
 """
 
 
 def missing_extra(package: str, extra: str, command: str) -> ImportError:
-    """Build the error raised when an optional dependency is not installed.
+    """Build the error raised when an optional dependency isn't installed.
 
     Parameters
     ----------
@@ -22,7 +23,7 @@ def missing_extra(package: str, extra: str, command: str) -> ImportError:
     Returns
     -------
     ImportError
-        An error naming the extra to install, to be raised ``from`` the
+        An error that specifies the extra to install. Raise it ``from`` the
         original ``ImportError``.
     """
     return ImportError(

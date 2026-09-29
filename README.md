@@ -53,7 +53,7 @@ The extension compiles with the release profile by default. Set
 
 `pyproject.toml` declares the Python dependencies. The base install covers
 `nzcvm generate`. Commands with heavy, single-purpose dependencies need an
-optional extra, and say which one when it is missing:
+optional extra, and say which one when it's missing:
 
 | Extra    | Installs                         | Needed for           |
 |----------|----------------------------------|----------------------|
