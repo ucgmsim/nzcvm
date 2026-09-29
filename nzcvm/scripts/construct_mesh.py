@@ -2,8 +2,9 @@
 
 import gzip
 import itertools
+import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, TextIO
 
@@ -12,7 +13,6 @@ import numba
 import numpy as np
 import pandas as pd
 import pyproj
-import scipy as sp
 import shapely
 import shapely.ops
 import typer
@@ -23,6 +23,10 @@ from nzcvm.models.mesh import (
     TetrahedralMesh,
     TetrahedralMeshSchema,
     make_mesh,
+)
+from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
+    StructuredGrid,
+    structured_grid,
 )
 
 TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
@@ -129,17 +133,54 @@ def interleave_top_and_bottom(top: np.ndarray, bottom: np.ndarray) -> np.ndarray
 
 @dataclass
 class SurfaceGrid:
-    """A surface on its source latitude/longitude grid, depth positive down."""
+    """Values on a structured grid of NZTM nodes, interpolated bilinearly.
 
-    latitude: np.ndarray
-    longitude: np.ndarray
-    depth: np.ndarray
+    The values are depths (positive down) for a surface, or mesh sizes for a
+    sizing field. The grid comes from a regular latitude/longitude grid, so
+    its NZTM cells are quadrilaterals. Interpolation is bilinear within each
+    cell. Outside the grid, the kernel clamps the query point onto the edge
+    cell, which extends the edge row or column outward.
+    """
 
-    def projected(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return the grid nodes as NZTM ``x``, ``y`` and depth arrays."""
-        x_lon, x_lat = np.meshgrid(self.longitude, self.latitude)
-        x, y = TRANSFORMER.transform(x_lon, x_lat)
-        return x, y, self.depth
+    x: np.ndarray
+    y: np.ndarray
+    values: np.ndarray
+    _grid: StructuredGrid = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self._grid = structured_grid(
+            np.asarray(self.x, dtype=np.float64),
+            np.asarray(self.y, dtype=np.float64),
+            np.asarray(self.values, dtype=np.float64),
+        )
+
+    def __call__(
+        self, x: np.ndarray, y: np.ndarray, clamp: bool = True
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Interpolate the grid at NZTM points.
+
+        Parameters
+        ----------
+        x, y : np.ndarray
+            NZTM coordinates of the query points.
+        clamp : bool
+            If True, clamp points outside the grid onto its edge. If False,
+            they take NaN.
+
+        Returns
+        -------
+        values : np.ndarray
+            Interpolated values at each query point.
+        outside : np.ndarray
+            Mask of the query points that lie outside the grid.
+        """
+        return self._grid.query_many(
+            np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64), clamp
+        )
+
+    def query(self, x: float, y: float, clamp: bool = True) -> tuple[float, bool]:
+        """Interpolate the grid at one NZTM point, as for :meth:`__call__`."""
+        return self._grid.query(x, y, clamp)
 
 
 def read_surface_file(
@@ -165,45 +206,14 @@ def read_surface_file(
         else:
             elevation = f["elevation"][:]
 
-    return SurfaceGrid(latitude, longitude, -elevation)
+    lon_grid, lat_grid = np.meshgrid(longitude, latitude)
+    x, y = TRANSFORMER.transform(lon_grid, lat_grid)
+    return SurfaceGrid(x, y, -elevation)
 
 
-class LinearNDInterpolatorExt:
-    """Linear interpolator with nearest-neighbour fallback outside the hull.
-
-    Construction drops NaN input values before building the interpolators, so
-    that an undefined source node doesn't contaminate the linear interpolation
-    of its valid neighbours. :attr:`num_extrapolated` counts the query points
-    that fell outside the convex hull of the valid input points on the most
-    recent call and so took a nearest-neighbour extrapolation instead, which
-    lets callers report silent extrapolation.
-    """
-
-    def __init__(self, points, values):
-        points = np.asarray(points)
-        values = np.asarray(values)
-        valid = ~np.isnan(values)
-        if not valid.all():
-            points = points[valid]
-            values = values[valid]
-        self.funcinterp = sp.interpolate.LinearNDInterpolator(points, values)
-        self.funcnearest = sp.interpolate.NearestNDInterpolator(points, values)
-        self.num_extrapolated = 0
-
-    def __call__(self, *args):
-        t = self.funcinterp(*args)
-        nan_mask = np.isnan(t)
-        self.num_extrapolated = int(np.count_nonzero(nan_mask))
-        if self.num_extrapolated:
-            t_n = self.funcnearest(*args)
-            t[nan_mask] = t_n[nan_mask]
-        return t
-
-
-def gradient_field(
-    x: np.ndarray, y: np.ndarray, z: np.ndarray, error_target: float, max_h: float
-) -> np.ndarray:
-    """Compute an unstructured mesh sizing field from topography spatial gradients."""
+def gradient_field(grid: SurfaceGrid, error_target: float, max_h: float) -> SurfaceGrid:
+    """Compute a mesh sizing field from the spatial gradients of a surface."""
+    x, y, z = grid.x, grid.y, grid.values
     del_y, del_x = np.gradient(z)
 
     dx = np.gradient(x, axis=1)
@@ -222,49 +232,39 @@ def gradient_field(
         h_field = (error_target * cell_size) / (grad_mag + 1e-8)
 
     min_size = cell_size
-    return np.clip(h_field, min_size, max_h)
+    return SurfaceGrid(x, y, np.clip(h_field, min_size, max_h))
 
 
-def compute_topography_sizing_field(
-    *fields: tuple[np.ndarray, np.ndarray, np.ndarray],
-    bin_size: float = 100.0,
-) -> LinearNDInterpolatorExt:
-    """Build a sizing field interpolator from one or more gradient fields.
+@dataclass
+class SizingField:
+    """A mesh sizing field combining one or more gradient fields.
 
-    Where fields overlap, the minimum h (finest resolution) wins.
-    Binning the points at `bin_size` metres resolution before the reduction
-    identifies near-coincident points across grids.
+    Where fields overlap, the minimum h (finest resolution) wins. A point
+    outside every field takes the minimum of the fields clamped onto their
+    edges.
 
     Example:
-        coarse = gradient_field(x1, y1, z1, error_target=0.01, max_h=50000)
-        fine   = gradient_field(x2, y2, z2, error_target=0.01, max_h=1000)
-        interp = compute_topography_sizing_field(coarse, fine, bin_size=250.0)
+        coarse = gradient_field(grid1, error_target=0.01, max_h=50000)
+        fine   = gradient_field(grid2, error_target=0.01, max_h=1000)
+        sizing_field = SizingField([coarse, fine])
     """
-    all_x = np.concatenate([f[0] for f in fields])
-    all_y = np.concatenate([f[1] for f in fields])
-    all_h = np.concatenate([f[2] for f in fields])
 
-    # Bin coordinates to identify near-coincident points across grids
-    binned_x = np.round(all_x / bin_size).astype(np.int64)
-    binned_y = np.round(all_y / bin_size).astype(np.int64)
+    fields: list[SurfaceGrid]
 
-    # Take minimum h per bin using a dict reduction
-    bin_map: dict[tuple[int, int], float] = {}
-    for bx, by, h in zip(binned_x, binned_y, all_h):
-        key = (bx, by)
-        if key not in bin_map or h < bin_map[key]:
-            bin_map[key] = h
+    def __post_init__(self):
+        all_h = np.concatenate([f.values.ravel() for f in self.fields])
+        q0, q50, q100 = np.nanquantile(all_h, [0, 0.5, 1.0])
+        print(
+            f"Refinement field (min, median, max) = ({q0:.1f}, {q50:.1f}, {q100:.1f})"
+        )
 
-    # Reconstruct arrays from reduced bins (convert keys back to metres)
-    keys = np.array(list(bin_map.keys()), dtype=np.float64)
-    reduced_x = keys[:, 0] * bin_size
-    reduced_y = keys[:, 1] * bin_size
-    reduced_h = np.array(list(bin_map.values()))
-
-    points = np.stack((reduced_x, reduced_y), axis=1)
-    q0, q50, q100 = np.quantile(reduced_h, [0, 0.5, 1.0])
-    print(f"Refinement field (min, median, max) = ({q0:.1f}, {q50:.1f}, {q100:.1f})")
-    return LinearNDInterpolatorExt(points, reduced_h)
+    def __call__(self, x: float, y: float) -> float:
+        """Return the mesh size at an NZTM point."""
+        h = [f.query(x, y, clamp=False)[0] for f in self.fields]
+        h = [v for v in h if not math.isnan(v)]
+        if not h:
+            h = [f.query(x, y)[0] for f in self.fields]
+        return min(h)
 
 
 @dataclass
@@ -352,7 +352,7 @@ def construct_volumetric_mesh(
 
 
 def triangulate_polygon(
-    poly: shapely.Polygon, sizing_field: LinearNDInterpolatorExt
+    poly: shapely.Polygon, sizing_field: SizingField
 ) -> Triangulation:
     import gmsh
 
@@ -365,7 +365,7 @@ def triangulate_polygon(
     # Map adaptive local sizing to boundary vertices
     point_tags = []
     for x, y in coords:
-        r_local = float(sizing_field([[x, y]])[0])
+        r_local = sizing_field(x, y)
         tag = gmsh.model.geo.addPoint(x, y, 0.0, meshSize=r_local)
         point_tags.append(tag)
 
@@ -384,7 +384,7 @@ def triangulate_polygon(
 
     # Callback evaluation loop providing Gmsh with local terrain constraints during triangulation
     def mesh_size_callback(dim, tag, x, y, z, lc):
-        return float(sizing_field([[x, y]])[0])
+        return sizing_field(x, y)
 
     gmsh.model.mesh.setSizeCallback(mesh_size_callback)
     gmsh.option.setNumber("Mesh.Algorithm", 5)
@@ -448,34 +448,15 @@ def interpolate_surface(
     vertices: np.ndarray,
     label: str = "surface",
 ) -> np.ndarray:
-    """Interpolate a surface onto mesh vertices.
-
-    The function interpolates the surface bilinearly on its source
-    latitude/longitude grid, matching velocity_modelling. Where bilinear
-    interpolation has no value (a NaN corner, or outside the grid), it falls
-    back to linear interpolation over the valid nodes and then
-    nearest-neighbour extrapolation.
-    """
-    lon, lat = INV_TRANSFORMER.transform(vertices["x"], vertices["y"])
-    bilinear = sp.interpolate.RegularGridInterpolator(
-        (surface.latitude, surface.longitude),
-        surface.depth,
-        method="linear",
-        bounds_error=False,
-        fill_value=np.nan,
-    )
-    result = bilinear(np.c_[lat, lon])
-    undefined = np.isnan(result)
-    if undefined.any():
-        x, y, depth = surface.projected()
-        fallback = LinearNDInterpolatorExt(np.c_[x.ravel(), y.ravel()], depth.ravel())
-        result[undefined] = fallback(np.c_[vertices["x"], vertices["y"]][undefined])
-        if fallback.num_extrapolated:
-            print(
-                f"Warning: {fallback.num_extrapolated} of {len(result)} vertices fell "
-                f"outside the extent of the {label} and were filled by "
-                "nearest-neighbour extrapolation."
-            )
+    """Interpolate a surface bilinearly onto mesh vertices, warning on extrapolation."""
+    result, outside = surface(vertices["x"], vertices["y"])
+    num_extrapolated = int(np.count_nonzero(outside))
+    if num_extrapolated:
+        print(
+            f"Warning: {num_extrapolated} of {len(result)} vertices fell "
+            f"outside the extent of the {label} and were filled by "
+            "extending its edge."
+        )
     return result
 
 
@@ -900,27 +881,16 @@ def main(
     topo_grid = read_surface_file(topography, bbox=buffered_bbox)
     top_grid = read_surface_file(top_surface, bbox=buffered_bbox)
     bot_grid = read_surface_file(bottom_surface, bbox=buffered_bbox)
-    topo_x, topo_y, topo_z = topo_grid.projected()
-    top_x, top_y, top_z = top_grid.projected()
-    bot_x, bot_y, bot_z = bot_grid.projected()
     print("Computing topography gradient adaptive sizing field...")
     # When smoothing, cap the cell size to 1000.0 km to keep a decent smoothing resolution.
     # Otherwise, the only limit is geometry.
     max_h = 1000.0 if will_smooth else 50000.0
-    fields = []
-    h_topo = gradient_field(
-        topo_x, topo_y, topo_z, max_h=max_h, error_target=error_target
-    )
-    fields.append((topo_x.ravel(), topo_y.ravel(), h_topo.ravel()))
-
+    grids = [topo_grid, bot_grid]
     if topography != top_surface:
-        h_top = gradient_field(
-            top_x, top_y, top_z, max_h=max_h, error_target=error_target
-        )
-        fields.append((top_x.ravel(), top_y.ravel(), h_top.ravel()))
-    h_bot = gradient_field(bot_x, bot_y, bot_z, max_h=max_h, error_target=error_target)
-    fields.append((bot_x.ravel(), bot_y.ravel(), h_bot.ravel()))
-    sizing_field = compute_topography_sizing_field(*fields)
+        grids.append(top_grid)
+    sizing_field = SizingField(
+        [gradient_field(g, max_h=max_h, error_target=error_target) for g in grids]
+    )
 
     triangulation = triangulate_polygon(poly, sizing_field)
     mesh_top = interpolate_surface(
