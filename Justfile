@@ -3,7 +3,7 @@ set dotenv-load
 # Default resolution
 res := "500"
 smoothing := "10000.0"
-construct := "uv run nzcvm basin main"
+construct := "uv run --extra mesh nzcvm basin main"
 coastline := "resources/coastline.wkb.gz"
 
 banks:
@@ -171,7 +171,7 @@ kaikoura:
 basins: alexandra balclutha canterbury castle_hill cheviot collingwood dunedin gisborne greater_wellington hakataramea hanmer hawkes_bay kaikoura karamea mackenzie marlborough mosgiel murchison napier ne_otago nelson north_canterbury omaio_bay palmerston_north porirua queen_charlotte ranfurly rarakau southern_hawkes_bay southland springs_junction te_anau te_araroa tolaga_bay waiapu waikato_hauraki wairarapa waitaki wakatipu wanaka wellington west_coast westport whakatane whangaparoa
 
 tomography := "uv run nzcvm tomography convert"
-surface := "uv run nzcvm convert-tiff main"
+surface := "uv run --extra raster nzcvm convert-tiff main"
 
 ep2020:
     @test -f models/ep2020.zarr || {{ tomography }} ep2020.csv models/ep2020.zarr

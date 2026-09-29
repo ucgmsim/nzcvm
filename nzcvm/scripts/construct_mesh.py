@@ -28,6 +28,7 @@ from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
     StructuredGrid,
     structured_grid,
 )
+from nzcvm.scripts._extras import missing_extra
 
 TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
 INV_TRANSFORMER = pyproj.Transformer.from_crs(2193, 4326, always_xy=True)
@@ -354,7 +355,10 @@ def construct_volumetric_mesh(
 def triangulate_polygon(
     poly: shapely.Polygon, sizing_field: SizingField
 ) -> Triangulation:
-    import gmsh
+    try:
+        import gmsh
+    except ImportError as err:
+        raise missing_extra("gmsh", "mesh", "basin") from err
 
     gmsh.initialize()
     # gmsh.option.setNumber("General.Terminal", 0)

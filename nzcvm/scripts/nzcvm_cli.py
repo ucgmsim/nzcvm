@@ -12,8 +12,7 @@ import dask
 import psutil
 import typer
 from dask.diagnostics import profile_visualize
-from dask.distributed import LocalCluster
-from distributed import Client
+from dask.distributed import Client, LocalCluster
 from mashumaro import MissingField
 from mashumaro.exceptions import InvalidFieldValue
 from rich.console import Console, Group

@@ -3,14 +3,11 @@
 from pathlib import Path
 from typing import Annotated
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
-import platformdirs
 import scipy as sp
 import shapely
 import typer
-from joblib import Memory
 from pyproj import Transformer
 from rich.console import Console
 from rich.panel import Panel
@@ -18,8 +15,7 @@ from rich.progress import Progress
 from rich.table import Table
 
 from nzcvm.models.model import ModelTree
-
-memory = Memory(platformdirs.user_cache_dir("nzcvm"), verbose=0)
+from nzcvm.scripts._extras import missing_extra
 
 console = Console()
 
@@ -28,14 +24,28 @@ app = typer.Typer(
 )
 
 
-@memory.cache
-def get_nz_land_polygon():
+def _read_nz_land_polygon():
+    import geopandas as gpd
+
     url = (
         "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip"
     )
     world = gpd.read_file(url)
     nz = world[world["ADMIN"] == "New Zealand"]
     return nz.to_crs(epsg=2193).geometry.unary_union
+
+
+def get_nz_land_polygon():
+    """Return the NZ land polygon (NZTM), cached on disk between runs."""
+    try:
+        import geopandas  # noqa: F401
+        import platformdirs
+        from joblib import Memory
+    except ImportError as err:
+        raise missing_extra(err.name or "geopandas", "bench", "tree-stats") from err
+
+    memory = Memory(platformdirs.user_cache_dir("nzcvm"), verbose=0)
+    return memory.cache(_read_nz_land_polygon)()
 
 
 def sample_land_points(
