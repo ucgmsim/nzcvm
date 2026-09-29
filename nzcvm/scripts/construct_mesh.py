@@ -450,10 +450,11 @@ def interpolate_surface(
 ) -> np.ndarray:
     """Interpolate a surface onto mesh vertices.
 
-    The surface is interpolated bilinearly on its source latitude/longitude
-    grid, matching velocity_modelling. Where that is undefined (a NaN corner,
-    or outside the grid), it falls back to linear interpolation over the valid
-    nodes and then nearest-neighbour extrapolation.
+    The function interpolates the surface bilinearly on its source
+    latitude/longitude grid, matching velocity_modelling. Where bilinear
+    interpolation has no value (a NaN corner, or outside the grid), it falls
+    back to linear interpolation over the valid nodes and then
+    nearest-neighbour extrapolation.
     """
     lon, lat = INV_TRANSFORMER.transform(vertices["x"], vertices["y"])
     bilinear = sp.interpolate.RegularGridInterpolator(
