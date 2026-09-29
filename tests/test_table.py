@@ -40,7 +40,7 @@ def _grid(name: str = "boreholes", sites: list[str] | None = None) -> Grid:
     ni, nj, nk = SHAPE
     i, j, k = np.meshgrid(np.arange(ni), np.arange(nj), np.arange(nk), indexing="ij")
     grid = GridSchema.new(
-        # Values distinct per point, so a misordered table shows up.
+        # Values are distinct per point. A misordered table shows up.
         x=(1_500_000.0 + i).astype(np.float32),
         y=(5_100_000.0 + j).astype(np.float32),
         z=(100.0 * i + k).astype(np.float32),
