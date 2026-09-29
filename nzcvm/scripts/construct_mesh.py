@@ -133,13 +133,13 @@ def interleave_top_and_bottom(top: np.ndarray, bottom: np.ndarray) -> np.ndarray
 
 @dataclass
 class SurfaceGrid:
-    """Values on a structured grid of NZTM nodes, interpolated bilinearly.
+    """Values on a structured grid of Cartesian nodes, interpolated bilinearly.
 
     The values are depths (positive down) for a surface, or mesh sizes for a
-    sizing field. The grid comes from a regular latitude/longitude grid, so
-    its NZTM cells are quadrilaterals. Interpolation is bilinear within each
-    cell. Outside the grid, the kernel clamps the query point onto the edge
-    cell, which extends the edge row or column outward.
+    sizing field. The cells can be any quadrilaterals, such as those of a
+    latitude/longitude grid projected into a Cartesian frame. Interpolation is
+    bilinear within each cell. Outside the grid, the kernel clamps the query
+    point onto the edge cell, which extends the edge row or column outward.
     """
 
     x: np.ndarray
@@ -157,12 +157,12 @@ class SurfaceGrid:
     def __call__(
         self, x: np.ndarray, y: np.ndarray, clamp: bool = True
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Interpolate the grid at NZTM points.
+        """Interpolate the grid at points in the grid's frame.
 
         Parameters
         ----------
         x, y : np.ndarray
-            NZTM coordinates of the query points.
+            Coordinates of the query points, in the same frame as the grid.
         clamp : bool
             If True, clamp points outside the grid onto its edge. If False,
             they take NaN.
@@ -179,7 +179,7 @@ class SurfaceGrid:
         )
 
     def query(self, x: float, y: float, clamp: bool = True) -> tuple[float, bool]:
-        """Interpolate the grid at one NZTM point, as for :meth:`__call__`."""
+        """Interpolate the grid at one point, as for :meth:`__call__`."""
         return self._grid.query(x, y, clamp)
 
 
@@ -259,7 +259,7 @@ class SizingField:
         )
 
     def __call__(self, x: float, y: float) -> float:
-        """Return the mesh size at an NZTM point."""
+        """Return the mesh size at a point."""
         h = [f.query(x, y, clamp=False)[0] for f in self.fields]
         h = [v for v in h if not math.isnan(v)]
         if not h:

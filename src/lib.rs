@@ -663,7 +663,7 @@ mod nzcvm {
         Ok(out.into_pyarray(py))
     }
 
-    /// A structured grid of NZTM nodes, interpolated bilinearly.
+    /// A structured grid of Cartesian nodes, interpolated bilinearly.
     ///
     /// See [`crate::grid::StructuredGrid`].
     #[pyclass(name = "StructuredGrid")]
@@ -671,7 +671,7 @@ mod nzcvm {
         inner: StructuredGrid,
     }
 
-    /// Create a [`PyStructuredGrid`] from `(m, n)` NumPy arrays of NZTM node
+    /// Create a [`PyStructuredGrid`] from `(m, n)` NumPy arrays of Cartesian node
     /// coordinates and node values.
     #[pyfunction]
     pub fn structured_grid(
@@ -694,7 +694,7 @@ mod nzcvm {
 
     #[pymethods]
     impl PyStructuredGrid {
-        /// Interpolate at one NZTM point, returning `(value, outside)`.
+        /// Interpolate at one point, returning `(value, outside)`.
         ///
         /// A point outside the grid is clamped onto its edge when `clamp` is
         /// true, and takes NaN otherwise.
@@ -703,7 +703,7 @@ mod nzcvm {
             self.inner.query(x, y, clamp)
         }
 
-        /// Interpolate at many NZTM points, as for [`Self::query`].
+        /// Interpolate at many points, as for [`Self::query`].
         ///
         /// Returns the `(N,)` interpolated values and an `(N,)` boolean mask
         /// of the points outside the grid.

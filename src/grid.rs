@@ -1,12 +1,11 @@
-//! Bilinear interpolation on structured grids of NZTM nodes.
+//! Bilinear interpolation on structured grids in a Cartesian frame.
 //!
-//! Basin surfaces and mesh sizing fields come from regular latitude/longitude
-//! grids. Projected into NZTM, such a grid stays structured: node `[j, k]`
-//! neighbours nodes `[j ± 1, k]` and `[j, k ± 1]`, but its cells are
-//! arbitrary quadrilaterals. [`StructuredGrid`] interpolates bilinearly
-//! within those quadrilaterals, entirely in NZTM coordinates. Outside the
-//! grid the query point is clamped onto the edge cell, which extends the edge
-//! row or column outward.
+//! In a structured grid, node `[j, k]` neighbours nodes `[j ± 1, k]` and
+//! `[j, k ± 1]`, but the cells can be arbitrary quadrilaterals. A regular
+//! latitude/longitude grid projected into a Cartesian frame is one example.
+//! [`StructuredGrid`] interpolates bilinearly within those quadrilaterals.
+//! Outside the grid, it clamps the query point onto the edge cell, which
+//! extends the edge row or column outward.
 
 use nalgebra::{Matrix2, Vector2};
 use ndarray::Array2;
@@ -17,12 +16,12 @@ const OUTSIDE_TOLERANCE: f64 = 1e-9;
 /// Newton iterations used to invert a cell's bilinear map.
 const NEWTON_ITERATIONS: usize = 8;
 
-/// A structured grid of NZTM nodes carrying one value per node.
+/// A structured grid of Cartesian nodes carrying one value per node.
 pub struct StructuredGrid {
     x: Array2<f64>,
     y: Array2<f64>,
     values: Array2<f64>,
-    /// Origin and inverse basis of an affine map from NZTM to fractional
+    /// Origin and inverse basis of an affine map from Cartesian coordinates to fractional
     /// `(j, k)` index, used to guess the cell that contains a point.
     origin: Vector2<f64>,
     inverse_basis: Matrix2<f64>,
@@ -102,7 +101,7 @@ impl StructuredGrid {
         (t, s)
     }
 
-    /// Interpolate the grid bilinearly at the NZTM point `(px, py)`.
+    /// Interpolate the grid bilinearly at the point `(px, py)`.
     ///
     /// Returns the interpolated value and whether the point lies outside
     /// the grid. An outside point is clamped onto the edge cell when `clamp`
@@ -165,8 +164,7 @@ mod tests {
         3.0 * j - 2.0 * k + 0.5 * j * k + 5.0
     }
 
-    /// Bilinear map from index space to a rotated and sheared NZTM-like
-    /// plane. The `j * k` terms make every cell a different non-rectangular
+    /// Bilinear map from index space to a rotated and sheared plane. The `j * k` terms make every cell a different non-rectangular
     /// quadrilateral, while local cell coordinates stay equal to the
     /// fractional index, which gives the tests an exact oracle.
     fn position(j: f64, k: f64) -> (f64, f64) {
