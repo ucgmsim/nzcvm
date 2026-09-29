@@ -127,9 +127,24 @@ def interleave_top_and_bottom(top: np.ndarray, bottom: np.ndarray) -> np.ndarray
     return interleaved
 
 
+@dataclass
+class SurfaceGrid:
+    """A surface on its source latitude/longitude grid, depth positive down."""
+
+    latitude: np.ndarray
+    longitude: np.ndarray
+    depth: np.ndarray
+
+    def projected(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return the grid nodes as NZTM ``x``, ``y`` and depth arrays."""
+        x_lon, x_lat = np.meshgrid(self.longitude, self.latitude)
+        x, y = TRANSFORMER.transform(x_lon, x_lat)
+        return x, y, self.depth
+
+
 def read_surface_file(
     surface_path: Path, bbox: tuple[float, float, float, float] | None = None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> SurfaceGrid:
     with h5py.File(surface_path, "r") as f:
         latitude = f["latitude"][:]
         longitude = f["longitude"][:]
@@ -150,10 +165,7 @@ def read_surface_file(
         else:
             elevation = f["elevation"][:]
 
-    elevation *= -1
-    x_lon, x_lat = np.meshgrid(longitude, latitude)
-    x, y = TRANSFORMER.transform(x_lon, x_lat)
-    return x, y, elevation
+    return SurfaceGrid(latitude, longitude, -elevation)
 
 
 class LinearNDInterpolatorExt:
@@ -432,18 +444,37 @@ def triangulate_polygon(
 
 
 def interpolate_surface(
-    surface: np.ndarray,
+    surface: SurfaceGrid,
     vertices: np.ndarray,
     label: str = "surface",
 ) -> np.ndarray:
-    interp = LinearNDInterpolatorExt(surface[:, :-1], surface[:, -1])
-    result = interp(np.c_[vertices["x"], vertices["y"]])
-    if interp.num_extrapolated:
-        print(
-            f"Warning: {interp.num_extrapolated} of {len(result)} vertices fell "
-            f"outside the extent of the {label} and were filled by "
-            "nearest-neighbour extrapolation."
-        )
+    """Interpolate a surface onto mesh vertices.
+
+    The surface is interpolated bilinearly on its source latitude/longitude
+    grid, matching velocity_modelling. Where that is undefined (a NaN corner,
+    or outside the grid), it falls back to linear interpolation over the valid
+    nodes and then nearest-neighbour extrapolation.
+    """
+    lon, lat = INV_TRANSFORMER.transform(vertices["x"], vertices["y"])
+    bilinear = sp.interpolate.RegularGridInterpolator(
+        (surface.latitude, surface.longitude),
+        surface.depth,
+        method="linear",
+        bounds_error=False,
+        fill_value=np.nan,
+    )
+    result = bilinear(np.c_[lat, lon])
+    undefined = np.isnan(result)
+    if undefined.any():
+        x, y, depth = surface.projected()
+        fallback = LinearNDInterpolatorExt(np.c_[x.ravel(), y.ravel()], depth.ravel())
+        result[undefined] = fallback(np.c_[vertices["x"], vertices["y"]][undefined])
+        if fallback.num_extrapolated:
+            print(
+                f"Warning: {fallback.num_extrapolated} of {len(result)} vertices fell "
+                f"outside the extent of the {label} and were filled by "
+                "nearest-neighbour extrapolation."
+            )
     return result
 
 
@@ -865,9 +896,12 @@ def main(
         corners_lon.max(),
     )
 
-    topo_x, topo_y, topo_z = read_surface_file(topography, bbox=buffered_bbox)
-    top_x, top_y, top_z = read_surface_file(top_surface, bbox=buffered_bbox)
-    bot_x, bot_y, bot_z = read_surface_file(bottom_surface, bbox=buffered_bbox)
+    topo_grid = read_surface_file(topography, bbox=buffered_bbox)
+    top_grid = read_surface_file(top_surface, bbox=buffered_bbox)
+    bot_grid = read_surface_file(bottom_surface, bbox=buffered_bbox)
+    topo_x, topo_y, topo_z = topo_grid.projected()
+    top_x, top_y, top_z = top_grid.projected()
+    bot_x, bot_y, bot_z = bot_grid.projected()
     print("Computing topography gradient adaptive sizing field...")
     # When smoothing, cap the cell size to 1000.0 km to keep a decent smoothing resolution.
     # Otherwise, the only limit is geometry.
@@ -888,19 +922,15 @@ def main(
     sizing_field = compute_topography_sizing_field(*fields)
 
     triangulation = triangulate_polygon(poly, sizing_field)
-    top_surface_data = np.c_[top_x.ravel(), top_y.ravel(), top_z.ravel()]
-    bottom_surface_data = np.c_[bot_x.ravel(), bot_y.ravel(), bot_z.ravel()]
-    topography_data = np.c_[topo_x.ravel(), topo_y.ravel(), topo_z.ravel()]
-
     mesh_top = interpolate_surface(
-        top_surface_data, triangulation.vertices, label="top surface"
+        top_grid, triangulation.vertices, label="top surface"
     )
     mesh_bottom = interpolate_surface(
-        bottom_surface_data, triangulation.vertices, label="bottom surface"
+        bot_grid, triangulation.vertices, label="bottom surface"
     )
     mesh_top, mesh_bottom = enforce_mesh_constraints(mesh_top, mesh_bottom)
     mesh_topography = interpolate_surface(
-        topography_data, triangulation.vertices, label="topography"
+        topo_grid, triangulation.vertices, label="topography"
     )
 
     print("Slicing model into volumetric mesh")
