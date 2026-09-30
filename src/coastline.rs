@@ -22,7 +22,7 @@ use bvh::{
 };
 use deepsize::{Context, DeepSizeOf};
 use nalgebra::Point2;
-use rayon::prelude::*;
+use ndarray::{ArrayView1, ArrayViewMut1, azip};
 
 use crate::real::Real;
 
@@ -182,13 +182,19 @@ impl Coastline {
         }
     }
 
-    /// [`Coastline::signed_distance`] over many points, in parallel.
-    pub fn signed_distance_many(&self, x: &[Real], y: &[Real], out: &mut [Real]) {
-        out.par_iter_mut()
-            .zip(x.par_iter().zip(y.par_iter()))
-            .for_each(|(out, (&x, &y))| {
-                *out = self.signed_distance(Point2::new(x, y));
-            });
+    /// [`Coastline::signed_distance`] over many points.
+    ///
+    /// Serial on purpose: dask already runs one chunk per worker thread, so a
+    /// second layer of parallelism here would oversubscribe the cores.
+    pub fn signed_distance_many(
+        &self,
+        x: ArrayView1<Real>,
+        y: ArrayView1<Real>,
+        mut out: ArrayViewMut1<Real>,
+    ) {
+        azip!((out in &mut out, &x in &x, &y in &y) {
+            *out = self.signed_distance(Point2::new(x, y));
+        });
     }
 }
 
@@ -300,10 +306,10 @@ mod tests {
     #[test]
     fn many_matches_one_at_a_time() {
         let c = unit_square();
-        let x = [0.5, -1.0, 2.0, 0.25];
-        let y = [0.5, 0.5, 0.5, 0.75];
-        let mut out = [0.0; 4];
-        c.signed_distance_many(&x, &y, &mut out);
+        let x = ndarray::array![0.5, -1.0, 2.0, 0.25];
+        let y = ndarray::array![0.5, 0.5, 0.5, 0.75];
+        let mut out = ndarray::Array1::zeros(4);
+        c.signed_distance_many(x.view(), y.view(), out.view_mut());
         for i in 0..4 {
             let want = c.signed_distance(Point2::new(x[i], y[i]));
             assert_eq!(out[i], want);

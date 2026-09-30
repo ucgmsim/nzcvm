@@ -70,12 +70,12 @@ class CoastlineLayer(Layer[CoastlineConfig], config_cls=CoastlineConfig):
     def _distance(self, x: xr.DataArray, y: xr.DataArray) -> xr.DataArray:
 
         def _compute_chunk_dist(x_chunk, y_chunk):
-            # The Rust side takes contiguous float32. A grid holds float32
+            # The Rust side takes float32. A grid holds float32
             # already, but a caller passing anything else should convert here
             # rather than hit a binding type error.
             distance = self.coastline.signed_distance(
-                np.ascontiguousarray(x_chunk.ravel(), dtype=np.float32),
-                np.ascontiguousarray(y_chunk.ravel(), dtype=np.float32),
+                np.asarray(x_chunk.ravel(), dtype=np.float32),
+                np.asarray(y_chunk.ravel(), dtype=np.float32),
             )
             return distance.reshape(x_chunk.shape)
 

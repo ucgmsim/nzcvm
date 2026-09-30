@@ -797,8 +797,8 @@ mod nzcvm {
             x: PyReadonlyArray1<Real>,
             y: PyReadonlyArray1<Real>,
         ) -> PyResult<Bound<'py, PyArray1<Real>>> {
-            let x = x.as_slice()?;
-            let y = y.as_slice()?;
+            let x = x.as_array();
+            let y = y.as_array();
             if x.len() != y.len() {
                 return Err(PyValueError::new_err(format!(
                     "x and y must be the same length, got {} and {}",
@@ -807,10 +807,7 @@ mod nzcvm {
                 )));
             }
             let mut out = Array1::<Real>::zeros(x.len());
-            py.detach(|| {
-                self.inner
-                    .signed_distance_many(x, y, out.as_slice_mut().expect("contiguous"))
-            });
+            py.detach(|| self.inner.signed_distance_many(x, y, out.view_mut()));
             Ok(out.into_pyarray(py))
         }
     }
