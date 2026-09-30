@@ -51,11 +51,21 @@ The extension compiles with the release profile by default. Set
 | Rust toolchain (stable) | Compiling the extension (if building from source) |
 | HDF5 ≥ 1.12             | Needed at runtime by h5py                         |
 
-`pyproject.toml` declares the Python dependencies. PyVista is an
-optional visualisation dependency, needed only for `nzcvm view`:
+`pyproject.toml` declares the Python dependencies. The base install covers
+`nzcvm generate`. Commands with heavy, single-purpose dependencies need an
+optional extra, and say which one when it's missing:
+
+| Extra    | Installs                         | Needed for           |
+|----------|----------------------------------|----------------------|
+| `vis`    | pyvista                          | `nzcvm view`         |
+| `mesh`   | gmsh                             | `nzcvm basin`        |
+| `raster` | rioxarray (rasterio, GDAL)       | `nzcvm convert-tiff` |
+| `bench`  | geopandas, joblib, platformdirs  | `nzcvm tree-stats`   |
 
 ```sh
-pip install nzcvm[vis]   # also installs pyvista
+pip install 'nzcvm[vis]'     # also installs pyvista
+uv sync --extra mesh         # in a checkout
+uv sync --all-extras         # everything
 ```
 
 ---
