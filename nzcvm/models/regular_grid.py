@@ -1,4 +1,4 @@
-"""Regular-grid surfaces read from modeller-style HDF5 files.
+"""Readers for modeller-style HDF5 surface files on regular grids.
 
 A surface file holds 1-D ``latitude`` and ``longitude`` axes and one or more
 2-D scalar datasets (``elevation``, ``vs30``, ...) indexed ``(latitude,
