@@ -2,9 +2,9 @@
 
 An index is a mesh's BVH and records written out once (see
 ``docs/design/index-format.md``), so that a later load maps the file instead
-of rebuilding the tree. It sits beside its mesh and carries a fingerprint of
-the mesh store; the reader refuses an index whose fingerprint differs from the
-store's current one, so a stale index is rebuilt rather than trusted.
+of rebuilding the tree. It's stored beside its mesh with a fingerprint of the
+mesh store. The reader refuses an index whose fingerprint differs from the
+store's current one, and the loader then builds the mesh in memory.
 """
 
 import hashlib

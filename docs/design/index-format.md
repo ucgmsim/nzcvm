@@ -51,8 +51,8 @@ mesh is the same array with no markers, so `ModelMap` has two variants,
 `Refs` and `Constant`, and the query pays one well-predicted comparison per
 simplex for the mixed case.
 
-Each record is `#[repr(C)]` and derives `bytemuck`'s `Pod`. That pins the
-layout, refuses a record with padding, and lets a byte range become a `&[T]`
+Each record is `#[repr(C)]` and derives `bytemuck`'s `Pod`, which pins the
+layout and refuses a record with padding. A byte range then becomes a `&[T]`
 with size and alignment checked. nalgebra's `convert-bytemuck` feature makes
 `Point3`, `Point4` and `Matrix3` `Pod`, so `Simplex` keeps its nalgebra fields.
 `ChildRef` holds `min` and `max` points rather than an `Aabb`, because the
@@ -78,9 +78,9 @@ the sections of a file. The query code didn't change, because it already took
 a slice.
 
 `Slab::mapped` checks the cast once and keeps the resulting slice, so `Deref`
-is a branch and a load. The `'static` lifetime stands in for "as long as the
-mapping lives", which the private `_mmap` field guarantees; that is the one
-`unsafe` block in the storage layer.
+is a branch and a load. The slice has a `'static` lifetime, and the private
+`_mmap` field keeps the mapping alive for as long as the slab exists. Widening
+the lifetime is the one `unsafe` block in the storage layer.
 
 ## The file
 
@@ -105,17 +105,17 @@ A reader built with the other `Real` width refuses the file rather than
 misread it, and a reader given a different fingerprint refuses it as stale.
 Numbers are little-endian, and the file says nothing about byte order.
 
-Two layers split the work. `index.rs` handles bytes, offsets and the header,
-and knows nothing about meshes: callers choose their own tags.
-`SectionWriter` appends record arrays and `SectionReader` maps them back.
-`MeshModel::write_index` and `MeshModel::open_index` in `mesh.rs` are the only
-code that knows which sections a mesh has; the per-model scalars travel as a
-one-record `MeshHeader` section rather than as header fields. `CompactBvh`
+`index.rs` covers bytes, offsets and the header. It has no mesh types, and
+callers choose their own tags. `SectionWriter` appends record arrays
+and `SectionReader` maps them back. `MeshModel::write_index` and
+`MeshModel::open_index` in `mesh.rs` are the only code that references the
+sections of a mesh. The per-model scalars are stored as a one-record `MeshHeader`
+section rather than as header fields. `CompactBvh`
 hands its nodes and root over through `raw` and `from_raw`, and neither it nor
 `ModelMap` imports anything from the file module.
 
 The writer puts the file down under a `.partial` name and renames it into
-place, so a crash mid-write leaves nothing that parses.
+place. A crash mid-write leaves nothing that parses.
 
 The index goes in the same directory as the mesh: `models/Wellington.zarr` compiles to
 `models/Wellington.nzidx`. The zarr stays the source of truth, and the index
@@ -145,8 +145,9 @@ match its old index, the loader builds in memory as before, and
 
 `MeshModel.from_path` asks `nzcvm.models.index.open_index` for a mapped model
 and builds when it gets none. `open_index` computes the fingerprint and hands
-it to the reader, which opens the file once, maps it, and refuses it if the
-fingerprint differs; a missing, foreign or stale file all count as no index.
+it to the reader. The reader maps the file with one `open` and refuses it
+when the fingerprint differs. A missing, foreign or stale file counts as no
+index.
 `ModelTree.load_models` didn't change. The outer tree over the meshes still
 comes from the `bvh` crate at open, over the bounding boxes in their headers.
 
@@ -177,7 +178,7 @@ queries run at memory speed, and every worker process on the node shares them.
 contiguous in the `nodes` section, and simplices sit in leaf order, so the
 simplices of a subtree are contiguous too. The top of the tree occupies the
 first pages of the section, and every query shares it. A `generate` chunk is
-spatially coherent, so its queries descend the same few subtrees, and its
+spatially coherent. Its queries descend the same few subtrees, and its
 working set is a compact run of pages. An isolated borehole is the worst case,
 at roughly `log n` scattered pages, and also the case where twenty round trips
 is still only forty milliseconds. The expensive scenario is the first chunk of
@@ -207,12 +208,12 @@ memory pressure. `mlock` exists behind rlimits if that ever matters.
 `rename` over an existing index is atomic, but a client with the old inode
 mapped gets `ESTALE`, and so `SIGBUS`, on its next fault. Recompiling an index
 under a running job ends that job. The fix is immutable, content-addressed
-index files, `Wellington.<hash>.nzidx`, so a recompile writes a new file and
+index files, `Wellington.<hash>.nzidx`. A recompile writes a new file and
 never touches an old one, with removal of superseded indexes as a separate
 step run when nothing is using them. The present version uses a fixed name and
 relies on nobody recompiling under a live job.
 
-### Layout adjustments worth making
+### Layout adjustments to make
 
 Section alignment of 1 MiB rather than 4 KiB, matching `rsize`, so a section's
 prefetch never straddles into the next. That wastes under 5 MiB per file. Hot
@@ -233,7 +234,7 @@ node-local scratch, and the format works unchanged with either.
 The intended surface is `--index-prefetch {auto,lazy,populate,read}`, with
 `auto` following the preceding table, so that the measurement is a flag flip.
 
-## Is the build worth skipping at all?
+## Does skipping the build pay?
 
 The honest question before any of this: does the BVH build cost enough to
 matter? `benchmarks/benchmark_index.py` builds a synthetic tomography mesh of

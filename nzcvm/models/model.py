@@ -216,7 +216,7 @@ class MeshModel:
         Returns
         -------
         bool
-            Whether this call wrote the index, rather than finding it current.
+            Whether this call wrote the index. ``False`` means it was current.
         """
         digest = index.fingerprint(path)
         if not force and index.open_index(path, digest) is not None:

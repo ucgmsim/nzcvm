@@ -41,8 +41,8 @@ def _mapped(mesh_path: Path, monkeypatch: pytest.MonkeyPatch) -> bool:
 def _probe(tree: ModelTree) -> xr.Dataset:
     """Query a tree over a fixed spread of points, for comparison.
 
-    `query_many` answers on the `(i, j, k)` grid index, so the points go in
-    as one column.
+    `query_many` answers on the `(i, j, k)` grid index. The points go in as
+    one column.
     """
     lo, hi = tree.aabb
     rng = np.random.default_rng(0)

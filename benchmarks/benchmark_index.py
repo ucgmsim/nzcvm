@@ -1,4 +1,4 @@
-"""Is compiling the BVH to disk worth it? Measure rather than guess.
+"""How long does a load take with a compiled BVH on disk, and without? Measure.
 
 Builds a synthetic tomography mesh of a chosen size, then times the two ways
 of getting a queryable model out of it:
