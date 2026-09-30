@@ -261,7 +261,13 @@ class SizingField:
 
     def __call__(self, x: float, y: float) -> float:
         """Return the mesh size at a point."""
-        h = [v for f in self.fields if not math.isnan((v:= f.query(x, y, clamp=False)[0]))]
+        h = []
+
+        for f in self.fields:
+            v, _ = f.query(x, y, clamp=False)
+            if not math.isnan(v):
+                h.append(v)
+
         if not h:
             h = [f.query(x, y)[0] for f in self.fields]
         return min(h)
