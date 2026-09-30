@@ -1,5 +1,6 @@
 pub mod blend;
 pub mod compact_bvh;
+pub mod grid;
 pub mod mesh;
 pub mod model;
 pub mod model_tree;
@@ -14,6 +15,7 @@ use pyo3::prelude::*;
 
 #[pymodule]
 mod nzcvm {
+    use crate::grid::StructuredGrid;
     use crate::mesh::{MeshModel, MeshModelError};
     use crate::model::{ConstantModel, InterpolateModel, Model};
     use crate::model_tree::ModelTree;
@@ -661,6 +663,78 @@ mod nzcvm {
         Ok(out.into_pyarray(py))
     }
 
+    /// A structured grid of Cartesian nodes, interpolated bilinearly.
+    ///
+    /// See [`crate::grid::StructuredGrid`].
+    #[pyclass(name = "StructuredGrid")]
+    pub struct PyStructuredGrid {
+        inner: StructuredGrid,
+    }
+
+    /// Create a [`PyStructuredGrid`] from `(m, n)` NumPy arrays of Cartesian node
+    /// coordinates and node values.
+    #[pyfunction]
+    pub fn structured_grid(
+        x: PyReadonlyArray2<f64>,
+        y: PyReadonlyArray2<f64>,
+        values: PyReadonlyArray2<f64>,
+    ) -> PyResult<PyStructuredGrid> {
+        StructuredGrid::new(
+            x.as_array().to_owned(),
+            y.as_array().to_owned(),
+            values.as_array().to_owned(),
+        )
+        .map(|inner| PyStructuredGrid { inner })
+        .map_err(PyValueError::new_err)
+    }
+
+    /// Interpolated values and outside-grid mask returned by
+    /// [`PyStructuredGrid::query_many`].
+    type QueryManyResult<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>);
+
+    #[pymethods]
+    impl PyStructuredGrid {
+        /// Interpolate at one point, returning `(value, outside)`.
+        ///
+        /// A point outside the grid is clamped onto its edge when `clamp` is
+        /// true, and takes NaN otherwise.
+        #[pyo3(signature = (x, y, clamp = true))]
+        pub fn query(&self, x: f64, y: f64, clamp: bool) -> (f64, bool) {
+            self.inner.query(x, y, clamp)
+        }
+
+        /// Interpolate at many points, as for [`Self::query`].
+        ///
+        /// Returns the `(N,)` interpolated values and an `(N,)` boolean mask
+        /// of the points outside the grid.
+        #[pyo3(signature = (x, y, clamp = true))]
+        pub fn query_many<'py>(
+            &self,
+            py: Python<'py>,
+            x: PyReadonlyArray1<f64>,
+            y: PyReadonlyArray1<f64>,
+            clamp: bool,
+        ) -> PyResult<QueryManyResult<'py>> {
+            let x = x.as_array();
+            let y = y.as_array();
+            if x.len() != y.len() {
+                return Err(PyValueError::new_err(format!(
+                    "x and y must have the same length; got x={}, y={}",
+                    x.len(),
+                    y.len(),
+                )));
+            }
+            let mut result = Array1::<f64>::zeros(x.len());
+            let mut outside = Array1::<bool>::from_elem(x.len(), false);
+            py.detach(|| {
+                azip!((r in &mut result, o in &mut outside, &px in &x, &py in &y) {
+                    (*r, *o) = self.inner.query(px, py, clamp);
+                });
+            });
+            Ok((result.into_pyarray(py), outside.into_pyarray(py)))
+        }
+    }
+
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<PyMeshModel>()?;
@@ -672,6 +746,8 @@ mod nzcvm {
         m.add_function(wrap_pyfunction!(surface_model, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;
         m.add_function(wrap_pyfunction!(blend_many, m)?)?;
+        m.add_class::<PyStructuredGrid>()?;
+        m.add_function(wrap_pyfunction!(structured_grid, m)?)?;
 
         Ok(())
     }
