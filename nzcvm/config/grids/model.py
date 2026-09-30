@@ -11,10 +11,20 @@ from nzcvm.coordinates import NZGD2000_EPSG, WGS84_EPSG
 
 
 @dataclass(frozen=True)
-class Model(ConfigObject):
-    origin_lon: Longitude
-    origin_lat: Latitude
-    azimuth: float
+class Projection(ConfigObject):
+    """The projected CRS a grid's coordinates live in.
+
+    Just enough to convert between geographic and projected coordinates.  A
+    grid with no origin to rotate about, such as a set of boreholes, takes one
+    of these on its own.  A grid placed at a model origin takes a
+    :class:`Model` instead.
+
+    Attributes
+    ----------
+    crs :
+        Target projected CRS, such as ``EPSG:2193`` for NZTM2000.
+    """
+
     crs: CRS = field(metadata=field_options(serialization_strategy=CRSStrategy()))
 
     @functools.cached_property
@@ -24,6 +34,27 @@ class Model(ConfigObject):
     @functools.cached_property
     def to_wgs84(self) -> Transformer:
         return Transformer.from_crs(self.crs, WGS84_EPSG, always_xy=True)
+
+    def transformer_from(self, crs: CRS) -> Transformer:
+        """Return a transformer from *crs* into this projection."""
+        return Transformer.from_crs(crs, self.crs, always_xy=True)
+
+
+@dataclass(frozen=True)
+class Model(Projection):
+    """A projection plus the origin and azimuth that place a grid.
+
+    Attributes
+    ----------
+    origin_lon, origin_lat :
+        Geographic origin of the local grid, in WGS84 degrees.
+    azimuth :
+        Clockwise rotation of the grid from true north, in degrees.
+    """
+
+    origin_lon: Longitude
+    origin_lat: Latitude
+    azimuth: float
 
     @functools.cached_property
     def origin(self) -> tuple[float, float]:
