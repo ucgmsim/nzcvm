@@ -8,7 +8,6 @@ store's current one, and the loader then builds the mesh in memory.
 """
 
 import hashlib
-import os
 from pathlib import Path
 from typing import Any
 
@@ -64,18 +63,19 @@ def fingerprint(mesh_path: Path) -> bytes:
     mesh rewritten with identical contents fails to match its old index, which
     is the cheap side to err on.
     """
-    files = []
-    for directory, _, names in os.walk(mesh_path):
-        for name in names:
-            path = os.path.join(directory, name)
-            files.append((os.path.relpath(path, mesh_path), path))
+    root = Path(mesh_path)
+    files = sorted(
+        (path.relative_to(root).as_posix(), path)
+        for directory, _, names in root.walk()
+        for path in (directory / name for name in names)
+    )
 
     digest = hashlib.blake2b(digest_size=32)
-    for relative, path in sorted(files):
-        stat = os.stat(path)
+    for relative, path in files:
+        stat = path.stat()
         digest.update(relative.encode())
         digest.update(stat.st_size.to_bytes(8, "little"))
         digest.update(stat.st_mtime_ns.to_bytes(8, "little", signed=True))
-        if os.path.basename(path) == "zarr.json":
-            digest.update(Path(path).read_bytes())
+        if path.name == "zarr.json":
+            digest.update(path.read_bytes())
     return digest.digest()
