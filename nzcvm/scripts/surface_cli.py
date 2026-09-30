@@ -7,7 +7,7 @@ import numpy as np
 import typer
 
 from nzcvm.models.mesh import DEFAULT_STRUCTURED_ENCODING_SETTINGS, StructuredMeshSchema
-from nzcvm.models.regular_grid import read_surface_file
+from nzcvm.models.surface import read_surface_file
 
 app = typer.Typer(help="Convert an HDF5 topography surface to a VTK unstructured grid.")
 

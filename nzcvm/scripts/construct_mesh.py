@@ -24,7 +24,7 @@ from nzcvm.models.mesh import (
     TetrahedralMeshSchema,
     make_mesh,
 )
-from nzcvm.models.regular_grid import SurfaceGrid, read_surface_file
+from nzcvm.models.surface import SurfaceGrid, read_surface_file
 from nzcvm.scripts._extras import missing_extra
 
 TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)

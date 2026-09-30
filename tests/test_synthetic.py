@@ -23,7 +23,7 @@ from typer.testing import CliRunner
 
 from nzcvm import synthetic
 from nzcvm.layers.coastline import _read_compressed_shapely_wkb
-from nzcvm.models.regular_grid import read_surface_file
+from nzcvm.models.surface import read_surface_file
 from nzcvm.scripts import construct_mesh
 from nzcvm.scripts.convert_tomography import (
     MODEL_COLUMNS,

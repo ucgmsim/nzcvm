@@ -11,8 +11,7 @@ import xarray as xr
 
 from nzcvm import ely_taper
 from nzcvm.models.mesh import StructuredMeshSchema
-from nzcvm.models.regular_grid import read_surface_file
-from nzcvm.models.surface import Surface
+from nzcvm.models.surface import Surface, read_surface_file
 
 app = typer.Typer(
     help="Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."
