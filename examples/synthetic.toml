@@ -1,0 +1,68 @@
+# Velocity model over the synthetic dataset, for local testing.
+#
+# Build the inputs first:
+#
+#     just synthetic
+#     uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
+#
+# Everything it reads comes from `nzcvm synthetic`, so no NZCVM_DATA_ROOT and
+# no model download is needed. The domain sits over the synthetic coast, with
+# the `gully` and `terrace` basins inside it.
+
+[metadata]
+title = "Synthetic domain for local testing"
+keywords = ["synthetic", "testing"]
+
+[grid]
+type = "regular"
+surface = "./synthetic/dem.zarr"
+
+extent_x = 40000.0
+extent_y = 36000.0
+thickness = 2000.0
+
+resolution_x = 1000.0
+resolution_y = 1000.0
+resolution_z = 200.0
+
+[grid.orientation]
+crs = 'EPSG:2193'
+azimuth = 0.0
+origin_lon = 172.3
+origin_lat = -43.6
+
+[grid.chunks]
+i = 32
+j = 32
+
+[[layers]]
+type = "clamp"
+min_vp_vs_ratio = 1.73
+max_vp_vs_ratio = 4.0
+
+[[layers]]
+type = "coastline"
+coastline = "synthetic/coastline.wkb.gz"
+
+[[layers]]
+type = "offshore"
+model = [
+    {bottom_depth = 50.0, rho = 1810.0, vp = 1800.0, vs = 380.0, qp = 100.0, qs = 50.0, alpha = 1.0},
+    {bottom_depth = 300.0, rho = 1810.0, vp = 1800.0, vs = 580.0, qp = 100.0, qs = 50.0, alpha = 1.0},
+    {bottom_depth = 1200.0, rho = 1810.0, vp = 1800.0, vs = 830.0, qp = 100.0, qs = 50.0, alpha = 1.0},
+    {bottom_depth = 3600.0, rho = 1970.0, vp = 2140.0, vs = 1050.0, qp = 100.0, qs = 50.0, alpha = 1.0},
+]
+basin_depth = [
+    {distance = 0.0, bottom_depth = 0.0},
+    {distance = 10000.0, bottom_depth = 1000.0},
+]
+
+[[layers]]
+type = "ely"
+vs30 = "./synthetic/vs30.zarr"
+depth_t = 450.0
+
+[[layers]]
+type = "query"
+model_path = "./synthetic/models"
+model_globs = ["*.zarr"]

@@ -228,3 +228,7 @@ velocity_model.toml
 !/.vale/config/
 /.vale/config/*
 !/.vale/config/vocabularies/
+
+### NZCVM ###
+# `just synthetic` output: regenerate it rather than committing it.
+synthetic/
