@@ -9,10 +9,13 @@ NZCVM velocity models:
 :mod:`nzcvm.models.surface`
     Surface interpolation for topography-based depth transforms.
 
+:mod:`nzcvm.models.regular_grid`
+    Regular latitude/longitude surfaces read from HDF5 files.
+
 :mod:`nzcvm.models.model`
     High-level Python wrappers around the compiled Rust velocity-model backend.
 """
 
-from nzcvm.models import mesh, model, surface
+from nzcvm.models import mesh, model, regular_grid, surface
 
-__all__ = ["mesh", "model", "surface"]
+__all__ = ["mesh", "model", "regular_grid", "surface"]

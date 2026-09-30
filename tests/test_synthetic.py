@@ -23,6 +23,7 @@ from typer.testing import CliRunner
 
 from nzcvm import synthetic
 from nzcvm.layers.coastline import _read_compressed_shapely_wkb
+from nzcvm.models.regular_grid import read_surface_file
 from nzcvm.scripts import construct_mesh
 from nzcvm.scripts.convert_tomography import (
     MODEL_COLUMNS,
@@ -197,21 +198,19 @@ def test_dem_reads_back_as_a_surface(tmp_path: Path) -> None:
     path = tmp_path / "dem.h5"
     _invoke("dem", path, "--samples", "16")
 
-    x, y, z = construct_mesh.read_surface_file(path)
-    assert x.shape == y.shape == z.shape == (16, 16)
+    grid = read_surface_file(path)
+    assert grid.x.shape == grid.y.shape == grid.values.shape == (16, 16)
     # read_surface_file flips to the +z down convention used everywhere else.
     lon, lat = synthetic.DOMAIN.sample(16, 16)
     mesh_lon, mesh_lat = np.meshgrid(lon, lat)
-    assert z == pytest.approx(-synthetic.elevation(mesh_lon, mesh_lat))
+    assert grid.values == pytest.approx(-synthetic.elevation(mesh_lon, mesh_lat))
 
 
 def test_vs30_reads_back_unflipped(tmp_path: Path) -> None:
     path = tmp_path / "vs30.h5"
     _invoke("vs30", path, "--samples", "16")
 
-    from nzcvm.scripts.surface_cli import read_surface_file
-
-    _, _, values = read_surface_file(path, scalar_key="vs30", flip=False)
+    values = read_surface_file(path, scalar_key="vs30", flip=False).values
     assert values.min() >= synthetic.VS30_MIN
     assert values.max() <= synthetic.VS30_MAX
 
@@ -260,8 +259,8 @@ def test_basement_surface_is_below_the_dem(tmp_path: Path) -> None:
     _invoke("dem", tmp_path / "dem.h5", "--samples", "16")
     _invoke("basin", "gully", tmp_path, "--samples", "16")
 
-    _, _, topography = construct_mesh.read_surface_file(tmp_path / "dem.h5")
-    _, _, basement = construct_mesh.read_surface_file(tmp_path / "gully_basement.h5")
+    topography = read_surface_file(tmp_path / "dem.h5").values
+    basement = read_surface_file(tmp_path / "gully_basement.h5").values
     # Both are +z down, so the basement has the larger of the two values.
     assert np.all(basement >= topography)
     assert np.any(basement > topography)

@@ -4,7 +4,7 @@ import gzip
 import itertools
 import math
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, TextIO
 
@@ -24,10 +24,7 @@ from nzcvm.models.mesh import (
     TetrahedralMeshSchema,
     make_mesh,
 )
-from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
-    StructuredGrid,
-    structured_grid,
-)
+from nzcvm.models.regular_grid import SurfaceGrid, read_surface_file
 from nzcvm.scripts._extras import missing_extra
 
 TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
@@ -130,86 +127,6 @@ def interleave_top_and_bottom(top: np.ndarray, bottom: np.ndarray) -> np.ndarray
     interleaved[::2] = top
     interleaved[1::2] = bottom
     return interleaved
-
-
-@dataclass
-class SurfaceGrid:
-    """Values on a structured grid of Cartesian nodes, interpolated bilinearly.
-
-    The values are depths (positive down) for a surface, or mesh sizes for a
-    sizing field. The cells can be any quadrilaterals, such as those of a
-    latitude/longitude grid projected into a Cartesian frame. Interpolation is
-    bilinear within each cell. Outside the grid, the kernel clamps the query
-    point onto the edge cell, which extends the edge row or column outward.
-    """
-
-    x: np.ndarray
-    y: np.ndarray
-    values: np.ndarray
-    _grid: StructuredGrid = field(init=False, repr=False)
-
-    def __post_init__(self):
-        self._grid = structured_grid(
-            np.asarray(self.x, dtype=np.float64),
-            np.asarray(self.y, dtype=np.float64),
-            np.asarray(self.values, dtype=np.float64),
-        )
-
-    def __call__(
-        self, x: np.ndarray, y: np.ndarray, clamp: bool = True
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Interpolate the grid at points in the grid's frame.
-
-        Parameters
-        ----------
-        x, y : np.ndarray
-            Coordinates of the query points, in the same frame as the grid.
-        clamp : bool
-            If True, clamp points outside the grid onto its edge. If False,
-            they take NaN.
-
-        Returns
-        -------
-        values : np.ndarray
-            Interpolated values at each query point.
-        outside : np.ndarray
-            Mask of the query points that lie outside the grid.
-        """
-        return self._grid.query_many(
-            np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64), clamp
-        )
-
-    def query(self, x: float, y: float, clamp: bool = True) -> tuple[float, bool]:
-        """Interpolate the grid at one point, as for :meth:`__call__`."""
-        return self._grid.query(x, y, clamp)
-
-
-def read_surface_file(
-    surface_path: Path, bbox: tuple[float, float, float, float] | None = None
-) -> SurfaceGrid:
-    with h5py.File(surface_path, "r") as f:
-        latitude = f["latitude"][:]
-        longitude = f["longitude"][:]
-
-        if bbox is not None:
-            min_lat, max_lat, min_lon, max_lon = bbox
-            lat_idxs = np.where((latitude >= min_lat) & (latitude <= max_lat))[0]
-            lon_idxs = np.where((longitude >= min_lon) & (longitude <= max_lon))[0]
-
-            if len(lat_idxs) > 0 and len(lon_idxs) > 0:
-                lat_slice = slice(lat_idxs.min(), lat_idxs.max() + 1)
-                lon_slice = slice(lon_idxs.min(), lon_idxs.max() + 1)
-                latitude = latitude[lat_slice]
-                longitude = longitude[lon_slice]
-                elevation = f["elevation"][lat_slice, lon_slice]
-            else:
-                elevation = f["elevation"][:]
-        else:
-            elevation = f["elevation"][:]
-
-    lon_grid, lat_grid = np.meshgrid(longitude, latitude)
-    x, y = TRANSFORMER.transform(lon_grid, lat_grid)
-    return SurfaceGrid(x, y, -elevation)
 
 
 def gradient_field(grid: SurfaceGrid, error_target: float, max_h: float) -> SurfaceGrid:

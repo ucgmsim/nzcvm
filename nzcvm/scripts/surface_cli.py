@@ -3,34 +3,13 @@
 from pathlib import Path
 from typing import Annotated
 
-import h5py
 import numpy as np
-import pyproj
 import typer
 
 from nzcvm.models.mesh import DEFAULT_STRUCTURED_ENCODING_SETTINGS, StructuredMeshSchema
-
-TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
+from nzcvm.models.regular_grid import read_surface_file
 
 app = typer.Typer(help="Convert an HDF5 topography surface to a VTK unstructured grid.")
-
-
-def read_surface_file(
-    surface_path: Path, scalar_key: str, flip: bool
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    with h5py.File(surface_path, "r") as f:
-        latitude = np.array(f["latitude"])
-        longitude = np.array(f["longitude"])
-        scalars = np.array(f[scalar_key])
-
-    if flip:
-        # Swap convention if necessary (+z pointing up from sea level)
-        scalars *= -1
-
-    x_lon, x_lat = np.meshgrid(longitude, latitude)
-    x, y = TRANSFORMER.transform(x_lon, x_lat)
-
-    return x, y, scalars
 
 
 @app.command()
@@ -52,10 +31,15 @@ def convert(
     flip: bool = True,
 ) -> None:
     """Entry point for the conversion."""
-    x, y, scalars = read_surface_file(surface, scalar_key, flip)
-    ni, nj = x.shape
+    grid = read_surface_file(surface, scalar_key, flip)
+    ni, nj = grid.x.shape
     surface_mesh = StructuredMeshSchema.new(
-        x=x, y=y, z=scalars, i=np.arange(ni), j=np.arange(nj), name=surface.stem
+        x=grid.x,
+        y=grid.y,
+        z=grid.values,
+        i=np.arange(ni),
+        j=np.arange(nj),
+        name=surface.stem,
     )
     surface_mesh.to_zarr(
         output, encoding=DEFAULT_STRUCTURED_ENCODING_SETTINGS, mode="w"

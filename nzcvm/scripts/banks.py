@@ -5,21 +5,18 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-import h5py
 import numpy as np
-import pyproj
 import typer
 import xarray as xr
 
 from nzcvm import ely_taper
 from nzcvm.models.mesh import StructuredMeshSchema
+from nzcvm.models.regular_grid import read_surface_file
 from nzcvm.models.surface import Surface
 
 app = typer.Typer(
     help="Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."
 )
-
-TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
 
 DEFAULT_BASEMENT = (
     Path(os.environ.get("NZCVM_DATA_ROOT", "."))
@@ -37,16 +34,14 @@ RHO_FULL = 2393.0
 
 def _load_bpv_surface(basement_path: Path) -> Surface:
     """Build the BPV basement surface from the WGS84 lat/lon/elevation HDF5 file."""
-    with h5py.File(basement_path) as basement:
-        longitude = np.array(basement["longitude"])
-        latitude = np.array(basement["latitude"])
-        z = -np.array(basement["elevation"])
-
-    llon, llat = np.meshgrid(longitude, latitude)
-    x, y = TRANSFORMER.transform(llon, llat)
-    ni, nj = x.shape
+    grid = read_surface_file(basement_path)
+    ni, nj = grid.x.shape
     bpv_dset = xr.Dataset(
-        {"x": (("i", "j"), x), "y": (("i", "j"), y), "z": (("i", "j"), z)},
+        {
+            "x": (("i", "j"), grid.x),
+            "y": (("i", "j"), grid.y),
+            "z": (("i", "j"), grid.values),
+        },
         coords={"i": np.arange(ni), "j": np.arange(nj)},
         attrs={"name": "BPV"},
     )
