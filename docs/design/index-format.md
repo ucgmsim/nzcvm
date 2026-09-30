@@ -40,73 +40,79 @@ Each hot array is plain-old-data with fixed-width fields and no pointers.
 |---------------|-----------:|----------------------------------------------------------------|
 | `CompactNode` |       56 B | two children, each an axis-aligned bounding box (AABB) and a packed child slot |
 | `Simplex`     |       48 B | anchor vertex and the inverse edge matrix                       |
-| `VertexRefs`  |       16 B | four quality indices, or 4 B for a constant model               |
+| `Point4<u32>` |       16 B | four quality indices, or a `u32` (4 B) for a constant model     |
+| `Quality`     |       24 B | six components per mesh vertex                                  |
 
 A mesh whose simplices mix constant and interpolating models stores four
 indices for every simplex and marks a constant one with `u32::MAX` in the
 second slot, where an interpolating simplex has a vertex index. The mesh can't
-hold that many qualities, so the marker is unambiguous, and the mixed case
-doesn't need a second array.
-| `Quality`     |       24 B | six components per mesh vertex                                  |
+hold that many qualities, so the marker is unambiguous. An all-interpolating
+mesh is the same array with no markers, so `ModelMap` has two variants,
+`Refs` and `Constant`, and the query pays one well-predicted comparison per
+simplex for the mixed case.
 
-Each record is `#[repr(C)]` and derives `zerocopy`'s `FromBytes`, `IntoBytes`,
-`KnownLayout`, and `Immutable`. That pins the layout and lets a byte range
-become a `&[T]` with size and alignment checked, with no `unsafe` in the
-project's code. `f32` and `u32` have no invalid bit patterns, which is what
-makes `FromBytes` sound for them.
-
-Two of the records changed to get there. `Simplex` holds `[Real; 3]` and
-`[[Real; 3]; 3]` rather than nalgebra's `Point3` and `Matrix3`, because the
-derives can't see through a foreign type, and `Matrix3::from` on the array is a
-load the optimiser folds away. `ChildRef` holds `min`, `max`, and a raw `u32`
-slot rather than an `Aabb` and a `ChildSlot`, for the same reason. With
-`Real = f64` the slot would end the record on a 4-byte field and pick up tail
-padding, so that build adds an explicit `_pad` field.
+Each record is `#[repr(C)]` and derives `bytemuck`'s `Pod`. That pins the
+layout, refuses a record with padding, and lets a byte range become a `&[T]`
+with size and alignment checked. nalgebra's `convert-bytemuck` feature makes
+`Point3`, `Point4` and `Matrix3` `Pod`, so `Simplex` keeps its nalgebra fields.
+`ChildRef` holds `min` and `max` points rather than an `Aabb`, because the
+`bvh` crate's `Aabb` isn't `Pod`. With `Real = f64` its 4-byte slot would end
+the record and pick up tail padding, so that build adds an explicit `_pad`
+field.
 
 ## `Slab<T>`
 
 ```rust
-pub enum Slab<T: Record> {
+pub struct Slab<T: Record>(Storage<T>);
+
+enum Storage<T> {
     Owned(Vec<T>),
-    Mapped { mmap: Arc<Mmap>, offset: usize, len: usize },
+    Mapped { records: &'static [T], _mmap: Arc<Mmap> },
 }
 ```
 
-`Slab` dereferences to `&[T]` in either variant. `MeshModel`'s four
-arrays are slabs. The build produces `Owned`, and `MeshModel::open_index`
-produces `Mapped`, sharing one `Arc<Mmap>` across the sections of a file.
-The query code didn't change, because it already took a slice.
+`Slab` dereferences to `&[T]` in either form. `MeshModel`'s arrays, the
+BVH's nodes and the model map are slabs. The build produces owned ones, and
+`MeshModel::open_index` produces mapped ones, sharing one `Arc<Mmap>` across
+the sections of a file. The query code didn't change, because it already took
+a slice.
 
-The cast in `Deref` can't fail. `Slab::mapped` proved the exact range castable
-when it built the slab, and nothing modifies the mapping or the range after
-that.
+`Slab::mapped` checks the cast once and keeps the resulting slice, so `Deref`
+is a branch and a load. The `'static` lifetime stands in for "as long as the
+mapping lives", which the private `_mmap` field guarantees; that is the one
+`unsafe` block in the storage layer.
 
 ## The file
 
 ```text
-page 0        Header, then the model name as UTF-8
+page 0        Header: magic, version, Real width, section table, fingerprint
+header        [MeshHeader; 1] bounding box, transform, priority, BVH root
+name          [u8]            the model name as UTF-8
 nodes         [CompactNode]   the tree, in the order the build emitted it
 simplices     [Simplex]       in BVH leaf order
-refs          [VertexRefs] or [u32], by model kind
+refs          [Point4<u32>] or constant [u32], by tag
 qualities     [Quality]       one per mesh vertex
 ```
 
 Each section starts on a 4 KiB boundary, which aligns it for its record type
 and for the mapping. The header stores a table with one row per section:
 byte offset, record count, record width, and a tag that specifies the array.
-A reader
-finds a section by tag and refuses one whose record width differs from its
-own type, so a layout change that forgot to bump the version is still caught
-at open. The header also records the `Real` width, the layout version, the
-model's bounding box, priority, transform, and name, and a 32-byte
-fingerprint of the source mesh supplied by the caller. A reader built with
-the other `Real` width refuses the file rather than misread it. Numbers are
-little-endian, and the file says nothing about byte order.
+A reader finds a section by tag and refuses one whose record width differs
+from its own type, so a layout change that forgot to bump the version is
+still caught at open. The header also records the `Real` width, the layout
+version, and a 32-byte fingerprint of the source mesh supplied by the caller.
+A reader built with the other `Real` width refuses the file rather than
+misread it, and a reader given a different fingerprint refuses it as stale.
+Numbers are little-endian, and the file says nothing about byte order.
 
-The file module handles bytes and offsets, not meshes. `SectionWriter`
-appends record arrays and `SectionReader` maps them back. `CompactBvh`,
-`ModelMap`, and `MeshModel` each write and read their own sections through
-those two, so none of them exposes a field for the sake of the file.
+Two layers split the work. `index.rs` handles bytes, offsets and the header,
+and knows nothing about meshes: callers choose their own tags.
+`SectionWriter` appends record arrays and `SectionReader` maps them back.
+`MeshModel::write_index` and `MeshModel::open_index` in `mesh.rs` are the only
+code that knows which sections a mesh has; the per-model scalars travel as a
+one-record `MeshHeader` section rather than as header fields. `CompactBvh`
+hands its nodes and root over through `raw` and `from_raw`, and neither it nor
+`ModelMap` imports anything from the file module.
 
 The writer puts the file down under a `.partial` name and renames it into
 place, so a crash mid-write leaves nothing that parses.
@@ -137,10 +143,12 @@ match its old index, the loader builds in memory as before, and
 
 ## Loading
 
-`MeshModel.from_path` maps the index when one exists and its fingerprint
-matches, and builds otherwise. `ModelTree.load_models` didn't change. The
-outer tree over the meshes still comes from the `bvh` crate at open, over the
-bounding boxes in their headers.
+`MeshModel.from_path` asks `nzcvm.models.index.open_index` for a mapped model
+and builds when it gets none. `open_index` computes the fingerprint and hands
+it to the reader, which opens the file once, maps it, and refuses it if the
+fingerprint differs; a missing, foreign or stale file all count as no index.
+`ModelTree.load_models` didn't change. The outer tree over the meshes still
+comes from the `bvh` crate at open, over the bounding boxes in their headers.
 
 `nzcvm index build models/*.zarr` compiles every mesh, and the `models` recipe
 runs it after the basin meshes finish.
@@ -210,7 +218,7 @@ Section alignment of 1 MiB rather than 4 KiB, matching `rsize`, so a section's
 prefetch never straddles into the next. That wastes under 5 MiB per file. Hot
 sections first, which the layout already does. A header page that a loader can
 validate for 45 meshes with 45 small reads before mapping anything, which it
-also already does.
+also already does, since the header is the file's first page.
 
 ### To measure on Cascade rather than assume
 
@@ -267,11 +275,6 @@ section is about.
   sections.
 - `Slab` reporting resident rather than mapped pages in `deep_size_of`, once
   there is a reason to distinguish them.
-- `Slab::deref` re-checks the `zerocopy` cast on every call, five times per
-  mapped query, which measures at about a third of the mapped-versus-built
-  gap. Caching the validated pointer at construction closes that for one
-  `unsafe` block. Not taken yet, because the gap is small and the pages are
-  the larger share.
 - `query_many` runs one thread. Dask already runs one chunk per thread over
   it, so a `rayon` loop inside would oversubscribe the node. The scheduler
   is the place for that parallelism, and it already has it.

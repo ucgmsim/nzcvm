@@ -29,7 +29,8 @@ from pathlib import Path
 import numpy as np
 
 from nzcvm import synthetic
-from nzcvm.models.model import MB, MeshModel, ModelTree, index_path
+from nzcvm.models.index import index_path
+from nzcvm.models.model import MB, MeshModel, ModelTree
 from nzcvm.scripts.convert_tomography import (
     DEFAULT_ENCODING_SETTINGS,
     MODEL_COLUMNS,

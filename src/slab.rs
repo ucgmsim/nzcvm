@@ -7,114 +7,81 @@
 //! such array behind a `&[T]` view, and nothing downstream needs to know which
 //! kind it is.
 //!
-//! The mapped form casts bytes to records with `zerocopy`, which checks size
-//! and alignment when the slab is created.  A record type qualifies by
-//! deriving [`FromBytes`], [`IntoBytes`], [`KnownLayout`] and [`Immutable`]
-//! on a `#[repr(C)]` layout, which is also what pins the on-disk format.
+//! The mapped form casts bytes to records with `bytemuck`, which checks size
+//! and alignment once, when the slab is created.  A record type qualifies by
+//! deriving [`Pod`](bytemuck::Pod) on a `#[repr(C)]` layout, which is also
+//! what pins the on-disk format.
 
 use std::ops::Deref;
 use std::sync::Arc;
 
 use deepsize::{Context, DeepSizeOf};
 use memmap2::Mmap;
-use zerocopy::{CastError, FromBytes, Immutable, IntoBytes, KnownLayout};
 
-/// A record type a [`Slab`] can hold: shorthand for the `zerocopy` bounds.
-pub trait Record: FromBytes + IntoBytes + KnownLayout + Immutable + Copy {}
+/// A record type a [`Slab`] can hold.
+pub trait Record: bytemuck::Pod {}
 
-impl<T: FromBytes + IntoBytes + KnownLayout + Immutable + Copy> Record for T {}
+impl<T: bytemuck::Pod> Record for T {}
 
 /// An array of records, owned or memory-mapped.
-pub enum Slab<T: Record> {
+pub struct Slab<T: Record>(Storage<T>);
+
+enum Storage<T: 'static> {
     Owned(Vec<T>),
     Mapped {
-        mmap: Arc<Mmap>,
-        /// Byte offset of the first record within the mapping.
-        offset: usize,
-        /// Number of records.
-        len: usize,
+        /// The checked view into `_mmap`.  `'static` stands in for "as long
+        /// as `_mmap` lives", which the private field guarantees.
+        records: &'static [T],
+        _mmap: Arc<Mmap>,
     },
 }
 
-/// Why a byte range could not be viewed as records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlabError {
-    /// The range runs past the end of the mapping.
-    OutOfBounds,
-    /// The range does not start on a boundary the record type needs.
-    Misaligned,
-}
-
-impl std::fmt::Display for SlabError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SlabError::OutOfBounds => write!(f, "record range runs past the end of the mapping"),
-            SlabError::Misaligned => write!(f, "record range is misaligned for its record type"),
-        }
-    }
-}
-
 impl<T: Record> Slab<T> {
-    /// View `len` records starting `offset` bytes into `mmap`.
-    ///
-    /// Size and alignment are checked here, once, so that [`Deref`] can stay
-    /// infallible.
-    pub fn mapped(mmap: Arc<Mmap>, offset: usize, len: usize) -> Result<Self, SlabError> {
-        let rest = mmap.get(offset..).ok_or(SlabError::OutOfBounds)?;
-        <[T]>::ref_from_prefix_with_elems(rest, len).map_err(|e| match e {
-            CastError::Alignment(_) => SlabError::Misaligned,
-            CastError::Size(_) | CastError::Validity(_) => SlabError::OutOfBounds,
-        })?;
-        Ok(Slab::Mapped { mmap, offset, len })
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            Slab::Owned(v) => v.len(),
-            Slab::Mapped { len, .. } => *len,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    /// View `len` records starting `offset` bytes into `mmap`, or `None` if
+    /// that range runs past the end of the mapping or is misaligned for `T`.
+    pub fn mapped(mmap: Arc<Mmap>, offset: usize, len: usize) -> Option<Self> {
+        let end = len.checked_mul(size_of::<T>())?.checked_add(offset)?;
+        let records: &[T] = bytemuck::try_cast_slice(mmap.get(offset..end)?).ok()?;
+        // SAFETY: `records` borrows from the mapping, which the slab keeps
+        // alive in `_mmap` and which is never remapped or written through.
+        let records = unsafe { std::mem::transmute::<&[T], &'static [T]>(records) };
+        Some(Slab(Storage::Mapped {
+            records,
+            _mmap: mmap,
+        }))
     }
 
     /// Whether the records live in a file mapping rather than the heap.
     pub fn is_mapped(&self) -> bool {
-        matches!(self, Slab::Mapped { .. })
+        matches!(self.0, Storage::Mapped { .. })
     }
+}
 
-    /// Size of the records in bytes.
-    pub fn bytes(&self) -> usize {
-        self.len() * size_of::<T>()
+impl<T: Record> From<Vec<T>> for Slab<T> {
+    fn from(v: Vec<T>) -> Self {
+        Slab(Storage::Owned(v))
     }
 }
 
 impl<T: Record> Deref for Slab<T> {
     type Target = [T];
 
+    #[inline(always)]
     fn deref(&self) -> &[T] {
-        match self {
-            Slab::Owned(v) => v,
-            Slab::Mapped { mmap, offset, len } => {
-                // `Slab::mapped` proved this exact range castable when the
-                // slab was built, and neither the mapping nor the range has
-                // changed since.
-                <[T]>::ref_from_prefix_with_elems(&mmap[*offset..], *len)
-                    .expect("slab range was validated at construction")
-                    .0
-            }
+        match &self.0 {
+            Storage::Owned(v) => v,
+            Storage::Mapped { records, .. } => records,
         }
     }
 }
 
 impl<T: Record> DeepSizeOf for Slab<T> {
     fn deep_size_of_children(&self, _context: &mut Context) -> usize {
-        match self {
-            Slab::Owned(v) => v.capacity() * size_of::<T>(),
+        match &self.0 {
+            Storage::Owned(v) => v.capacity() * size_of::<T>(),
             // Mapped pages are the kernel's to keep or drop, but they are the
             // memory a query touches, so report them as the model's size.
-            Slab::Mapped { .. } => self.bytes(),
+            Storage::Mapped { records, .. } => size_of_val(*records),
         }
     }
 }
@@ -135,7 +102,7 @@ mod tests {
     #[test]
     fn mapped_slab_reads_back_the_records() {
         let values: Vec<u32> = (0..10).collect();
-        let mmap = mapping_of(values.as_bytes());
+        let mmap = mapping_of(bytemuck::cast_slice(&values));
         let slab = Slab::<u32>::mapped(mmap, 0, 10).unwrap();
         assert!(slab.is_mapped());
         assert_eq!(&slab[..], &values[..]);
@@ -144,27 +111,21 @@ mod tests {
     #[test]
     fn a_range_past_the_end_is_refused() {
         let mmap = mapping_of(&[0u8; 16]);
-        assert_eq!(
-            Slab::<u32>::mapped(mmap, 8, 3).err(),
-            Some(SlabError::OutOfBounds)
-        );
+        assert!(Slab::<u32>::mapped(mmap, 8, 3).is_none());
     }
 
     #[test]
     fn a_misaligned_range_is_refused() {
         let mmap = mapping_of(&[0u8; 16]);
-        assert_eq!(
-            Slab::<u32>::mapped(mmap, 1, 2).err(),
-            Some(SlabError::Misaligned)
-        );
+        assert!(Slab::<u32>::mapped(mmap, 1, 2).is_none());
     }
 
     #[test]
-    fn owned_and_mapped_report_the_same_bytes() {
+    fn owned_and_mapped_report_the_same_size() {
         let values: Vec<u32> = (0..10).collect();
-        let owned = Slab::Owned(values.clone());
-        let mapped = Slab::<u32>::mapped(mapping_of(values.as_bytes()), 0, 10).unwrap();
-        assert_eq!(owned.bytes(), mapped.bytes());
+        let owned = Slab::from(values.clone());
+        let mapped = Slab::<u32>::mapped(mapping_of(bytemuck::cast_slice(&values)), 0, 10).unwrap();
         assert_eq!(owned.len(), mapped.len());
+        assert_eq!(owned.deep_size_of(), mapped.deep_size_of());
     }
 }

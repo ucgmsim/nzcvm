@@ -20,7 +20,7 @@ use pyo3::prelude::*;
 mod nzcvm {
     use crate::coastline::{Coastline, Segment};
     use crate::grid::StructuredGrid;
-    use crate::index::{self, FINGERPRINT_LEN, IndexError};
+    use crate::index::{FINGERPRINT_LEN, Fingerprint, IndexError};
     use crate::mesh::{MeshModel, MeshModelError};
     use crate::model::{ConstantModel, InterpolateModel, Model};
     use crate::model_tree::ModelTree;
@@ -38,7 +38,6 @@ mod nzcvm {
     };
     use pyo3::exceptions::{PyIOError, PyValueError};
     use pyo3::prelude::*;
-    use pyo3::types::PyBytes;
     use pythonize::pythonize;
 
     fn index_error(e: IndexError) -> PyErr {
@@ -48,7 +47,7 @@ mod nzcvm {
         }
     }
 
-    fn fingerprint_array(bytes: &[u8]) -> PyResult<[u8; FINGERPRINT_LEN]> {
+    fn fingerprint_array(bytes: &[u8]) -> PyResult<Fingerprint> {
         bytes.try_into().map_err(|_| {
             PyValueError::new_err(format!(
                 "fingerprint must be {FINGERPRINT_LEN} bytes, got {}",
@@ -59,22 +58,15 @@ mod nzcvm {
 
     /// Open a compiled index as a memory-mapped mesh model.
     ///
-    /// The header is read and checked; the record sections are mapped and
-    /// paged in as queries touch them.
+    /// The header is read and checked, including that the index was built
+    /// from the mesh the 32-byte `fingerprint` describes; the record sections
+    /// are mapped and paged in as queries touch them.
     #[pyfunction]
-    pub fn mesh_model_open(path: PathBuf) -> PyResult<PyMeshModel> {
+    pub fn mesh_model_open(path: PathBuf, fingerprint: &[u8]) -> PyResult<PyMeshModel> {
+        let fingerprint = fingerprint_array(fingerprint)?;
         Ok(PyMeshModel {
-            inner: Some(MeshModel::open_index(&path).map_err(index_error)?),
+            inner: Some(MeshModel::open_index(&path, &fingerprint).map_err(index_error)?),
         })
-    }
-
-    /// The source fingerprint recorded in the index at `path`.
-    ///
-    /// Reads only the header page.
-    #[pyfunction]
-    pub fn index_fingerprint<'py>(py: Python<'py>, path: PathBuf) -> PyResult<Bound<'py, PyBytes>> {
-        let fingerprint = index::read_fingerprint(&path).map_err(index_error)?;
-        Ok(PyBytes::new(py, &fingerprint))
     }
 
     /// Coordinate arrays and optional boolean mask for a vectorised query.
@@ -319,18 +311,12 @@ mod nzcvm {
     impl PyMeshModel {
         /// Write this model as a compiled index at `path`.
         ///
-        /// `fingerprint` is the caller's 32-byte summary of the source mesh,
-        /// stored in the header so a stale index can be recognised later.
+        /// `fingerprint` is the caller's 32-byte summary of the source mesh;
+        /// opening the index later requires the same one.
         pub fn write_index(&self, path: PathBuf, fingerprint: &[u8]) -> PyResult<()> {
             let inner = self.model()?;
             let fingerprint = fingerprint_array(fingerprint)?;
             inner.write_index(&fingerprint, &path).map_err(index_error)
-        }
-
-        /// Whether the model's arrays are memory-mapped from an index file.
-        pub fn is_mapped(&self) -> PyResult<bool> {
-            let inner = self.model()?;
-            Ok(inner.is_mapped())
         }
 
         /// Query the mesh model at a single point.
@@ -879,7 +865,6 @@ mod nzcvm {
         m.add_class::<QueryCoordinates>()?;
         m.add_function(wrap_pyfunction!(mesh_model, m)?)?;
         m.add_function(wrap_pyfunction!(mesh_model_open, m)?)?;
-        m.add_function(wrap_pyfunction!(index_fingerprint, m)?)?;
         m.add_function(wrap_pyfunction!(surface_model, m)?)?;
         m.add_function(wrap_pyfunction!(coastline, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;

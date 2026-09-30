@@ -6,7 +6,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from nzcvm.models.model import MB, MeshModel, current_index
+from nzcvm.models.index import index_path
+from nzcvm.models.model import MB, MeshModel
 
 app = typer.Typer(help="Compile mesh models into memory-mappable indexes.")
 console = Console(stderr=True)
@@ -32,6 +33,6 @@ def build(
     the tree, and every process on a node shares the mapped pages.
     """
     for model in models:
-        verb = "current" if not force and current_index(model) else "wrote"
-        written = MeshModel.compile_index(model, force=force)
-        console.print(f"{verb:8s} {written} ({written.stat().st_size * MB:,.1f} MB)")
+        verb = "wrote" if MeshModel.compile_index(model, force=force) else "current"
+        index = index_path(model)
+        console.print(f"{verb:8s} {index} ({index.stat().st_size * MB:,.1f} MB)")

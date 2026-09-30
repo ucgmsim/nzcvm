@@ -19,20 +19,23 @@ import xarray as xr
 from typer.testing import CliRunner
 
 from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
-from nzcvm.models.model import (
-    MeshModel,
-    ModelTree,
-    current_index,
-    fingerprint,
-    index_path,
-)
+from nzcvm.models.index import fingerprint, index_path, open_index
+from nzcvm.models.model import MeshModel, ModelTree
 from nzcvm.scripts.nzcvm_cli import app
 
 runner = CliRunner()
 
-# The shared ``tomography_mesh_path`` fixture, under the name the tests read
-# naturally.
-mesh_path = pytest.fixture()(lambda tomography_mesh_path: tomography_mesh_path)
+
+@pytest.fixture()
+def mesh_path(tomography_mesh_path: Path) -> Path:
+    return tomography_mesh_path
+
+
+def _mapped(mesh_path: Path, monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Whether loading *mesh_path* maps its index rather than building."""
+    with monkeypatch.context() as m:
+        m.setattr(MeshModel, "_build", classmethod(lambda cls, path: None))
+        return MeshModel.from_path(mesh_path) is not None
 
 
 def _probe(tree: ModelTree) -> xr.Dataset:
@@ -65,20 +68,24 @@ def test_index_path_sits_beside_the_mesh() -> None:
     assert index_path(Path("models/Wellington.zarr")) == Path("models/Wellington.nzidx")
 
 
-def test_without_an_index_the_mesh_is_built(mesh_path: Path) -> None:
-    assert not MeshModel.from_path(mesh_path).mapped
+def test_without_an_index_the_mesh_is_built(
+    mesh_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert not _mapped(mesh_path, monkeypatch)
 
 
 def test_compile_index_writes_beside_the_mesh(mesh_path: Path) -> None:
-    written = MeshModel.compile_index(mesh_path)
-    assert written == index_path(mesh_path)
+    assert MeshModel.compile_index(mesh_path)
+    written = index_path(mesh_path)
     assert written.exists()
     assert not written.with_suffix(".nzidx.partial").exists(), "temp file cleaned up"
 
 
-def test_with_an_index_the_mesh_is_mapped(mesh_path: Path) -> None:
+def test_with_an_index_the_mesh_is_mapped(
+    mesh_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     MeshModel.compile_index(mesh_path)
-    assert MeshModel.from_path(mesh_path).mapped
+    assert _mapped(mesh_path, monkeypatch)
 
 
 def test_a_mapped_model_answers_like_the_built_one(mesh_path: Path) -> None:
@@ -89,32 +96,35 @@ def test_a_mapped_model_answers_like_the_built_one(mesh_path: Path) -> None:
         assert np.array_equal(built[name].values, mapped[name].values), name
 
 
-def test_the_index_records_the_fingerprint(mesh_path: Path) -> None:
-    index = MeshModel.compile_index(mesh_path)
-    stored = _nzcvm.index_fingerprint(index)
-    assert len(stored) == 32
-    assert stored == fingerprint(mesh_path)
+def test_the_index_opens_only_with_its_fingerprint(mesh_path: Path) -> None:
+    MeshModel.compile_index(mesh_path)
+    index = index_path(mesh_path)
+    _nzcvm.mesh_model_open(index, fingerprint(mesh_path))
+    with pytest.raises(ValueError, match="different source"):
+        _nzcvm.mesh_model_open(index, bytes(32))
 
 
-def test_a_changed_mesh_is_rebuilt_not_trusted(mesh_path: Path) -> None:
+def test_a_changed_mesh_is_rebuilt_not_trusted(
+    mesh_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Touching any file in the store changes the fingerprint."""
     MeshModel.compile_index(mesh_path)
-    assert MeshModel.from_path(mesh_path).mapped
+    assert _mapped(mesh_path, monkeypatch)
 
     some_file = next(p for p in mesh_path.rglob("*") if p.is_file())
     stat = some_file.stat()
     os.utime(some_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
-    assert not MeshModel.from_path(mesh_path).mapped
+    assert not _mapped(mesh_path, monkeypatch)
 
 
 def test_compile_index_is_idempotent_unless_forced(mesh_path: Path) -> None:
-    index = MeshModel.compile_index(mesh_path)
+    assert MeshModel.compile_index(mesh_path)
+    index = index_path(mesh_path)
     first = index.stat().st_mtime_ns
-    MeshModel.compile_index(mesh_path)
+    assert not MeshModel.compile_index(mesh_path)
     assert index.stat().st_mtime_ns == first, "a current index is left alone"
-    MeshModel.compile_index(mesh_path, force=True)
-    assert index.exists()
+    assert MeshModel.compile_index(mesh_path, force=True)
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +135,8 @@ def test_compile_index_is_idempotent_unless_forced(mesh_path: Path) -> None:
 def test_index_build_command(mesh_path: Path) -> None:
     result = runner.invoke(app, ["index", "build", str(mesh_path)])
     assert result.exit_code == 0, result.output
-    assert index_path(mesh_path).exists()
-    assert MeshModel.from_path(mesh_path).mapped
+    assert "wrote" in result.output
+    assert open_index(mesh_path) is not None
 
 
 def test_index_build_reports_a_current_index(mesh_path: Path) -> None:
@@ -145,16 +155,16 @@ def test_a_foreign_file_is_not_opened_as_an_index(tmp_path: Path) -> None:
     bogus = tmp_path / "bogus.nzidx"
     bogus.write_bytes(b"\0" * 8192)
     with pytest.raises(ValueError, match="not an NZCVM index"):
-        _nzcvm.mesh_model_open(bogus)
+        _nzcvm.mesh_model_open(bogus, bytes(32))
 
 
 def test_a_missing_index_is_an_io_error(tmp_path: Path) -> None:
     with pytest.raises(OSError):
-        _nzcvm.mesh_model_open(tmp_path / "absent.nzidx")
+        _nzcvm.mesh_model_open(tmp_path / "absent.nzidx", bytes(32))
 
 
 def test_a_foreign_file_beside_the_mesh_counts_as_no_index(mesh_path: Path) -> None:
     """The loader builds rather than fails when the reader rejects the index."""
     index_path(mesh_path).write_bytes(b"\0" * 8192)
-    assert current_index(mesh_path) is None
-    assert not MeshModel.from_path(mesh_path).mapped
+    assert open_index(mesh_path) is None
+    MeshModel.from_path(mesh_path)
