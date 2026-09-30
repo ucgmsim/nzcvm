@@ -182,7 +182,10 @@ index:
 
 models: ep2020 basins index
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py
-    zip -r models.zip models
+    # Indexes are left out: their fingerprints include mtimes, which unzipping
+    # changes, so a shipped index would never match. Run `just index` after
+    # unpacking.
+    zip -r models.zip models -x "*.nzidx"
 
 vs30:
     @test -f resources/vs30.zarr || {{ surface }} ${VS30_TIFF} 1 resources/vs30.zarr --downsample 3 

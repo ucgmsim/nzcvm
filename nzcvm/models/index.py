@@ -8,10 +8,13 @@ store's current one, and the loader then builds the mesh in memory.
 """
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import Any
 
 from nzcvm import nzcvm  # ty: ignore[unresolved-import]
+
+logger = logging.getLogger(__name__)
 
 
 def index_path(mesh_path: Path) -> Path:
@@ -43,13 +46,18 @@ def open_index(mesh_path: Path, digest: bytes | None = None) -> Any | None:
         The mapped Rust ``PyMeshModel``, or ``None`` when there is no index,
         when it was built from a different version of the mesh, or when the
         reader rejects it. A foreign or truncated file counts as no index
-        rather than an error, since the caller can always build instead.
+        rather than an error, since the caller can always build instead. The
+        reason for refusing an index that exists is logged as a warning.
     """
+    index = index_path(mesh_path)
+    if not index.exists():
+        return None
     if digest is None:
         digest = fingerprint(mesh_path)
     try:
-        return nzcvm.mesh_model_open(index_path(mesh_path), digest)
-    except (OSError, ValueError):
+        return nzcvm.mesh_model_open(index, digest)
+    except (OSError, ValueError) as e:
+        logger.warning("Not using the index %s: %s", index, e)
         return None
 
 
@@ -64,6 +72,8 @@ def fingerprint(mesh_path: Path) -> bytes:
     is the cheap side to err on.
     """
     root = Path(mesh_path)
+    if not root.is_dir():
+        raise NotADirectoryError(f"{root} is not a zarr store")
     files = sorted(
         (path.relative_to(root).as_posix(), path)
         for directory, _, names in root.walk()

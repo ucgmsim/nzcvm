@@ -323,7 +323,9 @@ impl MeshModel {
             bvh_tree: CompactBvh::from_raw(
                 reader.section(tag::NODES)?,
                 (header.has_root != 0).then_some(header.root),
-            ),
+                simplices.len(),
+            )
+            .ok_or(IndexError::Corrupt("BVH root lies outside the tree"))?,
             simplices,
             qualities: reader.section(tag::QUALITIES)?,
             aabb: Aabb::with_bounds(header.aabb_min, header.aabb_max),
@@ -950,6 +952,25 @@ mod tests {
         assert!(matches!(mapped.model_map, ModelMap::Constant(_)));
         let p = Point3::new(0.2, 0.1, 0.1);
         assert_eq!(built.query(p), mapped.query(p));
+    }
+
+    #[test]
+    fn a_root_outside_the_tree_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mesh.nzidx");
+        cube_mesh().write_index(&FINGERPRINT, &path).unwrap();
+        // The mesh header is the first section, on the page after the file
+        // header. Point its root at a node that does not exist.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let start = crate::index::SECTION_ALIGN;
+        let header: &mut MeshHeader =
+            bytemuck::from_bytes_mut(&mut bytes[start..start + size_of::<MeshHeader>()]);
+        header.root = 1_000_000;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(
+            MeshModel::open_index(&path, &FINGERPRINT),
+            Err(IndexError::Corrupt(_))
+        ));
     }
 
     #[test]

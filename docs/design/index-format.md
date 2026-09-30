@@ -114,8 +114,15 @@ section rather than as header fields. `CompactBvh`
 hands its nodes and root over through `raw` and `from_raw`, and neither it nor
 `ModelMap` imports anything from the file module.
 
-The writer puts the file down under a `.partial` name and renames it into
-place. A crash mid-write leaves nothing that parses.
+The writer puts the file down under a temporary name unique to the writer and
+renames it into place. A crash mid-write leaves nothing that parses, and two
+jobs compiling the same mesh at once never write into the same file.
+
+Opening checks the header, each section's bounds and stride, and that the
+BVH root lies inside the tree. It doesn't check every node and quality
+reference, because that would read most of the file at open and throw away
+the lazy paging the format exists for. A file damaged past its header can
+still fail mid-query rather than at open.
 
 The index goes in the same directory as the mesh: `models/Wellington.zarr` compiles to
 `models/Wellington.nzidx`. The zarr stays the source of truth, and the index

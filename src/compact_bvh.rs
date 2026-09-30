@@ -287,12 +287,25 @@ impl CompactBvh {
         (&self.nodes, self.root.map(ChildSlot::into_bits))
     }
 
-    /// Rebuild a tree from the parts [`CompactBvh::raw`] returned.
-    pub(crate) fn from_raw(nodes: Slab<CompactNode>, root: Option<u32>) -> Self {
-        Self {
-            nodes,
-            root: root.map(ChildSlot::from_bits),
-        }
+    /// Rebuild a tree over `simplices` simplices from the parts
+    /// [`CompactBvh::raw`] returned, or `None` if the root points outside
+    /// them.
+    ///
+    /// Only the root is checked: checking every node would read the whole
+    /// section, and the point of a mapped tree is to read only what queries
+    /// touch.
+    pub(crate) fn from_raw(
+        nodes: Slab<CompactNode>,
+        root: Option<u32>,
+        simplices: usize,
+    ) -> Option<Self> {
+        let root = root.map(ChildSlot::from_bits);
+        let in_bounds = match root.map(ChildSlot::unpack) {
+            None => true,
+            Some(Child::Node(index)) => (index as usize) < nodes.len(),
+            Some(Child::Leaf(range)) => range.end() as usize <= simplices,
+        };
+        in_bounds.then_some(Self { nodes, root })
     }
 
     /// Iterator over the indices of all simplices that contain `point`.

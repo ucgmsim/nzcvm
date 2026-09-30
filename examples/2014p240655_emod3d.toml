@@ -90,4 +90,4 @@ depth_t = 450.0
 [[layers]]
 type = "query"
 model_path = "./basins"
-model_globs = ["ep2020.vtkhdf"]
+model_globs = ["ep2020.zarr"]

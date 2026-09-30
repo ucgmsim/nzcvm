@@ -30,9 +30,24 @@ def build(
     """Build each mesh's BVH once and write it beside the mesh as ``.nzidx``.
 
     Loading a mesh with a current index maps the file instead of rebuilding
-    the tree, and every process on a node shares the mapped pages.
+    the tree, and every process on a node shares the mapped pages. A model
+    that fails to compile is reported and skipped, and the command exits
+    non-zero once the rest are done.
     """
+    failed = 0
     for model in models:
-        verb = "wrote" if MeshModel.compile_index(model, force=force) else "current"
+        if not (model.is_dir() and model.suffix == ".zarr"):
+            console.print(f"[red]skipped[/red]  {model}: not a .zarr store")
+            failed += 1
+            continue
+        try:
+            wrote = MeshModel.compile_index(model, force=force)
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            console.print(f"[red]failed[/red]   {model}: {e}")
+            failed += 1
+            continue
+        verb = "wrote" if wrote else "current"
         index = index_path(model)
         console.print(f"{verb:8s} {index} ({index.stat().st_size * MB:,.1f} MB)")
+    if failed:
+        raise typer.Exit(1)

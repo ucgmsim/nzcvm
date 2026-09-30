@@ -19,6 +19,7 @@ import xarray as xr
 from typer.testing import CliRunner
 
 from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
+from nzcvm.models import index as index_module
 from nzcvm.models.index import fingerprint, index_path, open_index
 from nzcvm.models.model import MeshModel, ModelTree
 from nzcvm.scripts.nzcvm_cli import app
@@ -78,7 +79,7 @@ def test_compile_index_writes_beside_the_mesh(mesh_path: Path) -> None:
     assert MeshModel.compile_index(mesh_path)
     written = index_path(mesh_path)
     assert written.exists()
-    assert not written.with_suffix(".nzidx.partial").exists(), "temp file cleaned up"
+    assert not list(written.parent.glob("*.partial")), "temp file cleaned up"
 
 
 def test_with_an_index_the_mesh_is_mapped(
@@ -163,8 +164,39 @@ def test_a_missing_index_is_an_io_error(tmp_path: Path) -> None:
         _nzcvm.mesh_model_open(tmp_path / "absent.nzidx", bytes(32))
 
 
-def test_a_foreign_file_beside_the_mesh_counts_as_no_index(mesh_path: Path) -> None:
-    """The loader builds rather than fails when the reader rejects the index."""
+def test_a_foreign_file_beside_the_mesh_counts_as_no_index(
+    mesh_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The loader builds rather than fails when the reader rejects the index,
+    and says why."""
     index_path(mesh_path).write_bytes(b"\0" * 8192)
     assert open_index(mesh_path) is None
+    assert "not an NZCVM index" in caplog.text
     MeshModel.from_path(mesh_path)
+
+
+def test_without_an_index_the_store_is_not_walked(
+    mesh_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def walked(_: Path) -> bytes:
+        raise AssertionError("fingerprinted a mesh with no index")
+
+    monkeypatch.setattr(index_module, "fingerprint", walked)
+    assert open_index(mesh_path) is None
+
+
+def test_a_missing_store_has_no_fingerprint(tmp_path: Path) -> None:
+    with pytest.raises(NotADirectoryError):
+        fingerprint(tmp_path / "absent.zarr")
+
+
+def test_index_build_skips_what_it_cannot_compile(
+    mesh_path: Path, tmp_path: Path
+) -> None:
+    """A bad argument is reported, and the meshes after it still compile."""
+    stray = tmp_path / "stray.txt"
+    stray.write_text("not a mesh")
+    result = runner.invoke(app, ["index", "build", str(stray), str(mesh_path)])
+    assert result.exit_code == 1
+    assert "skipped" in result.output
+    assert index_path(mesh_path).exists()

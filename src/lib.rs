@@ -62,11 +62,16 @@ mod nzcvm {
     /// from the mesh the 32-byte `fingerprint` describes; the record sections
     /// are mapped and paged in as queries touch them.
     #[pyfunction]
-    pub fn mesh_model_open(path: PathBuf, fingerprint: &[u8]) -> PyResult<PyMeshModel> {
+    pub fn mesh_model_open(
+        py: Python<'_>,
+        path: PathBuf,
+        fingerprint: &[u8],
+    ) -> PyResult<PyMeshModel> {
         let fingerprint = fingerprint_array(fingerprint)?;
-        Ok(PyMeshModel {
-            inner: Some(MeshModel::open_index(&path, &fingerprint).map_err(index_error)?),
-        })
+        let model = py
+            .detach(|| MeshModel::open_index(&path, &fingerprint))
+            .map_err(index_error)?;
+        Ok(PyMeshModel { inner: Some(model) })
     }
 
     /// Coordinate arrays and optional boolean mask for a vectorised query.
@@ -313,10 +318,16 @@ mod nzcvm {
         ///
         /// `fingerprint` is the caller's 32-byte summary of the source mesh;
         /// opening the index later requires the same one.
-        pub fn write_index(&self, path: PathBuf, fingerprint: &[u8]) -> PyResult<()> {
+        pub fn write_index(
+            &self,
+            py: Python<'_>,
+            path: PathBuf,
+            fingerprint: &[u8],
+        ) -> PyResult<()> {
             let inner = self.model()?;
             let fingerprint = fingerprint_array(fingerprint)?;
-            inner.write_index(&fingerprint, &path).map_err(index_error)
+            py.detach(|| inner.write_index(&fingerprint, &path))
+                .map_err(index_error)
         }
 
         /// Query the mesh model at a single point.

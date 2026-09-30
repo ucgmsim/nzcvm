@@ -37,6 +37,7 @@ use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use memmap2::Mmap;
@@ -135,21 +136,45 @@ impl From<io::Error> for IndexError {
 
 /// Appends record sections to a new index file.
 ///
-/// The file goes down under a `.partial` name and [`SectionWriter::finish`]
-/// renames it into place, so a crash mid-write leaves nothing that parses.
+/// The file goes down under a temporary name unique to this writer, and
+/// [`SectionWriter::finish`] renames it into place. A crash mid-write leaves
+/// nothing that parses, and two writers compiling the same index never share
+/// a file.
 pub struct SectionWriter {
     out: BufWriter<File>,
     written: usize,
     sections: Vec<Section>,
     path: PathBuf,
-    partial: PathBuf,
+    partial: Partial,
+}
+
+/// A temporary file, removed when dropped unless it has been renamed away.
+struct Partial(PathBuf);
+
+impl Partial {
+    /// A name beside `path` that no other writer, in this process or any
+    /// other, is using.
+    fn beside(path: &Path) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let mut name = path.as_os_str().to_owned();
+        name.push(format!(".{}-{n}.partial", std::process::id()));
+        Partial(name.into())
+    }
+}
+
+impl Drop for Partial {
+    fn drop(&mut self) {
+        // After a successful rename there is nothing here to remove.
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 impl SectionWriter {
     /// Start writing the index that will end up at `path`.
     pub fn create(path: &Path) -> Result<Self, IndexError> {
-        let partial = path.with_extension("nzidx.partial");
-        let mut out = BufWriter::new(File::create(&partial)?);
+        let partial = Partial::beside(path);
+        let mut out = BufWriter::new(File::create_new(&partial.0)?);
         // The header is written last, once every section offset is known, so
         // the first page is left blank for now.
         pad(&mut out, SECTION_ALIGN)?;
@@ -203,7 +228,7 @@ impl SectionWriter {
         file.write_all(bytemuck::bytes_of(&header))?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&self.partial, &self.path)?;
+        std::fs::rename(&self.partial.0, &self.path)?;
         Ok(())
     }
 }
@@ -317,6 +342,38 @@ mod tests {
         assert_eq!(&a[..], &(0..1000).collect::<Vec<_>>()[..]);
         assert_eq!(&reader.section::<u64>(B).unwrap()[..], &[1, 2, 3]);
         assert!(!reader.contains(3));
+    }
+
+    fn leftovers(dir: &tempfile::TempDir) -> Vec<PathBuf> {
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "partial"))
+            .collect()
+    }
+
+    #[test]
+    fn no_temporary_file_is_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        write_sample(&dir);
+        let abandoned = SectionWriter::create(&dir.path().join("abandoned.nzidx")).unwrap();
+        drop(abandoned);
+        assert_eq!(leftovers(&dir), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_share_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("same.nzidx");
+        let mut first = SectionWriter::create(&path).unwrap();
+        let mut second = SectionWriter::create(&path).unwrap();
+        first.write(A, &[1u32; 10]).unwrap();
+        second.write(A, &[2u32; 20]).unwrap();
+        second.finish(&FINGERPRINT).unwrap();
+        first.finish(&FINGERPRINT).unwrap();
+        // The last rename wins, and it is a complete file.
+        let reader = SectionReader::open(&path, &FINGERPRINT).unwrap();
+        assert_eq!(&reader.section::<u32>(A).unwrap()[..], &[1; 10]);
     }
 
     #[test]
