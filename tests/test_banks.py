@@ -23,7 +23,7 @@ from typer.testing import CliRunner
 
 from nzcvm import ely_taper
 from nzcvm.models.mesh import StructuredMeshSchema
-from nzcvm.models.surface import Surface
+from nzcvm.models.surface import TRANSFORMER, Surface
 from nzcvm.scripts import banks
 
 runner = CliRunner()
@@ -112,7 +112,7 @@ def query_point(basement_h5: Path) -> tuple[float, float]:
         latitude = np.array(f["latitude"])
     lon_c = float(longitude[len(longitude) // 2])
     lat_c = float(latitude[len(latitude) // 2])
-    x, y = banks.TRANSFORMER.transform(lon_c, lat_c)
+    x, y = TRANSFORMER.transform(lon_c, lat_c)
     return x, y
 
 
