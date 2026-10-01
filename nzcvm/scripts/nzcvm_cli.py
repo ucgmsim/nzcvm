@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import sys
+from enum import StrEnum
 from json import JSONDecodeError
 from pathlib import Path
 from tomllib import TOMLDecodeError
@@ -167,6 +168,11 @@ def num_cores() -> int:
 
 console = Console(stderr=True)
 
+# Built from the registry so plugin formats appear as --format choices.
+OutputFormatChoice = StrEnum(
+    "OutputFormatChoice", {name: name for name in sorted(formats.FORMATS)}
+)
+
 
 app = typer.Typer(help="NZCVM velocity model toolkit.")
 app.add_typer(construct_mesh.app, name="basin")
@@ -180,7 +186,7 @@ app.add_typer(synthetic.app, name="synthetic")
 
 @app.command(name="plugins")
 def list_plugins() -> None:
-    """List the layer and grid types available, and any plugins that failed to load."""
+    """List the available layers, grids and output formats, and any failed plugins."""
     out = Console()
     table = Table("Kind", "Type", "Implementation", "Provider")
     for registered in sorted(
@@ -232,11 +238,12 @@ def generate(
         typer.Option(help="Number of threads to spawn to query the model.", min=1),
     ] = None,
     output_format: Annotated[
-        formats.Format,
+        OutputFormatChoice | None,
         typer.Option(
-            "--format", help="Output format. You can usually leave this as inferred."
+            "--format",
+            help="Output format. Inferred from the output path when not given.",
         ),
-    ] = formats.Format.INFERRED,
+    ] = None,
     config_format: Annotated[
         VelocityModelConfigFormat,
         typer.Option(

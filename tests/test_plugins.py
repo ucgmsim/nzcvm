@@ -50,6 +50,14 @@ PLUGIN_FILES = {
         def build_demo(config: DemoGridConfig):
             return {}
         """,
+    "demo_plugin/format.py": """
+        from nzcvm.formats import register_format
+
+
+        @register_format("demo_format", extensions=(".demo",))
+        def to_demo(velocity_model, path):
+            path.write_text("demo")
+        """,
     "demo_plugin-0.1.dist-info/METADATA": """
         Metadata-Version: 2.1
         Name: demo-plugin
@@ -69,6 +77,9 @@ PLUGIN_FILES = {
         [nzcvm.grid_impls]
         demo = demo_plugin.grid
         broken = demo_plugin.missing
+
+        [nzcvm.formats]
+        demo = demo_plugin.format
         """,
 }
 
@@ -127,6 +138,24 @@ def test_plugin_grid_resolves_from_config(plugin_path: Path) -> None:
     assert result.stdout.strip() == "build_demo"
 
 
+def test_plugin_format_is_inferred_and_written(plugin_path: Path) -> None:
+    result = run_with_plugin(
+        plugin_path,
+        """
+        import tempfile
+        from pathlib import Path
+
+        from nzcvm.formats import from_path, write_velocity_model
+
+        path = Path(tempfile.mkdtemp()) / "model.demo"
+        print(from_path(path))
+        write_velocity_model(None, path, quantise_arrays=False)
+        print(path.read_text())
+        """,
+    )
+    assert result.stdout.split() == ["demo_format", "demo"]
+
+
 def test_broken_plugin_is_recorded_not_raised(plugin_path: Path) -> None:
     result = run_with_plugin(
         plugin_path,
@@ -167,4 +196,11 @@ def test_cli_lists_builtin_and_plugin_types(plugin_path: Path) -> None:
     assert ("grid", "demo_grid", "demo_plugin.grid.build_demo", "demo-plugin 0.1") in (
         rows
     )
+    assert ("format", "zarr", "nzcvm.formats.datatree.to_zarr", "builtin") in rows
+    assert (
+        "format",
+        "demo_format",
+        "demo_plugin.format.to_demo",
+        "demo-plugin 0.1",
+    ) in rows
     assert "broken" in result.stdout

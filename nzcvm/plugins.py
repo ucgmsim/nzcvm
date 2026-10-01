@@ -11,8 +11,11 @@ A plugin package registers its modules under these entry-point groups:
 ``nzcvm.grid_impls``
     Modules registering builders with
     :func:`~nzcvm.grids.builder.build_grids_from_config`.
+``nzcvm.formats``
+    Modules registering output writers with
+    :func:`~nzcvm.formats.register_format`.
 
-Configs and implementations live in separate groups so that parsing a config
+Layer and grid configs and implementations live in separate groups so that parsing a config
 doesn't import the (heavier) runtime half of a plugin.
 
 Examples
@@ -43,8 +46,9 @@ LAYER_CONFIGS = "nzcvm.layer_configs"
 LAYER_IMPLS = "nzcvm.layer_impls"
 GRID_CONFIGS = "nzcvm.grid_configs"
 GRID_IMPLS = "nzcvm.grid_impls"
+FORMATS = "nzcvm.formats"
 
-GROUPS = (LAYER_CONFIGS, LAYER_IMPLS, GRID_CONFIGS, GRID_IMPLS)
+GROUPS = (LAYER_CONFIGS, LAYER_IMPLS, GRID_CONFIGS, GRID_IMPLS, FORMATS)
 
 
 @dataclass
@@ -79,7 +83,7 @@ def load_plugins(group: str) -> None:
 
 @dataclass
 class RegisteredType:
-    """A layer or grid type nzcvm can build, built in or from a plugin."""
+    """A layer, grid or output format nzcvm provides, built in or from a plugin."""
 
     kind: str
     name: str
@@ -113,12 +117,13 @@ def _type_name(config_cls: type) -> str:
 
 
 def registered_types() -> list[RegisteredType]:
-    """List every layer and grid type currently registered.
+    """List every layer, grid and output format currently registered.
 
     Covers built-ins and successfully loaded plugins alike, since both
     register through the same mechanism.
     """
     # Imported here because nzcvm.config imports this module.
+    from nzcvm.formats import FORMATS as OUTPUT_FORMATS
     from nzcvm.grids.builder import build_grids_from_config
     from nzcvm.layers.core import Layer
 
@@ -140,6 +145,15 @@ def registered_types() -> list[RegisteredType]:
         )
         for config_cls, builder in build_grids_from_config.registry.items()
         if config_cls is not object
+    )
+    types.extend(
+        RegisteredType(
+            "format",
+            output_format.name,
+            _qualified_name(output_format.write),
+            _provider(output_format.write),
+        )
+        for output_format in OUTPUT_FORMATS.values()
     )
     return types
 

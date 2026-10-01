@@ -16,6 +16,7 @@ import numpy as np
 
 from nzcvm.components import Component
 from nzcvm.coordinates import Coordinate
+from nzcvm.formats.core import register_format
 from nzcvm.velocity_model import VelocityModel
 
 # Global attributes
@@ -74,6 +75,7 @@ class AsyncHDF5Writer(AbstractContextManager):
         self.thread.join()
 
 
+@register_format("sfile", extensions=(".sfile",))
 def to_sfile(velocity_model: VelocityModel, filename: Path):
 
     # The SW4 file format imposes that outermost axis (the i-axis in this
