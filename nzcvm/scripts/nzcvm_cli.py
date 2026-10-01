@@ -18,9 +18,10 @@ from mashumaro.exceptions import InvalidFieldValue
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 from tqdm.dask import TqdmCallback
 
-from nzcvm import formats, registry
+from nzcvm import formats, plugins, registry
 from nzcvm.config import VelocityModelConfig, VelocityModelConfigFormat
 from nzcvm.layers import pipeline
 from nzcvm.layers.pipeline import execute_model_pipeline
@@ -175,6 +176,40 @@ app.add_typer(tree_stats.app, name="tree-stats")
 app.add_typer(view.app, name="view")
 app.add_typer(convert_tiff.app, name="convert-tiff")
 app.add_typer(synthetic.app, name="synthetic")
+
+
+@app.command(name="plugins")
+def list_plugins() -> None:
+    """List the layer and grid types available, and any plugins that failed to load."""
+    out = Console()
+    table = Table("Kind", "Type", "Implementation", "Provider")
+    for registered in sorted(
+        plugins.registered_types(), key=lambda t: (t.kind, t.provider, t.name)
+    ):
+        table.add_row(
+            registered.kind,
+            registered.name,
+            registered.implementation,
+            registered.provider,
+        )
+    out.print(table)
+
+    failed = plugins.failed_plugins()
+    if failed:
+        failures = Table(
+            "Group", "Name", "Target", "Distribution", "Error", title="Failed plugins"
+        )
+        for status in failed:
+            entry_point = status.entry_point
+            dist = entry_point.dist
+            failures.add_row(
+                entry_point.group,
+                entry_point.name,
+                entry_point.value,
+                f"{dist.name} {dist.version}" if dist else "",
+                f"[red]{status.error!r}[/red]",
+            )
+        out.print(failures)
 
 
 @app.command()

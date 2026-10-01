@@ -19,6 +19,9 @@ Available layers
     Computes signed distance to the coastline and attaches it as a grid coordinate.
 """
 
+from nzcvm import plugins
 from nzcvm.layers import backus, clamp, coastline, ely, offshore, query
+
+plugins.load_plugins(plugins.LAYER_IMPLS)
 
 __all__ = ["backus", "clamp", "coastline", "ely", "offshore", "query"]
