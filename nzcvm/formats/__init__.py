@@ -1,6 +1,6 @@
 """Output format selection and velocity-model serialisation.
 
-:data:`FORMATS` holds every registered output format.  :func:`from_path`
+:data:`FORMATS` maps each registered output format's name to its writer.  :func:`from_path`
 infers a format from a path, and :func:`write_velocity_model` dispatches
 to the appropriate writer.  :func:`register_format` adds a new format; third
 parties can do so from the ``nzcvm.formats`` entry-point group.

@@ -23,10 +23,10 @@ class OutputFormat:
     Attributes
     ----------
     name :
-        Name used to select the format, e.g. with ``--format``.
+        Name that selects the format, as in ``--format``.
     write :
         Called as ``write(velocity_model, path)``, plus
-        ``quantise_arrays=...`` when *supports_quantisation* is set.
+        ``quantise_arrays=...`` when *supports_quantisation* is true.
     extensions :
         Path suffixes (with the leading dot) that infer this format.
     supports_quantisation :
@@ -155,7 +155,7 @@ def write_velocity_model(
     ------
     ValueError
         If *format* isn't registered, or doesn't support quantisation when
-        *quantise_arrays* is set.
+        *quantise_arrays* is true.
     """
     name = format or from_path(path)
     if name not in FORMATS:

@@ -762,7 +762,7 @@ coordinates.
 
 Register a writer with `@register_format`. It receives the populated velocity
 model and the output path. Any `extensions` let `nzcvm generate` infer the
-format from the output path; otherwise select it with `--format`.
+format from the output path. Without them, select the format with `--format`.
 
 ```python
 from pathlib import Path
@@ -783,9 +783,9 @@ keyword for `--quantise`.
 
 ### Plugins
 
-To make custom layers, grids or formats available to `nzcvm generate` without
-importing them yourself, package them and declare entry points. nzcvm imports
-each group as it loads the matching subsystem:
+To make custom layers, grids, or formats available to `nzcvm generate` without
+importing them yourself, declare entry points in the package that provides
+them. NZCVM imports each group as it loads the matching subsystem:
 
 | Entry-point group     | Module contents                                       |
 |-----------------------|-------------------------------------------------------|
@@ -807,7 +807,7 @@ depth_floor = "nzcvm_depth_floor.layer"
 Configs and implementations load separately, so reading a config doesn't
 import a plugin's runtime dependencies. A `@functional_layer` module defines
 both at once, so list it only under `nzcvm.layer_impls`. Its configs then
-decode once `nzcvm.layers` is imported, which `nzcvm generate` always does. A plugin that fails to import logs a
-warning rather than breaking nzcvm. `nzcvm plugins` lists every available
-layer, grid and format, which package provides it, and any plugin that failed
-to load.
+decode once something imports `nzcvm.layers`, which `nzcvm generate` always
+does. A plugin that fails to import logs a warning rather than breaking NZCVM.
+`nzcvm plugins` lists every available layer, grid, and format, which package
+provides it, and any plugin that failed to load.

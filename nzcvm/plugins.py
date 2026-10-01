@@ -66,8 +66,8 @@ LOADED: dict[str, list[PluginStatus]] = {}
 def load_plugins(group: str) -> None:
     """Import every entry point in *group*, logging (not raising) failures.
 
-    A broken plugin shouldn't stop ``nzcvm`` itself from importing, so errors
-    are recorded in :data:`LOADED` and logged instead.
+    A broken plugin shouldn't stop ``nzcvm`` itself from importing. Instead,
+    this logs each error and records it in :data:`LOADED`.
     """
     statuses = LOADED.setdefault(group, [])
     for entry_point in entry_points(group=group):
@@ -117,7 +117,7 @@ def _type_name(config_cls: type) -> str:
 
 
 def registered_types() -> list[RegisteredType]:
-    """List every layer, grid and output format currently registered.
+    """List every registered layer, grid, and output format.
 
     Covers built-ins and successfully loaded plugins alike, since both
     register through the same mechanism.

@@ -1,7 +1,7 @@
 """Tests for third-party layer and grid discovery through entry points.
 
-Plugins load when nzcvm is first imported, so each test runs in a fresh
-interpreter with a fake plugin distribution on ``PYTHONPATH``.
+Plugins load when Python first imports nzcvm. Each test runs in a
+fresh interpreter with a fake plugin distribution on ``PYTHONPATH``.
 """
 
 import os
