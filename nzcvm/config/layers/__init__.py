@@ -1,5 +1,6 @@
 import importlib
 import pkgutil
+from importlib.metadata import entry_points
 
 from .core import LayerConfig
 
@@ -13,6 +14,9 @@ def register_layer_config():
 
 
 register_layer_config()
+
+for entry_point in entry_points(group="nzcvm.layers"):
+    entry_point.load()
 
 
 __all__ = ["LayerConfig"]
