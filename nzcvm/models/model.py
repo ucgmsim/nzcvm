@@ -29,6 +29,7 @@ from rich.tree import Tree
 
 from nzcvm import nzcvm, registry  # ty: ignore[unresolved-import]
 from nzcvm.components import Component
+from nzcvm.models import index
 from nzcvm.models.mesh import TetrahedralMesh, TetrahedralMeshSchema
 from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
     PyModelTree,
@@ -186,9 +187,42 @@ class MeshModel:
 
     @classmethod
     def from_path(cls, path: Path) -> Self:
-        mesh_dataset = TetrahedralMeshSchema.from_dataset(xr.load_dataset(path))
+        """Load the mesh at *path*, mapping its compiled index when there is one.
 
+        A current index (see :mod:`nzcvm.models.index` and
+        :meth:`compile_index`) turns the load into a header read and an
+        ``mmap``. Without one, or with one built from an older version of the
+        mesh, the loader reads the mesh and builds its BVH in memory as before.
+        """
+        mapped = index.open_index(path)
+        return cls(mapped) if mapped is not None else cls._build(path)
+
+    @classmethod
+    def _build(cls, path: Path) -> Self:
+        mesh_dataset = TetrahedralMeshSchema.from_dataset(xr.load_dataset(path))
         return cls(_mesh_model_from_tetra(mesh_dataset))
+
+    @classmethod
+    def compile_index(cls, path: Path, force: bool = False) -> bool:
+        """Build the mesh at *path* and write its index beside it.
+
+        Parameters
+        ----------
+        path :
+            The mesh to compile.
+        force :
+            Rewrite an index whose fingerprint still matches the mesh.
+
+        Returns
+        -------
+        bool
+            Whether this call wrote the index. ``False`` means it was current.
+        """
+        digest = index.fingerprint(path)
+        if not force and index.open_index(path, digest) is not None:
+            return False
+        cls._build(path)._raw.write_index(index.index_path(path), digest)
+        return True
 
     @classmethod
     def from_mesh(

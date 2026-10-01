@@ -44,4 +44,4 @@ fault_z = 100.0
 [[layers]]
 type = "query"
 model_path = "./models"
-model_globs = ["ep2020.vtkhdf"]
+model_globs = ["ep2020.zarr"]

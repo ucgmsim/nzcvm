@@ -2,6 +2,7 @@ pub mod blend;
 pub mod coastline;
 pub mod compact_bvh;
 pub mod grid;
+pub mod index;
 pub mod mesh;
 pub mod model;
 pub mod model_tree;
@@ -9,6 +10,7 @@ pub mod quality;
 pub mod query;
 pub mod real;
 pub mod simplex;
+pub mod slab;
 pub mod surface;
 mod tree_query;
 pub mod triangle;
@@ -18,6 +20,7 @@ use pyo3::prelude::*;
 mod nzcvm {
     use crate::coastline::{Coastline, Segment};
     use crate::grid::StructuredGrid;
+    use crate::index::{FINGERPRINT_LEN, Fingerprint, IndexError};
     use crate::mesh::{MeshModel, MeshModelError};
     use crate::model::{ConstantModel, InterpolateModel, Model};
     use crate::model_tree::ModelTree;
@@ -25,6 +28,7 @@ mod nzcvm {
     use crate::query::Query;
     use crate::real::Real;
     use crate::surface::SurfaceModel;
+    use std::path::PathBuf;
 
     use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
     use ndarray::{Array1, Array2, Axis, array, azip};
@@ -32,9 +36,43 @@ mod nzcvm {
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
         PyReadonlyArray3, PyReadwriteArray2, PyUntypedArrayMethods,
     };
-    use pyo3::exceptions::PyValueError;
+    use pyo3::exceptions::{PyIOError, PyValueError};
     use pyo3::prelude::*;
     use pythonize::pythonize;
+
+    fn index_error(e: IndexError) -> PyErr {
+        match e {
+            IndexError::Io(e) => PyIOError::new_err(e.to_string()),
+            other => PyValueError::new_err(other.to_string()),
+        }
+    }
+
+    fn fingerprint_array(bytes: &[u8]) -> PyResult<Fingerprint> {
+        bytes.try_into().map_err(|_| {
+            PyValueError::new_err(format!(
+                "fingerprint must be {FINGERPRINT_LEN} bytes, got {}",
+                bytes.len()
+            ))
+        })
+    }
+
+    /// Open a compiled index as a memory-mapped mesh model.
+    ///
+    /// The header is read and checked, including that the index was built
+    /// from the mesh the 32-byte `fingerprint` describes; the record sections
+    /// are mapped and paged in as queries touch them.
+    #[pyfunction]
+    pub fn mesh_model_open(
+        py: Python<'_>,
+        path: PathBuf,
+        fingerprint: &[u8],
+    ) -> PyResult<PyMeshModel> {
+        let fingerprint = fingerprint_array(fingerprint)?;
+        let model = py
+            .detach(|| MeshModel::open_index(&path, &fingerprint))
+            .map_err(index_error)?;
+        Ok(PyMeshModel { inner: Some(model) })
+    }
 
     /// Coordinate arrays and optional boolean mask for a vectorised query.
     ///
@@ -264,8 +302,34 @@ mod nzcvm {
         })
     }
 
+    impl PyMeshModel {
+        /// The wrapped model, or the error every method raises once
+        /// `model_tree()` has moved it out.
+        fn model(&self) -> PyResult<&MeshModel> {
+            self.inner
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("MeshModel has been consumed by model_tree()"))
+        }
+    }
+
     #[pymethods]
     impl PyMeshModel {
+        /// Write this model as a compiled index at `path`.
+        ///
+        /// `fingerprint` is the caller's 32-byte summary of the source mesh;
+        /// opening the index later requires the same one.
+        pub fn write_index(
+            &self,
+            py: Python<'_>,
+            path: PathBuf,
+            fingerprint: &[u8],
+        ) -> PyResult<()> {
+            let inner = self.model()?;
+            let fingerprint = fingerprint_array(fingerprint)?;
+            py.detach(|| inner.write_index(&fingerprint, &path))
+                .map_err(index_error)
+        }
+
         /// Query the mesh model at a single point.
         ///
         /// Returns a dict with keys `rho`, `vp`, `vs`, `qp`, `qs`, `alpha`,
@@ -281,9 +345,7 @@ mod nzcvm {
             y: Real,
             z: Real,
         ) -> PyResult<Option<Bound<'py, PyAny>>> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             let pt = Point3::new(x, y, z);
             inner
                 .query(pt)
@@ -303,9 +365,7 @@ mod nzcvm {
             &self,
             py: Python<'py>,
         ) -> PyResult<(Bound<'py, PyArray1<Real>>, Bound<'py, PyArray1<Real>>)> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             let b = inner.aabb3();
             let min = array![b.min.x, b.min.y, b.min.z];
             let max = array![b.max.x, b.max.y, b.max.z];
@@ -319,9 +379,7 @@ mod nzcvm {
         /// Returns `ValueError` if the model has been consumed by `model_tree()`.
         #[getter]
         pub fn name(&self) -> PyResult<String> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             Ok(inner.name.clone())
         }
 
@@ -332,9 +390,7 @@ mod nzcvm {
         /// Returns `ValueError` if the model has been consumed by `model_tree()`.
         #[getter]
         pub fn priority(&self) -> PyResult<u8> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             Ok(inner.priority)
         }
 
@@ -344,9 +400,7 @@ mod nzcvm {
         ///
         /// Returns `ValueError` if the model has been consumed by `model_tree()`.
         pub fn view<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            let inner = self.inner.as_ref().ok_or_else(|| {
-                PyValueError::new_err("MeshModel has been consumed by model_tree()")
-            })?;
+            let inner = self.model()?;
             pythonize(py, &inner.view()).map_err(|e| e.into())
         }
     }
@@ -821,6 +875,7 @@ mod nzcvm {
         m.add_class::<QueryParams>()?;
         m.add_class::<QueryCoordinates>()?;
         m.add_function(wrap_pyfunction!(mesh_model, m)?)?;
+        m.add_function(wrap_pyfunction!(mesh_model_open, m)?)?;
         m.add_function(wrap_pyfunction!(surface_model, m)?)?;
         m.add_function(wrap_pyfunction!(coastline, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;

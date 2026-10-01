@@ -13,10 +13,12 @@ high_precision = []
 [dependencies]
 approx = "0.5.1"
 bitfield-struct = "0.13.0"
+bytemuck = { version = "1", features = ["derive"] }
 bvh = { version = "0.12.0" }
 deepsize = "0.2.0"
 enum_dispatch = "0.3.13"
-nalgebra = "0.34.0"
+memmap2 = "0.9"
+nalgebra = { version = "0.34.0", features = ["convert-bytemuck"] }
 ndarray = "0.17.2"
 numpy = "0.29.0"
 pyo3 = { version = "0.29.0", features = ["serde"] }
@@ -29,6 +31,7 @@ smallvec = "1.15.2"
 [dev-dependencies]
 approx = "0.5.1"
 proptest = "1"
+tempfile = "3"
 criterion = { version = "=0.5.1", features = ["html_reports"] }
 pprof = { version = "0.15.0", features = ["flamegraph", "criterion"] }
 

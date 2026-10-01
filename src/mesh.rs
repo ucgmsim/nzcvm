@@ -1,15 +1,18 @@
 use crate::compact_bvh::CompactBvh;
+use crate::index::{Fingerprint, IndexError, SectionReader, SectionWriter};
 use crate::model::*;
 use crate::quality::Quality;
 use crate::real::Real;
 use crate::simplex::{BuildSimplex, Simplex};
+use crate::slab::Slab;
 use crate::tree_query::Contains;
 use deepsize::{Context, DeepSizeOf};
+use std::path::Path;
 
 use bvh::aabb::{Aabb, Bounded};
 use bvh::bounding_hierarchy::{BHShape, BoundingHierarchy};
 use bvh::bvh::Bvh;
-use nalgebra::{Affine3, Point, Point3, Point4, Vector3};
+use nalgebra::{Affine3, Matrix4, Point, Point3, Point4, Vector3};
 use serde::Serialize;
 
 /// Default priority for models that do not specify one explicitly.
@@ -46,9 +49,9 @@ pub struct MeshModelView {
 /// visit scans adjacent entries of `simplices`.
 pub struct MeshModel {
     bvh_tree: CompactBvh,
-    simplices: Vec<Simplex>,
+    simplices: Slab<Simplex>,
     model_map: ModelMap,
-    qualities: Vec<Quality>,
+    qualities: Slab<Quality>,
     aabb: Aabb<Real, 3>,
     transform: Option<Affine3<Real>>,
     pub priority: u8,
@@ -62,6 +65,38 @@ pub struct MeshModel {
 
 pub enum MeshModelError {
     DegenerateSimplex,
+}
+
+/// Section tags of a mesh index file.
+mod tag {
+    pub const HEADER: u32 = 1;
+    pub const NAME: u32 = 2;
+    pub const NODES: u32 = 3;
+    pub const SIMPLICES: u32 = 4;
+    /// A [`ModelMap::Refs`](super::ModelMap::Refs) map.
+    pub const REFS: u32 = 5;
+    /// A [`ModelMap::Constant`](super::ModelMap::Constant) map.
+    pub const CONSTANT: u32 = 6;
+    pub const QUALITIES: u32 = 7;
+}
+
+/// The scalar fields of a [`MeshModel`], stored in an index as a one-record
+/// section.
+///
+/// Fields are ordered widest first so that the `repr(C)` layout has no
+/// padding whichever width `Real` has.
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MeshHeader {
+    aabb_min: Point3<Real>,
+    aabb_max: Point3<Real>,
+    /// Meaningful only when `has_transform` is set.
+    transform: Matrix4<Real>,
+    has_transform: u32,
+    has_root: u32,
+    /// The packed BVH root slot; meaningful only when `has_root` is set.
+    root: u32,
+    priority: u32,
 }
 
 impl DeepSizeOf for MeshModel {
@@ -215,12 +250,12 @@ impl MeshModel {
             .iter()
             .map(|&i| build_simplices[i as usize].simplex)
             .collect();
-        let model_map = ModelMap::from_models(models).reorder(&order);
+        let model_map = ModelMap::from_models(&models, &order);
 
         Ok(Self {
             bvh_tree,
-            simplices,
-            qualities,
+            simplices: simplices.into(),
+            qualities: qualities.into(),
             aabb,
             model_map,
             priority,
@@ -228,6 +263,79 @@ impl MeshModel {
             id: 0,
             node_index: 0,
             transform,
+        })
+    }
+
+    /// Write this model as a compiled index at `path`.
+    ///
+    /// `fingerprint` is the caller's summary of the source mesh; opening the
+    /// index later requires the same one.
+    pub fn write_index(&self, fingerprint: &Fingerprint, path: &Path) -> Result<(), IndexError> {
+        let (nodes, root) = self.bvh_tree.raw();
+        let header = MeshHeader {
+            aabb_min: self.aabb.min,
+            aabb_max: self.aabb.max,
+            transform: self
+                .transform
+                .map_or(Matrix4::zeros(), |t| t.to_homogeneous()),
+            has_transform: self.transform.is_some().into(),
+            has_root: root.is_some().into(),
+            root: root.unwrap_or(0),
+            priority: self.priority.into(),
+        };
+        let mut writer = SectionWriter::create(path)?;
+        writer.write(tag::HEADER, &[header])?;
+        writer.write(tag::NAME, self.name.as_bytes())?;
+        writer.write(tag::NODES, nodes)?;
+        writer.write(tag::SIMPLICES, &self.simplices)?;
+        match &self.model_map {
+            ModelMap::Refs(v) => writer.write(tag::REFS, v)?,
+            ModelMap::Constant(v) => writer.write(tag::CONSTANT, v)?,
+        }
+        writer.write(tag::QUALITIES, &self.qualities)?;
+        writer.finish(fingerprint)
+    }
+
+    /// Open the compiled index at `path` as a memory-mapped model, if it was
+    /// built from the mesh `fingerprint` describes.
+    pub fn open_index(path: &Path, fingerprint: &Fingerprint) -> Result<Self, IndexError> {
+        let reader = SectionReader::open(path, fingerprint)?;
+        let header = *reader
+            .section::<MeshHeader>(tag::HEADER)?
+            .first()
+            .ok_or(IndexError::Corrupt("missing mesh header"))?;
+        let name = String::from_utf8(reader.section::<u8>(tag::NAME)?.to_vec())
+            .map_err(|_| IndexError::Corrupt("name is not UTF-8"))?;
+        let priority = u8::try_from(header.priority)
+            .map_err(|_| IndexError::Corrupt("priority does not fit a byte"))?;
+        let simplices: Slab<Simplex> = reader.section(tag::SIMPLICES)?;
+        let model_map = if reader.contains(tag::CONSTANT) {
+            ModelMap::Constant(reader.section(tag::CONSTANT)?)
+        } else {
+            ModelMap::Refs(reader.section(tag::REFS)?)
+        };
+        if model_map.len() != simplices.len() {
+            return Err(IndexError::Corrupt(
+                "model map and simplices differ in length",
+            ));
+        }
+        Ok(Self {
+            bvh_tree: CompactBvh::from_raw(
+                reader.section(tag::NODES)?,
+                (header.has_root != 0).then_some(header.root),
+                simplices.len(),
+            )
+            .ok_or(IndexError::Corrupt("BVH root lies outside the tree"))?,
+            simplices,
+            qualities: reader.section(tag::QUALITIES)?,
+            aabb: Aabb::with_bounds(header.aabb_min, header.aabb_max),
+            model_map,
+            priority,
+            name,
+            id: 0,
+            node_index: 0,
+            transform: (header.has_transform != 0)
+                .then(|| Affine3::from_matrix_unchecked(header.transform)),
         })
     }
 
@@ -724,6 +832,168 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    // -- Index round trips ---------------------------------------------------
+
+    const FINGERPRINT: Fingerprint = [3; crate::index::FINGERPRINT_LEN];
+
+    /// A 3x3x3 curvilinear mesh with a quality field that varies by vertex.
+    fn cube_mesh() -> MeshModel {
+        let n = 3usize;
+        let vertices = generate_grid(n, n, n);
+        let qualities = vertices
+            .iter()
+            .map(|p| mock_quality(p.x + 2.0 * p.y + 3.0 * p.z))
+            .collect();
+        MeshModel::curvilinear_mesh(vertices, qualities, (n, n, n), |i, j, k| {
+            k * n * n + j * n + i
+        })
+        .ok()
+        .expect("cube mesh")
+    }
+
+    fn round_trip(model: &MeshModel) -> (tempfile::TempDir, MeshModel) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mesh.nzidx");
+        model.write_index(&FINGERPRINT, &path).unwrap();
+        let opened = MeshModel::open_index(&path, &FINGERPRINT).unwrap();
+        assert!(opened.simplices.is_mapped());
+        (dir, opened)
+    }
+
+    #[test]
+    fn a_mapped_model_answers_like_the_built_one() {
+        let built = cube_mesh();
+        let (_dir, mapped) = round_trip(&built);
+        for &(x, y, z) in &[
+            (0.1, 0.2, 0.3),
+            (1.0, 1.0, 1.0),
+            (1.9, 0.1, 1.7),
+            (2.5, 0.5, 0.5),
+        ] {
+            let p = Point3::new(x, y, z);
+            assert_eq!(built.query(p), mapped.query(p), "at {p}");
+        }
+    }
+
+    #[test]
+    fn the_index_round_trips_the_metadata() {
+        use nalgebra::Translation3;
+        let transform: Affine3<Real> = Affine3::from_matrix_unchecked(
+            Translation3::new(-5.0 as Real, 0.0, 0.0).to_homogeneous(),
+        );
+        let faces = vec![Point4::new(0usize, 1, 2, 3)];
+        let built = MeshModel::new(
+            unit_tetrahedron_universe(),
+            faces.clone(),
+            interpolate_all(&faces),
+            vec![mock_quality(1.0); 4],
+            7,
+            Some(transform),
+            "named".into(),
+        )
+        .ok()
+        .expect("non-degenerate");
+        let (_dir, opened) = round_trip(&built);
+        assert_eq!(opened.name, built.name);
+        assert_eq!(opened.priority, built.priority);
+        assert_eq!(opened.transform, built.transform);
+        assert_eq!(opened.aabb3().min, built.aabb3().min);
+        assert_eq!(opened.aabb3().max, built.aabb3().max);
+    }
+
+    #[test]
+    fn a_mixed_model_map_round_trips() {
+        // Two tetrahedra sharing a face, one constant and one interpolating.
+        let vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        let faces = vec![Point4::new(0usize, 1, 2, 3), Point4::new(1usize, 2, 3, 4)];
+        let qualities: Vec<Quality> = [1.0, 2.0, 3.0, 4.0, 5.0, 99.0]
+            .into_iter()
+            .map(mock_quality)
+            .collect();
+        let models = vec![
+            Model::from(ConstantModel { quality: 5 }),
+            Model::from(InterpolateModel {
+                qualities: Point4::new(1, 2, 3, 4),
+            }),
+        ];
+        let built = MeshModel::new(vertices, faces, models, qualities, 7, None, "mixed".into())
+            .ok()
+            .expect("non-degenerate");
+        let (_dir, mapped) = round_trip(&built);
+        for &(x, y, z) in &[(0.1, 0.1, 0.1), (0.6, 0.6, 0.6)] {
+            let p = Point3::new(x, y, z);
+            assert_eq!(built.query(p), mapped.query(p), "at {p}");
+        }
+    }
+
+    #[test]
+    fn a_constant_model_map_round_trips() {
+        let built = MeshModel::new(
+            unit_tetrahedron_universe(),
+            vec![Point4::new(0usize, 1, 2, 3)],
+            vec![Model::from(ConstantModel { quality: 0 })],
+            vec![mock_quality(42.0)],
+            0,
+            None,
+            String::new(),
+        )
+        .ok()
+        .expect("non-degenerate");
+        let (_dir, mapped) = round_trip(&built);
+        assert!(matches!(mapped.model_map, ModelMap::Constant(_)));
+        let p = Point3::new(0.2, 0.1, 0.1);
+        assert_eq!(built.query(p), mapped.query(p));
+    }
+
+    #[test]
+    fn a_root_outside_the_tree_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mesh.nzidx");
+        cube_mesh().write_index(&FINGERPRINT, &path).unwrap();
+        // The mesh header is the first section, on the page after the file
+        // header. Point its root at a node that does not exist.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let start = crate::index::SECTION_ALIGN;
+        let header: &mut MeshHeader =
+            bytemuck::from_bytes_mut(&mut bytes[start..start + size_of::<MeshHeader>()]);
+        header.root = 1_000_000;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(
+            MeshModel::open_index(&path, &FINGERPRINT),
+            Err(IndexError::Corrupt(_))
+        ));
+    }
+
+    #[test]
+    fn an_empty_model_round_trips() {
+        let built = MeshModel::new(vec![], vec![], vec![], vec![], 1, None, "empty".into())
+            .ok()
+            .expect("empty mesh builds");
+        let (_dir, mapped) = round_trip(&built);
+        assert!(mapped.query(Point3::new(0.0, 0.0, 0.0)).is_none());
+    }
+
+    proptest::proptest! {
+        /// Built and mapped agree everywhere in and around the cube.
+        #[test]
+        fn prop_mapped_agrees_with_built(
+            x in (-0.5 as Real)..2.5,
+            y in (-0.5 as Real)..2.5,
+            z in (-0.5 as Real)..2.5,
+        ) {
+            let built = cube_mesh();
+            let (_dir, mapped) = round_trip(&built);
+            let p = Point3::new(x, y, z);
+            proptest::prop_assert_eq!(built.query(p), mapped.query(p), "at {}", p);
         }
     }
 }

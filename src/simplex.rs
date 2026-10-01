@@ -38,7 +38,8 @@ const CONTAINMENT_EPS: Real = 1e-4;
 /// needed only while *building* the BVH (AABB, node bookkeeping) lives in
 /// [`BuildSimplex`] and is discarded after construction.  A simplex is
 /// identified by its position in the mesh's simplex array.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 pub struct Simplex {
     pub c3: Point3<Real>,
     inv_matrix: Matrix3<Real>,

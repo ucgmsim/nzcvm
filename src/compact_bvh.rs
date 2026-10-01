@@ -24,6 +24,7 @@ use smallvec::SmallVec;
 
 use crate::real::Real;
 use crate::simplex::Simplex;
+use crate::slab::Slab;
 
 /// Maximum number of simplices collapsed into a single leaf.
 ///
@@ -64,6 +65,7 @@ enum Child {
 /// The layout is declared rather than hand-shifted; [`ChildSlot::unpack`]
 /// recovers a [`Child`] on the stack and the optimiser folds it away.
 #[bitfield(u32)]
+#[derive(bytemuck::Pod, bytemuck::Zeroable)]
 struct ChildSlot {
     /// Node index, or the first simplex of a leaf.  29 bits limits a single
     /// mesh to 2^29 (~537 M) simplices.
@@ -109,32 +111,61 @@ impl ChildSlot {
 }
 
 /// One child of an internal node: its bounding box and where it lives.
-#[derive(Clone, Copy)]
+///
+/// The corners are stored as points rather than an `Aabb` because this record
+/// is also the on-disk format, and `Aabb` is not plain old data.
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
 struct ChildRef {
-    aabb: Aabb<Real, 3>,
+    min: Point3<Real>,
+    max: Point3<Real>,
     slot: ChildSlot,
+    /// With `Real = f64` the record would otherwise end on a 4-byte field
+    /// and pick up tail padding, which a plain-old-data record cannot have.
+    #[cfg(feature = "high_precision")]
+    _pad: u32,
+}
+
+impl ChildRef {
+    fn new(aabb: Aabb<Real, 3>, slot: ChildSlot) -> Self {
+        Self {
+            min: aabb.min,
+            max: aabb.max,
+            slot,
+            #[cfg(feature = "high_precision")]
+            _pad: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn aabb(&self) -> Aabb<Real, 3> {
+        Aabb::with_bounds(self.min, self.max)
+    }
 }
 
 /// One internal node: both of its children.
-#[derive(Clone, Copy)]
-struct CompactNode {
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub(crate) struct CompactNode {
     left: ChildRef,
     right: ChildRef,
 }
 
 #[cfg(not(feature = "high_precision"))]
 const _: () = assert!(std::mem::size_of::<CompactNode>() == 56);
+#[cfg(feature = "high_precision")]
+const _: () = assert!(std::mem::size_of::<CompactNode>() == 112);
 
 pub struct CompactBvh {
-    nodes: Vec<CompactNode>,
+    nodes: Slab<CompactNode>,
     /// The root child slot (a leaf for meshes of ≤ `MAX_LEAF_SIZE`
     /// simplices), or `None` for an empty mesh.
     root: Option<ChildSlot>,
 }
 
 impl DeepSizeOf for CompactBvh {
-    fn deep_size_of_children(&self, _context: &mut Context) -> usize {
-        self.nodes.capacity() * std::mem::size_of::<CompactNode>()
+    fn deep_size_of_children(&self, context: &mut Context) -> usize {
+        self.nodes.deep_size_of_children(context)
     }
 }
 
@@ -188,7 +219,7 @@ impl CompactBvh {
         if num_shapes == 0 {
             return (
                 Self {
-                    nodes: Vec::new(),
+                    nodes: Vec::new().into(),
                     root: None,
                 },
                 Vec::new(),
@@ -230,14 +261,8 @@ impl CompactBvh {
             let index = nodes.len() as u32;
             let placeholder = ChildSlot::node(0);
             nodes.push(CompactNode {
-                left: ChildRef {
-                    aabb: child_l_aabb,
-                    slot: placeholder,
-                },
-                right: ChildRef {
-                    aabb: child_r_aabb,
-                    slot: placeholder,
-                },
+                left: ChildRef::new(child_l_aabb, placeholder),
+                right: ChildRef::new(child_r_aabb, placeholder),
             });
             let left = emit(src, counts, nodes, order, child_l_index);
             let right = emit(src, counts, nodes, order, child_r_index);
@@ -250,11 +275,37 @@ impl CompactBvh {
         nodes.shrink_to_fit();
         (
             Self {
-                nodes,
+                nodes: nodes.into(),
                 root: Some(root),
             },
             order,
         )
+    }
+
+    /// The node records and the packed root slot, for storing the tree.
+    pub(crate) fn raw(&self) -> (&[CompactNode], Option<u32>) {
+        (&self.nodes, self.root.map(ChildSlot::into_bits))
+    }
+
+    /// Rebuild a tree over `simplices` simplices from the parts
+    /// [`CompactBvh::raw`] returned, or `None` if the root points outside
+    /// them.
+    ///
+    /// Only the root is checked: checking every node would read the whole
+    /// section, and the point of a mapped tree is to read only what queries
+    /// touch.
+    pub(crate) fn from_raw(
+        nodes: Slab<CompactNode>,
+        root: Option<u32>,
+        simplices: usize,
+    ) -> Option<Self> {
+        let root = root.map(ChildSlot::from_bits);
+        let in_bounds = match root.map(ChildSlot::unpack) {
+            None => true,
+            Some(Child::Node(index)) => (index as usize) < nodes.len(),
+            Some(Child::Leaf(range)) => range.end() as usize <= simplices,
+        };
+        in_bounds.then_some(Self { nodes, root })
     }
 
     /// Iterator over the indices of all simplices that contain `point`.
@@ -322,10 +373,10 @@ impl Iterator for ContainingIndices<'_> {
                 }
                 Child::Node(index) => {
                     let node = &self.nodes[index as usize];
-                    if node.left.aabb.contains(&self.point) {
+                    if node.left.aabb().contains(&self.point) {
                         self.stack.push(node.left.slot);
                     }
-                    if node.right.aabb.contains(&self.point) {
+                    if node.right.aabb().contains(&self.point) {
                         self.stack.push(node.right.slot);
                     }
                 }

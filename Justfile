@@ -176,9 +176,16 @@ surface := "uv run --extra raster nzcvm convert-tiff main"
 ep2020:
     @test -f models/ep2020.zarr || {{ tomography }} ep2020.csv models/ep2020.zarr
 
-models: ep2020 basins
+# Compile every mesh's BVH once, so a run maps it instead of rebuilding it.
+index:
+    uv run nzcvm index build models/*.zarr
+
+models: ep2020 basins index
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py
-    zip -r models.zip models
+    # Indexes are left out: their fingerprints include mtimes, which unzipping
+    # changes, so a shipped index would never match. Run `just index` after
+    # unpacking.
+    zip -r models.zip models -x "*.nzidx"
 
 vs30:
     @test -f resources/vs30.zarr || {{ surface }} ${VS30_TIFF} 1 resources/vs30.zarr --downsample 3 
@@ -219,7 +226,7 @@ synthetic_cli := "uv run nzcvm synthetic"
 convert_surface := "uv run nzcvm surface convert"
 
 # Every input `examples/synthetic.toml` reads.
-synthetic: synthetic_dem synthetic_vs30 synthetic_coastline synthetic_models
+synthetic: synthetic_dem synthetic_vs30 synthetic_coastline synthetic_models synthetic_index
 
 synthetic_dem:
     {{ synthetic_cli }} dem {{ synthetic_root }}/dem.h5
@@ -245,6 +252,9 @@ synthetic_basins: synthetic_dem
     done
 
 synthetic_models: synthetic_tomography synthetic_basins
+
+synthetic_index: synthetic_models
+    uv run nzcvm index build {{ synthetic_root }}/models/*.zarr
 
 clean_synthetic:
     rm -rf {{ synthetic_root }}

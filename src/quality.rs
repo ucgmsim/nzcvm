@@ -7,7 +7,10 @@ use serde::Serialize;
 ///
 /// `alpha` is the opacity weight used when blending overlapping models;
 /// it follows the Porter-Duff "over" compositing rule in [`Quality::blend`].
-#[derive(Clone, Debug, Copy, PartialEq, DeepSizeOf, Serialize)]
+#[derive(
+    Clone, Debug, Copy, PartialEq, DeepSizeOf, Serialize, bytemuck::Pod, bytemuck::Zeroable,
+)]
+#[repr(C)]
 pub struct Quality {
     pub rho: Real,
     pub vp: Real,

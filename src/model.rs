@@ -1,29 +1,28 @@
 use crate::quality::{Quality, barycentric_interpolate};
 use crate::real::Real;
 use crate::simplex::Simplex;
+use crate::slab::Slab;
 use deepsize::{Context, DeepSizeOf};
-use enum_dispatch::enum_dispatch;
 use nalgebra::{Point3, Point4};
 
-/// A type that can report the seismic quality at a point inside a simplex.
-#[enum_dispatch]
-pub trait Queryable {
-    /// Return the quality at `point` inside `simplex`, looking up vertex
-    /// properties from the qualities slice.
-    fn quality_at(&self, qualities: &[Quality], simplex: &Simplex, point: &Point3<Real>)
-    -> Quality;
-}
-
-/// Per-simplex model variant: either constant or barycentric interpolation.
-#[enum_dispatch(Queryable)]
+/// How one simplex reports its quality, as supplied when a mesh is built.
+///
+/// A [`ModelMap`] stores these compactly; this enum only exists to describe
+/// a mesh on the way in.
 pub enum Model {
     Constant(ConstantModel),
     Interpolate(InterpolateModel),
 }
 
-impl DeepSizeOf for Model {
-    fn deep_size_of_children(&self, _context: &mut Context) -> usize {
-        0
+impl From<ConstantModel> for Model {
+    fn from(m: ConstantModel) -> Self {
+        Model::Constant(m)
+    }
+}
+
+impl From<InterpolateModel> for Model {
+    fn from(m: InterpolateModel) -> Self {
+        Model::Interpolate(m)
     }
 }
 
@@ -31,17 +30,6 @@ impl DeepSizeOf for Model {
 pub struct ConstantModel {
     /// Index into the qualities array.
     pub quality: u32,
-}
-
-impl Queryable for ConstantModel {
-    fn quality_at(
-        &self,
-        qualities: &[Quality],
-        _simplex: &Simplex,
-        _point: &Point3<Real>,
-    ) -> Quality {
-        qualities[self.quality as usize]
-    }
 }
 
 /// Model that interpolates quality using barycentric coordinates within the simplex.
@@ -65,89 +53,65 @@ fn interpolate_quality(
     barycentric_interpolate([q0, q1, q2, q3], [bary.w, bary.x, bary.y, bary.z])
 }
 
-impl Queryable for InterpolateModel {
-    fn quality_at(
-        &self,
-        qualities: &[Quality],
-        simplex: &Simplex,
-        point: &Point3<Real>,
-    ) -> Quality {
-        interpolate_quality(&self.qualities, qualities, simplex, point)
-    }
-}
-
 /// Per-mesh map from simplex index to its model.
 ///
-/// Meshes are almost always homogeneous (basins are all-interpolate), so the
-/// common cases store just the quality indices in a flat array — 16 bytes per
-/// simplex for interpolation, 4 for constant — instead of a `Vec<Model>` that
-/// pays an enum tag per element.  Heterogeneous meshes fall back to `Mixed`.
+/// Stores just the quality indices in a flat array instead of a `Vec<Model>`
+/// that pays an enum tag per element: four per simplex, or one when every
+/// simplex is constant.  A constant simplex among interpolating ones is
+/// marked with [`NO_INTERPOLATION`] in the second slot.
+///
+/// Both variants are [`Slab`]s so that the map can be memory-mapped from an
+/// index file as readily as built in memory.
 pub enum ModelMap {
-    Interpolate(Vec<Point4<u32>>),
-    Constant(Vec<u32>),
-    Mixed(Vec<Model>),
+    Refs(Slab<Point4<u32>>),
+    Constant(Slab<u32>),
 }
 
+/// Marks a constant simplex in a [`ModelMap::Refs`] map.
+///
+/// Sits in the second index slot, where an interpolating simplex has a
+/// vertex index.  A mesh holds at most `u32::MAX` qualities, so no vertex
+/// index is ever this value.
+pub const NO_INTERPOLATION: u32 = u32::MAX;
+
 impl ModelMap {
-    /// Build a map from a list of per-simplex models, collapsing to a
-    /// homogeneous representation when possible.
-    pub fn from_models(models: Vec<Model>) -> Self {
-        if models.iter().all(|m| matches!(m, Model::Interpolate(_))) {
-            ModelMap::Interpolate(
-                models
-                    .into_iter()
-                    .map(|m| match m {
-                        Model::Interpolate(im) => im.qualities,
-                        Model::Constant(_) => unreachable!(),
-                    })
-                    .collect(),
-            )
-        } else if models.iter().all(|m| matches!(m, Model::Constant(_))) {
+    /// Build a map from a list of per-simplex models, gathered into `order`:
+    /// entry `i` of the map is `models[order[i]]`.  Used to match the BVH's
+    /// leaf ordering.
+    pub fn from_models(models: &[Model], order: &[u32]) -> Self {
+        let ordered = order.iter().map(|&i| &models[i as usize]);
+        if models.iter().all(|m| matches!(m, Model::Constant(_))) {
             ModelMap::Constant(
-                models
-                    .into_iter()
+                ordered
                     .map(|m| match m {
                         Model::Constant(cm) => cm.quality,
                         Model::Interpolate(_) => unreachable!(),
                     })
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
             )
         } else {
-            ModelMap::Mixed(models)
+            ModelMap::Refs(
+                ordered
+                    .map(|m| match m {
+                        Model::Constant(cm) => Point4::new(cm.quality, NO_INTERPOLATION, 0, 0),
+                        Model::Interpolate(im) => im.qualities,
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
-            ModelMap::Interpolate(v) => v.len(),
+            ModelMap::Refs(v) => v.len(),
             ModelMap::Constant(v) => v.len(),
-            ModelMap::Mixed(v) => v.len(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    /// Gather the map into a new order: entry `i` of the result is entry
-    /// `order[i]` of `self`.  Used to match the BVH's leaf ordering.
-    pub(crate) fn reorder(self, order: &[u32]) -> Self {
-        fn gather<T: Copy>(v: Vec<T>, order: &[u32]) -> Vec<T> {
-            order.iter().map(|&i| v[i as usize]).collect()
-        }
-        match self {
-            ModelMap::Interpolate(v) => ModelMap::Interpolate(gather(v, order)),
-            ModelMap::Constant(v) => ModelMap::Constant(gather(v, order)),
-            ModelMap::Mixed(v) => {
-                let mut slots: Vec<Option<Model>> = v.into_iter().map(Some).collect();
-                ModelMap::Mixed(
-                    order
-                        .iter()
-                        .map(|&i| slots[i as usize].take().expect("duplicate index in order"))
-                        .collect(),
-                )
-            }
-        }
     }
 
     /// Return the quality at `point` inside simplex `index`.
@@ -159,9 +123,15 @@ impl ModelMap {
         point: &Point3<Real>,
     ) -> Quality {
         match self {
-            ModelMap::Interpolate(v) => interpolate_quality(&v[index], qualities, simplex, point),
+            ModelMap::Refs(v) => {
+                let refs = &v[index];
+                if refs.y == NO_INTERPOLATION {
+                    qualities[refs.x as usize]
+                } else {
+                    interpolate_quality(refs, qualities, simplex, point)
+                }
+            }
             ModelMap::Constant(v) => qualities[v[index] as usize],
-            ModelMap::Mixed(v) => v[index].quality_at(qualities, simplex, point),
         }
     }
 }
@@ -169,9 +139,8 @@ impl ModelMap {
 impl DeepSizeOf for ModelMap {
     fn deep_size_of_children(&self, context: &mut Context) -> usize {
         match self {
-            ModelMap::Interpolate(v) => v.capacity() * std::mem::size_of::<Point4<u32>>(),
-            ModelMap::Constant(v) => v.capacity() * std::mem::size_of::<u32>(),
-            ModelMap::Mixed(v) => v.deep_size_of_children(context),
+            ModelMap::Refs(v) => v.deep_size_of_children(context),
+            ModelMap::Constant(v) => v.deep_size_of_children(context),
         }
     }
 }

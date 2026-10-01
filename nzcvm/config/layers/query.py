@@ -11,7 +11,7 @@ class QueryLayerConfig(LayerConfig):
     """Configuration DTO for a :class:`~nzcvm.layers.query.QueryLayer`.
 
     Specifies where to find the velocity-model mesh files.  *model_path*
-    and *model_globs* together identify the set of ``*.vtkhdf`` files to load.
+    and *model_globs* together identify the set of ``*.zarr`` mesh stores to load.
 
     Attributes
     ----------
@@ -19,7 +19,7 @@ class QueryLayerConfig(LayerConfig):
         Directory containing the mesh files.
     model_globs :
         List of glob patterns used to find mesh files under *model_path*
-        (default ``["*.vtkhdf"]``).  The layer loads every file matching any
+        (default ``["*.zarr"]``).  The layer loads every file matching any
         of the patterns.
 
     Examples
@@ -29,9 +29,9 @@ class QueryLayerConfig(LayerConfig):
         [[layers]]
         type = "query"
         model_path = "path/to/models"
-        model_globs = ["*.vtkhdf"]
+        model_globs = ["*.zarr"]
     """
 
     model_path: Path
-    model_globs: list[str] = field(default_factory=lambda: ["*.vtkhdf"])
+    model_globs: list[str] = field(default_factory=lambda: ["*.zarr"])
     type: str = "query"
