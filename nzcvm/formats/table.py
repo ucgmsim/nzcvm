@@ -24,6 +24,7 @@ import pandas as pd
 
 from nzcvm.components import Component
 from nzcvm.coordinates import Coordinate
+from nzcvm.formats.core import register_format
 from nzcvm.grids.grid import Grid
 from nzcvm.qualities import Qualities
 from nzcvm.velocity_model import VelocityModel
@@ -97,6 +98,7 @@ def flatten(velocity_model: VelocityModel) -> pd.DataFrame:
     return pd.concat(tables, ignore_index=True)
 
 
+@register_format("csv", extensions=(".csv",))
 def to_csv(velocity_model: VelocityModel, path: Path) -> None:
     """Write *velocity_model* to *path* as one CSV table.
 
@@ -110,6 +112,7 @@ def to_csv(velocity_model: VelocityModel, path: Path) -> None:
     flatten(velocity_model).to_csv(path, index=False, float_format=FLOAT_FORMAT)
 
 
+@register_format("parquet", extensions=(".parquet", ".pq"))
 def to_parquet(velocity_model: VelocityModel, path: Path) -> None:
     """Write *velocity_model* to *path* as one Parquet table.
 

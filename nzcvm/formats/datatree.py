@@ -8,6 +8,7 @@ import xarray as xr
 from numcodecs import ZFPY, Blosc
 
 from nzcvm.formats import quantise
+from nzcvm.formats.core import register_format
 from nzcvm.velocity_model import VelocityModel
 from nzcvm.xarray import encode
 
@@ -69,6 +70,7 @@ def _normalise_dataset_attributes(dset: xr.Dataset) -> xr.Dataset:
     return dset
 
 
+@register_format("netcdf", extensions=(".h5",), supports_quantisation=True)
 def to_netcdf(
     velocity_model: VelocityModel, path: Path, quantise_arrays: bool = True
 ) -> None:
@@ -81,6 +83,7 @@ def to_netcdf(
     dtree.to_netcdf(path, engine="h5netcdf", mode="w")
 
 
+@register_format("zarr", extensions=(".zarr",))
 def to_zarr(velocity_model: VelocityModel, path: Path) -> None:
     dtree = velocity_model.to_datatree()
     dtree = encode(dtree, attr_hook=_coerce_attribute_value_to_netcdf)

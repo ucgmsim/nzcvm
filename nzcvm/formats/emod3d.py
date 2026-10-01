@@ -13,6 +13,7 @@ import xarray as xr
 
 from nzcvm.components import Component
 from nzcvm.coordinates import Coordinate
+from nzcvm.formats.core import register_format
 from nzcvm.qualities import Qualities
 from nzcvm.velocity_model import VelocityModel
 
@@ -29,6 +30,7 @@ def _prepare_component(qualities: Qualities, component: Component) -> da.Array:
     return qualities[component].data.rechunk(contiguous_chunking) * KM_PER_S
 
 
+@register_format("emod3d")
 def to_emod3d(velocity_model: VelocityModel, directory: Path):
     """Write a single-block velocity model to an EMOD3D binary directory.
 

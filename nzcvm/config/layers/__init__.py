@@ -1,6 +1,8 @@
 import importlib
 import pkgutil
 
+from nzcvm import plugins
+
 from .core import LayerConfig
 
 
@@ -13,6 +15,8 @@ def register_layer_config():
 
 
 register_layer_config()
+
+plugins.load_plugins(plugins.LAYER_CONFIGS)
 
 
 __all__ = ["LayerConfig"]
