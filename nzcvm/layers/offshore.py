@@ -103,7 +103,7 @@ class OffshoreModel:
         depths = np.array([layer.bottom_depth for layer in distance_layers]).astype(
             np.float32
         )
-        absolute_bottom = depths.max()
+        absolute_bottom = float(depths.max())
         model_top_depths, model_qualities = _build_model_interpolator(
             model, absolute_bottom
         )

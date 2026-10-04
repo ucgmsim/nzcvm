@@ -165,7 +165,7 @@ def isolated_layer_registry() -> Iterator[None]:
     Yields
     ------
     None
-        Control passes to the test while the snapshot is held.
+        Control returns to the test while the registry snapshot is held.
     """
     from nzcvm.layers.core import Layer
 

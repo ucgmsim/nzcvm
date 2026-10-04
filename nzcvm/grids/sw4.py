@@ -58,7 +58,7 @@ def _curvilinear_grid(
 
     thickness = bottom - z_min
 
-    nk = np.round(thickness / resolution).astype(int) + 1
+    nk = int(np.round(thickness / resolution)) + 1
     k = np.arange(nk)
     # Chunking only ever applies to i/j. k always stays one chunk.
     zeta = xr.DataArray(
