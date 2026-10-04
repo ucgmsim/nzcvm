@@ -206,9 +206,7 @@ def _build_structured_grid(
             ds1[var] = ops[diff_mode](ds1[var], ds2[var])
 
     if stride > 1:
-        ds1 = ds1.coarsen(  # ty: ignore[unresolved-attribute]
-            i=stride, j=stride, boundary="trim"
-        ).mean()
+        ds1 = ds1.coarsen(i=stride, j=stride, boundary="trim").mean()
 
     mesh = pv.StructuredGrid(ds1.x.values, ds1.y.values, ds1.z.values)
 
