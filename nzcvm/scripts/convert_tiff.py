@@ -19,9 +19,7 @@ def convert_tiff(
 ) -> StructuredMesh:
     clipped = tiff_model.dropna("x", how="all").dropna("y", how="all")
     if downsample > 1:
-        clipped = clipped.coarsen(  # ty: ignore[unresolved-attribute]
-            x=downsample, y=downsample, boundary="pad"
-        ).mean()
+        clipped = clipped.coarsen(x=downsample, y=downsample, boundary="pad").mean()
 
     xi = clipped.x.astype(np.float32).values
     yi = clipped.y.astype(np.float32).values

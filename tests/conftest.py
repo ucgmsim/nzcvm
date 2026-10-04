@@ -159,7 +159,13 @@ class Terminal(Layer[TerminalConfig]):
 
 @pytest.fixture()
 def isolated_layer_registry():
-    """Snapshot and restore ``Layer.registry`` after the test."""
+    """Snapshot and restore ``Layer.registry`` after the test.
+
+    Yields
+    ------
+    None
+        Control returns to the test while the registry snapshot is held.
+    """
     from nzcvm.layers.core import Layer
 
     original = Layer.registry.copy()
