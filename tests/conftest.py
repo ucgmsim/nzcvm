@@ -164,7 +164,7 @@ def isolated_layer_registry():
     Yields
     ------
     None
-        Control returns to the test while the registry snapshot is held.
+        Yields control to caller.
     """
     from nzcvm.layers.core import Layer
 
