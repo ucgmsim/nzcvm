@@ -79,7 +79,9 @@ mod nzcvm {
     /// Bundles `priority_lo` and `priority_hi` into a single object so that
     /// [`PyModelTree::query_many`] has a compact signature.
     #[pyclass(from_py_object)]
-    #[derive(Debug, Clone, Copy)]
+    // Not `Copy`: `from_py_object` extracts by calling `.clone()`, which
+    // clippy flags as `clone_on_copy` when the type is `Copy`.
+    #[derive(Debug, Clone)]
     pub struct QueryParams {
         pub priority_lo: u8,
         pub priority_hi: u8,

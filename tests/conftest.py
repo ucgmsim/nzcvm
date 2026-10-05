@@ -1,6 +1,7 @@
 """Shared fixtures for the nzcvm test suite."""
 
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -158,7 +159,7 @@ class Terminal(Layer[TerminalConfig]):
 
 
 @pytest.fixture()
-def isolated_layer_registry():
+def isolated_layer_registry() -> Iterator[None]:
     """Snapshot and restore ``Layer.registry`` after the test.
 
     Yields

@@ -1,19 +1,32 @@
 name: CI
 
-on: [pull_request]
+on:
+  pull_request:
+  push:
+    branches: [master]
 
 jobs:
   ci:
-    uses: ucgmsim/meta-ci-action/.github/workflows/ci.yml@main
+    uses: ucgmsim/meta-ci-action/.github/workflows/ci.yml@v2
     with:
-      package-dir: nzcvm
       # The crate is built by every Python job, and each pays for the release
       # profile's lto/codegen-units=1. Under maturin this was avoided with
       # `-C build-args=--profile=dev`; setuptools-rust takes the profile from
       # SETUPTOOLS_RUST_CARGO_PROFILE instead, which the reusable workflow has
       # no input for.
       uv-extra-args: "--all-extras --dev"
+      # Docstring scope and exclusions live in [tool.npdlint].
+      exclude-init: false
       # Empty: defer to [tool.pytest.ini_options] testpaths, which covers both
       # tests/ and the doctests in nzcvm/.
       pytest-paths: ""
       rust-features: "high_precision"
+      enable-coverage: true
+      cov-package: nzcvm
+      # Below the 95% baseline on purpose: coverage measured 71% when the gate
+      # was added. The uncovered code is mostly the interactive and CLI entry
+      # points (nzcvm/scripts/view.py, construct_mesh.py, tree_stats.py,
+      # nzcvm_cli.py) and paths needing a real model directory (MODEL_PATH).
+      # The gate stops regressions from here; raise it as those get tests,
+      # until it reaches 95.
+      cov-fail-under: 70
