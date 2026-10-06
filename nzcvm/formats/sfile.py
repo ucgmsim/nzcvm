@@ -16,6 +16,7 @@ import numpy as np
 
 from nzcvm.components import Component
 from nzcvm.coordinates import Coordinate
+from nzcvm.grids.grid import solver_z
 from nzcvm.velocity_model import VelocityModel
 
 # Global attributes
@@ -90,7 +91,11 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
         top_grid, _ = models[0]
         bottom_grid, _ = models[-1]
 
-        global_min, global_max = dask.compute(top_grid.z.min(), bottom_grid.z.max())
+        # SW4 looks the material up in whichever coordinates the interfaces
+        # are written in, so they must be the ones the solver runs in.
+        global_min, global_max = dask.compute(
+            solver_z(top_grid).min(), solver_z(bottom_grid).max()
+        )
 
         f.attrs.create(
             ORIGIN_AZIM_ATTR,
@@ -144,7 +149,7 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
                 targets.append(writer.target(ds_path))
 
             if i == 0:
-                top = grid.z.isel({Coordinate.K: 0}).data
+                top = solver_z(grid).isel({Coordinate.K: 0}).data
                 ds_path = f"{SURFACE_GROUP}/z_values_0"
                 f.create_dataset(
                     ds_path, shape=top.shape, chunks=top.chunksize, dtype=top.dtype
@@ -152,7 +157,7 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
                 sources.append(top)
                 targets.append(writer.target(ds_path))
 
-            bottom = grid.z.isel({Coordinate.K: -1}).data
+            bottom = solver_z(grid).isel({Coordinate.K: -1}).data
             ds_path = f"{SURFACE_GROUP}/z_values_{i + 1}"
             f.create_dataset(
                 ds_path, shape=bottom.shape, chunks=bottom.chunksize, dtype=bottom.dtype

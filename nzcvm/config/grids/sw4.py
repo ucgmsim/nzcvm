@@ -7,6 +7,7 @@ import numpy as np
 
 from nzcvm.config.core import ConfigObject
 from nzcvm.config.grids.model import Model
+from nzcvm.config.grids.terrain import Decay, LinearDecay, Solver
 from nzcvm.config.validation import PositiveFloat
 from nzcvm.coordinates import Coordinate
 
@@ -63,6 +64,13 @@ class SW4GridConfig(GridConfig):
     refinements :
         Ordered list of :class:`MeshRefinement` objects.  Must contain at
         least one entry. The *bottom* of the last entry sets the model bottom.
+    decay :
+        Unset (the default) for SW4 with topography: the first refinement is
+        stretched linearly between the surface and its flat bottom, and the
+        sfile holds true positions.  Any decay instead builds an
+        EMOD3D-compatible model for SW4 without topography: the earth is
+        distorted by the decay into a flat nominal box, and the sfile holds
+        nominal depths.  See :attr:`solver`.
     transpose :
         If ``True``, swap the I and J axes after applying the affine transform.
     origin_crs :
@@ -84,6 +92,8 @@ class SW4GridConfig(GridConfig):
     # Mesh refinements.
     refinements: dict[str, MeshRefinement]
 
+    decay: Decay | None = None
+
     transpose: bool = False
 
     chunks: dict[Coordinate, int] = field(default_factory=lambda: DEFAULT_CHUNK_SIZES)
@@ -91,6 +101,7 @@ class SW4GridConfig(GridConfig):
     type: Literal["sw4"] = "sw4"
 
     def __post_init__(self):
+        super().__post_init__()
         refinements = sorted(
             self.refinements.values(), key=lambda refinement: refinement.resolution
         )
@@ -109,3 +120,17 @@ class SW4GridConfig(GridConfig):
             np.round(self.extent_y / coarsest_grid_resolution)
             * coarsest_grid_resolution
         )
+
+    @property
+    def solver(self) -> Solver:
+        """Physical without a decay, nominal with one."""
+        return Solver.PHYSICAL if self.decay is None else Solver.NOMINAL
+
+    def terrain_decay(self, default_length: float) -> Decay:
+        """The decay profile this grid uses, resolved with *default_length*.
+
+        Without a decay, SW4 with topography stretches the first refinement
+        linearly between the surface and its flat bottom.
+        """
+        decay = LinearDecay() if self.decay is None else self.decay
+        return decay.resolve(default_length)

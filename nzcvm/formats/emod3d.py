@@ -5,6 +5,7 @@ a directory using memory-mapped I/O via :mod:`numpy.memmap`.
 """
 
 import os
+import warnings
 from pathlib import Path
 
 import dask.array as da
@@ -12,6 +13,7 @@ import numpy as np
 import xarray as xr
 
 from nzcvm.components import Component
+from nzcvm.config.grids.terrain import Solver
 from nzcvm.coordinates import Coordinate
 from nzcvm.qualities import Qualities
 from nzcvm.velocity_model import VelocityModel
@@ -50,6 +52,17 @@ def to_emod3d(velocity_model: VelocityModel, directory: Path):
     velocity_model = velocity_model.orient(
         Coordinate.J, Coordinate.K, Coordinate.I
     ).flip(Coordinate.J)
+
+    if any(
+        grid.attrs["solver"] != Solver.NOMINAL for grid in velocity_model.grids.values()
+    ):
+        warnings.warn(
+            "EMOD3D places every sample at its nominal depth, but this model was "
+            "built for a physical solver.  Use an emod3d grid, or give the sw4 grid "
+            "a decay.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     resolutions = [grid.resolution for grid in velocity_model.grids.values()]
 

@@ -2,12 +2,14 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Literal
 
+import dask.array as da
 import numpy as np
 import shapely
 import xarray as xr
-from xarray_dataclasses import AsDataset, Attr, Data, DataOptions
+from xarray_dataclasses import AsDataset, Attr, Coord, Data, DataOptions
 
 from nzcvm.components import Component
+from nzcvm.config.grids.terrain import Solver
 from nzcvm.coordinates import Coordinate
 
 
@@ -28,8 +30,14 @@ class GridSchema(AsDataset):
     y: Data[tuple[i, j, k], np.float32]
     z: Data[tuple[i, j, k], np.float32]
     depth: Data[tuple[i, j, k], np.float32]
+    #: Depth of each level in a flat box, before the decay bends it to follow
+    #: the topography.  See :mod:`nzcvm.grids.terrain`.
+    nominal_depth: Coord[k, np.float32]
     name: Attr[str]
     resolution: Attr[float]
+    #: A :class:`~nzcvm.config.grids.terrain.Solver`: whether a solver places
+    #: samples at ``z`` or at ``nominal_depth``.
+    solver: Attr[str]
 
     geometry: Attr[shapely.Geometry]
     origin_lon: Attr[np.float32]
@@ -43,8 +51,21 @@ class GridSchema(AsDataset):
 
     @classmethod
     def from_dataset(cls, dataset: xr.Dataset) -> Grid:
-        """Parses, validates, and builds a Grid from a standard xr.Dataset."""
-        dset = cls.new(**dataset.data_vars, **dataset.attrs)  # ty: ignore[invalid-argument-type]
+        """Parses, validates, and builds a Grid from a standard xr.Dataset.
+
+        Files written before grids carried solver coordinates load as
+        physical grids with an unknown (NaN) nominal depth.
+        """
+        attrs = {"solver": Solver.PHYSICAL.value, **dataset.attrs}
+        if Coordinate.NOMINAL_DEPTH in dataset.coords:
+            nominal_depth = dataset[Coordinate.NOMINAL_DEPTH]
+        else:
+            nominal_depth = np.full(dataset.sizes[Coordinate.K], np.nan, np.float32)
+        dset = cls.new(
+            **dataset.data_vars,  # ty: ignore[invalid-argument-type]
+            nominal_depth=nominal_depth,
+            **attrs,
+        )
         return dset
 
 
@@ -73,3 +94,32 @@ def grid_like_at_depth(grid: Grid, depth: float) -> Grid:
     layer[Coordinate.Z] -= layer.depth - depth
     layer[Coordinate.DEPTH] = xr.full_like(layer[Coordinate.DEPTH], depth)
     return layer
+
+
+def solver_z(grid: Grid) -> xr.DataArray:
+    """The ``z`` a solver places each sample of *grid* at.
+
+    That is ``z`` itself for a physical grid, and the nominal depth of each
+    level, broadcast and chunked like ``z``, for a nominal one.
+
+    Parameters
+    ----------
+    grid :
+        The grid.
+
+    Returns
+    -------
+    xarray.DataArray
+        Solver ``z`` with the dims and chunks of ``grid.z``.
+    """
+    z = grid[Coordinate.Z]
+    if grid.attrs["solver"] == Solver.PHYSICAL:
+        return z
+    # Shape the 1-D levels to lie along k, then broadcast them lazily: a 3-D
+    # copy would cost as much as z itself.
+    shape = [1] * z.ndim
+    shape[z.dims.index(Coordinate.K)] = -1
+    levels = grid[Coordinate.NOMINAL_DEPTH].values.reshape(shape)
+    if z.chunks is None:
+        return z.copy(data=np.broadcast_to(levels, z.shape))
+    return z.copy(data=da.broadcast_to(da.from_array(levels), z.shape, z.chunks))

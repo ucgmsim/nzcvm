@@ -8,13 +8,19 @@ import shapely
 
 from nzcvm.config.metadata import ModelMetadata
 from nzcvm.coordinates import Coordinate
-from nzcvm.formats import sfile
+from nzcvm.formats import emod3d, sfile
 from nzcvm.grids.grid import GridSchema
 from nzcvm.qualities import QualitiesSchema
 from nzcvm.velocity_model import VelocityModel
 
 
-def _grid(name: str, resolution: float, base: float, shape=(2, 3, 4)):
+def _grid(
+    name: str,
+    resolution: float,
+    base: float,
+    shape=(2, 3, 4),
+    solver: str = "physical",
+):
     ni, nj, nk = shape
     i = np.arange(ni, dtype=np.float32)
     j = np.arange(nj, dtype=np.float32)
@@ -32,8 +38,10 @@ def _grid(name: str, resolution: float, base: float, shape=(2, 3, 4)):
         y=y.astype(np.float32),
         z=z.astype(np.float32),
         depth=depth.astype(np.float32),
+        nominal_depth=(base + 10 * k).astype(np.float32),
         name=name,
         resolution=resolution,
+        solver=solver,
         geometry=shapely.box(170.0, -43.0, 172.0, -41.0),
         origin_lon=np.float32(170.0),
         origin_lat=np.float32(-43.0),
@@ -221,3 +229,60 @@ def test_sfile_material_dataset_values_match_component_mapping(
         assert f["Material_model/grid_0/Qp"][...] == pytest.approx(q0["qp"].values)
         assert f["Material_model/grid_0/Qs"][...] == pytest.approx(q0["qs"].values)
         assert f["Material_model/grid_0/Rho"][...] == pytest.approx(q0["rho"].values)
+
+
+@pytest.fixture
+def nominal_velocity_model():
+    g0 = _grid("g0", resolution=100.0, base=0.0, shape=(2, 3, 4), solver="nominal")
+    g1 = _grid("g1", resolution=200.0, base=1000.0, shape=(2, 3, 5), solver="nominal")
+    return VelocityModel(
+        grids={"g0": g0, "g1": g1},
+        qualities={
+            "g0": _qualities(shape=(2, 3, 4)),
+            "g1": _qualities(shape=(2, 3, 5), offset=1000.0),
+        },
+        metadata=ModelMetadata(),
+    )
+
+
+def test_nominal_sfile_interfaces_are_nominal_depths(
+    tmp_path: Path, nominal_velocity_model: VelocityModel
+):
+    """SW4 without topography looks material up in the nominal box."""
+    out = tmp_path / "model.sfile"
+    sfile.to_sfile(nominal_velocity_model, out)
+
+    g0 = nominal_velocity_model.grids["g0"]
+    g1 = nominal_velocity_model.grids["g1"]
+    top, bottom_0 = g0.nominal_depth.values[[0, -1]]
+    bottom_1 = g1.nominal_depth.values[-1]
+
+    with h5py.File(out, "r") as f:
+        assert np.all(f["Z_interfaces/z_values_0"][...] == top)
+        assert np.all(f["Z_interfaces/z_values_1"][...] == bottom_0)
+        assert np.all(f["Z_interfaces/z_values_2"][...] == bottom_1)
+        assert f["Z_interfaces/z_values_0"].shape == (3, 2)
+        assert list(f.attrs[sfile.MIN_MAX_DEPTH_ATTR]) == [top, bottom_1]
+
+
+def test_emod3d_output_warns_for_a_physical_grid(
+    tmp_path: Path, simple_velocity_model: VelocityModel
+):
+    model = VelocityModel(
+        grids={"g0": simple_velocity_model.grids["g0"]},
+        qualities={"g0": simple_velocity_model.qualities["g0"]},
+        metadata=ModelMetadata(),
+    )
+    with pytest.warns(UserWarning, match="physical solver"):
+        emod3d.to_emod3d(model, tmp_path / "emod3d")
+
+
+def test_grids_written_before_solver_coordinates_load_as_physical(
+    simple_velocity_model: VelocityModel,
+):
+    current = simple_velocity_model.grids["g0"]
+    old = current.drop_vars(Coordinate.NOMINAL_DEPTH)
+    old.attrs = {k: v for k, v in current.attrs.items() if k != "solver"}
+    grid = GridSchema.from_dataset(old)
+    assert grid.attrs["solver"] == "physical"
+    assert np.all(np.isnan(grid.nominal_depth.values))

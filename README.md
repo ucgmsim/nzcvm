@@ -134,7 +134,7 @@ with Dask.
 |------------|-----------------------------------------------------------------------------|
 | `sw4`      | `extent_x/y`, `refinements` (2:1 nested resolutions, ordered automatically) |
 | `regular`  | `extent_x/y`, `thickness`, `resolution_x/y/z` (fixed vertical resolution)   |
-| `emod3d`   | `nx`, `ny`, `nz`, `resolution`, `topo_type`                                 |
+| `emod3d`   | `nx`, `ny`, `nz`, `resolution`, `topo_type` or `decay`                      |
 | `borehole` | `sites`, `depth`, `resolution_z` (one vertical profile per site)            |
 
 Every grid takes `surface` (path to a DEM) and optional `[grid.chunks]`. The
@@ -155,6 +155,61 @@ j = 256
 
 A `borehole` grid holds independent columns with no box to orient, so it takes
 a bare `[grid.projection]` instead: just a CRS.
+
+### Terrain decay
+
+The `sw4` and `emod3d` grids share one terrain-following coordinate. A level
+at nominal depth `A` (where it would sit in a flat box) lies at
+
+```
+z = A + B(A, S) · S        (S = surface, positive down)
+```
+
+The decay weight `B` sets how quickly the levels stop following the
+topography. `B = 1` follows it exactly and `B = 0` is flat. Choose the decay
+with a `[grid.decay]` table:
+
+| `type`     | Weight `B`                                     | Parameters                                    |
+|------------|------------------------------------------------|-----------------------------------------------|
+| `squashed` | `1`: the surface shifted down                  | none                                          |
+| `linear`   | `1 - A/L`, flat below `L`                      | `length` (default: bottom of the first block) |
+| `tapered`  | `1 - A/(ratio · elevation)` on land, `1` at sea | `ratio` (default 1)                          |
+| `sleve`    | `sinh((L - A)/s) / sinh(L/s)`, flat below `L`  | `scale`, `length` (default: bottom of the first block) |
+
+On `emod3d`, `topo_type = "squashed"` and
+`"squashed_tapered"` are shorthands for `squashed` and `tapered`; set either
+`topo_type` or `decay`, not both.
+
+The builder rejects a decay that folds a column over itself. This can happen
+with `sleve` under deep water: keep `scale · tanh(length / scale)` deeper than
+the deepest seafloor.
+
+#### Solver coordinates
+
+Every grid samples the earth at its true `z`. The grid's `solver` attribute
+says where the solver will treat each sample as sitting, and the sfile writer
+writes its interfaces in those coordinates. It follows from the decay:
+
+- **No `decay`** (`sw4` default): **physical**, at the true `z`, for SW4 with
+  a `topography` command. The first refinement is stretched linearly between
+  the surface and its flat bottom, so each column is evenly spaced, as SW4's
+  sfile reader assumes.
+- **Any `decay`** (and every `emod3d` grid): **nominal**, at the nominal depth
+  `A` in a flat box. EMOD3D works this way, and SW4 does too without a
+  `topography` command, so this is SW4's EMOD3D-compatible mode. The decay is
+  a deliberate distortion of the earth into the box. Each block's nominal
+  spacing is its refinement resolution.
+
+```toml
+[grid]
+type = "sw4"
+
+[grid.decay]   # nominal: run SW4 without topography
+type = "tapered"
+```
+
+Every grid stores its nominal depths as a `nominal_depth` coordinate on `k`,
+so NetCDF, Zarr, CSV and Parquet outputs carry both sets of coordinates.
 
 ### Borehole grids
 
