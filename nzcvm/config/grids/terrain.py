@@ -8,8 +8,8 @@ coordinate
     z(x, y, k) = A_k + B(A_k, S(x, y)) \\, S(x, y)
 
 where :math:`S` is the topographic surface (positive down, so negative above
-sea level), :math:`A_k` is the *nominal depth* of level :math:`k` (where the
-level would sit on a flat earth) and :math:`B` is the *decay* weight.  A level
+sea level), :math:`A_k` is the *nominal depth* of level :math:`k` (its depth on
+a flat earth) and :math:`B` is the *decay* weight.  A level
 with :math:`B = 1` follows the topography exactly and a level with
 :math:`B = 0` is flat.  The classes here choose :math:`B`.
 

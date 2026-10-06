@@ -115,7 +115,7 @@ def solver_z(grid: Grid) -> xr.DataArray:
     z = grid[Coordinate.Z]
     if grid.attrs["solver"] == Solver.PHYSICAL:
         return z
-    # Shape the 1-D levels to lie along k, then broadcast them lazily: a 3-D
+    # Shape the 1D levels to lie along k, then broadcast them lazily: a 3D
     # copy would cost as much as z itself.
     shape = [1] * z.ndim
     shape[z.dims.index(Coordinate.K)] = -1

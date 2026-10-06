@@ -67,9 +67,9 @@ class SW4GridConfig(GridConfig):
     decay :
         Unset (the default) for SW4 with topography: the first refinement is
         stretched linearly between the surface and its flat bottom, and the
-        sfile holds true positions.  Any decay instead builds an
+        sfile stores true positions.  Any decay instead builds an
         EMOD3D-compatible model for SW4 without topography: the earth is
-        distorted by the decay into a flat nominal box, and the sfile holds
+        distorted by the decay into a flat nominal box, and the sfile stores
         nominal depths.  See :attr:`solver`.
     transpose :
         If ``True``, swap the I and J axes after applying the affine transform.

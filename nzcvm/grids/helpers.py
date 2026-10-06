@@ -148,7 +148,7 @@ def raw_coordinates(
 
     With *stride* greater than one, only every *stride*-th node is kept.  The
     kept nodes keep their fine-grid ``i``/``j`` labels and bit-identical
-    coordinates, so coarser refinements line up with the finest grid, while
+    coordinates, so coarser refinements coincide with nodes of the finest grid, while
     the chunks are still *chunks* nodes wide rather than shrinking by
     *stride*.
     """

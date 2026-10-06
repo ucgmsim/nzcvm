@@ -84,7 +84,7 @@ class TestDecayWeight:
     @pytest.mark.parametrize("decay", _RESOLVED, ids=_IDS)
     def test_surface_level_follows_topography(self, decay: Decay) -> None:
         weight = np.broadcast_to(decay_weight(decay, _LEVELS, _SURFACE), (4, 501))
-        # Tapered does not decay offshore, so every column starts at 1.
+        # Tapered does not decay offshore.  Every column still starts at 1.
         assert weight[:, 0] == pytest.approx(1.0)
 
     @pytest.mark.parametrize("decay", _RESOLVED, ids=_IDS)
@@ -207,7 +207,7 @@ class TestSW4Decays:
         for upper, lower in [("a", "b"), ("b", "c")]:
             bottom = grids[upper].z.isel(k=-1)
             top = grids[lower].z.isel(k=0)
-            # The coarse block sits on every second fine node.
+            # The coarse block uses every second fine node.
             assert np.all(bottom.sel(i=top.i, j=top.j).values == top.values)
 
     @_SW4_DECAYS

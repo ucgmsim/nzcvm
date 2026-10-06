@@ -1,6 +1,6 @@
 """EMOD3D velocity model grid builder.
 
-Builds the single block defined by an
+Builds the one block defined by an
 :class:`~nzcvm.config.grids.emod3d.EMOD3DGrid` on the shared hybrid
 terrain-following coordinate in :mod:`nzcvm.grids.terrain`, with
 ``nz`` levels at a fixed nominal spacing.  EMOD3D runs on the flat nominal

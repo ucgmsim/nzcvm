@@ -36,8 +36,8 @@ from nzcvm.models.surface import Surface
 
 #: Number of surface values between the lowest and highest point used to check
 #: a decay profile.  Every profile is either linear in the surface value or has
-#: a slope that does not depend on it, so the extremes decide the checks and
-#: the interior samples only guard against future profiles.
+#: a slope independent of it.  The checks only need the extremes, and
+#: the interior samples guard against future profiles.
 SURFACE_SAMPLES = 65
 
 
@@ -231,7 +231,7 @@ class TerrainSurface:
         """
         x, y = frame.coordinates()
         values = helpers.compute_surface_elevation(Surface.load(path), x, y)
-        # Persisting is a 2-D cost, small next to the 3-D model, and avoids
+        # Persisting is a 2D cost, small next to the 3D model, and avoids
         # evaluating the surface again for every block and every output array.
         values = values.persist()
         minimum, maximum = dask.compute(values.min(), values.max())
