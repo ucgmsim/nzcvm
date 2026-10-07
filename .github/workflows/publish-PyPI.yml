@@ -1,5 +1,7 @@
 name: Publish to PyPI
-run-name: Publish Python Package to PyPI for release ${{ github.event.release.tag_name || inputs.tag_name || github.ref_name }}
+run-name: >-
+  Publish Python Package to PyPI for release
+  ${{ github.event.release.tag_name || inputs.tag_name || github.ref_name }}
 
 on:
   release:
@@ -58,16 +60,21 @@ jobs:
           CIBW_ARCHS_MACOS: "x86_64 arm64"  # Build for Intel and Apple Silicon
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_ARCHS_LINUX: "x86_64"
-          # This is needed as for linux the wheel build process happens inside a container instead of the Github runner
-          # See https://cibuildwheel.pypa.io/en/stable/platforms/#linux-containers
+          # This is needed as for linux the wheel build process happens inside
+          # a container instead of the Github runner. See:
+          # https://cibuildwheel.pypa.io/en/stable/platforms/#linux-containers
           #
           # safe.directory is set because the checkout is mounted at /project
           # under a different uid, which otherwise makes git — and so
           # setuptools-scm — refuse to read the version out of the repository.
-          CIBW_BEFORE_ALL_LINUX: "git config --global --add safe.directory /project && curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain stable -y && source $HOME/.cargo/env"
+          CIBW_BEFORE_ALL_LINUX: >-
+            git config --global --add safe.directory /project
+            && curl https://sh.rustup.rs -sSf
+            | sh -s -- --default-toolchain stable -y
+            && source $HOME/.cargo/env
           CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
-          # Required to build wheels with Rust extensions on macOS
-          # See https://cibuildwheel.pypa.io/en/stable/platforms/#macos-version-compatibility
+          # Required to build wheels with Rust extensions on macOS. See:
+          # https://cibuildwheel.pypa.io/en/stable/platforms/#macos-version-compatibility
           MACOSX_DEPLOYMENT_TARGET: "11.0"
 
       - name: Build source distribution (Linux only)
@@ -88,7 +95,7 @@ jobs:
   publish-to-pypi:
     name: Publish to PyPI
     needs:
-    - build
+      - build
     runs-on: ubuntu-latest
 
     environment:
@@ -99,21 +106,21 @@ jobs:
       id-token: write
 
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        pattern: python-package-distributions-*
-        merge-multiple: true
-        path: artifacts/
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
+        with:
+          pattern: python-package-distributions-*
+          merge-multiple: true
+          path: artifacts/
 
-    - name: Collect all distributions into dist/
-      run: |
-        mkdir -p dist/
-        find artifacts/ -name '*.whl' -exec cp {} dist/ \;
-        find artifacts/ -name '*.tar.gz' -exec cp {} dist/ \;
-        ls -la dist/
+      - name: Collect all distributions into dist/
+        run: |
+          mkdir -p dist/
+          find artifacts/ -name '*.whl' -exec cp {} dist/ \;
+          find artifacts/ -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -la dist/
 
-    - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@v1.13.0
-      with:
-        packages-dir: dist
+      - name: Publish distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.13.0
+        with:
+          packages-dir: dist

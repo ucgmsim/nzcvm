@@ -13,8 +13,9 @@ jobs:
         env:
           VALE_VERSION: "3.19.0"
         run: |
-          curl -sSfL \
-            "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" \
+          base="https://github.com/errata-ai/vale/releases/download"
+          tarball="vale_${VALE_VERSION}_Linux_64-bit.tar.gz"
+          curl -sSfL "$base/v${VALE_VERSION}/$tarball" \
             | sudo tar -xz -C /usr/local/bin vale
           vale --version
 
@@ -32,7 +33,8 @@ jobs:
       - name: Vale
         run: |
           status=0
-          vale --output=line $(git ls-files '*.py' '*.md') > alerts.txt || status=$?
+          vale --output=line $(git ls-files '*.py' '*.md') > alerts.txt \
+            || status=$?
           if [ "$status" -gt 1 ]; then
             echo "::error::Vale exited with status $status"
             exit "$status"
