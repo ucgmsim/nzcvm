@@ -101,10 +101,13 @@ class Surface:
         Returns
         -------
         numpy.ndarray
-            Elevation (z) values with the same shape as *x*.
+            Elevation (z) values with the same shape as *x*, NaN where a
+            point falls outside the surface.
         """
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
-        pts = np.stack((x.flatten(), y.flatten()), axis=-1)
+        pts = np.stack((x.flatten(), y.flatten()), axis=-1).astype(
+            np.float32, copy=False
+        )
 
         z = self.inner.query_many(pts)
         logger.debug("Query complete.")

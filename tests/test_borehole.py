@@ -260,7 +260,12 @@ def test_numeric_labels_keep_a_numeric_dtype(synthetic_surface: Path) -> None:
 
 def test_keep_extra_columns_false_drops_the_labels(synthetic_surface: Path) -> None:
     bare = _build(_config(synthetic_surface, keep_extra_columns=False))
-    assert set(bare.coords) == {Coordinate.I, Coordinate.J, Coordinate.K}
+    assert set(bare.coords) == {
+        Coordinate.I,
+        Coordinate.J,
+        Coordinate.K,
+        Coordinate.NOMINAL_DEPTH,
+    }
     # The opt-out leaves the spatial coordinates alone.
     assert bare.x.shape == (len(SITES), 1, NK)
 

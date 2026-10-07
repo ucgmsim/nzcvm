@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import shapely
+import xarray as xr
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
@@ -30,7 +31,7 @@ from nzcvm.grids.grid import Grid
 from nzcvm.layers.clamp import ClampLayer
 from nzcvm.layers.core import Layer
 from nzcvm.layers.dummy import ConstantLayer, CountingLayer, RecordingLayer
-from nzcvm.layers.offshore import OffshoreBasinLayer, step_interpolator
+from nzcvm.layers.offshore import OffshoreBasinLayer, OffshoreModel, step_interpolator
 from nzcvm.qualities import Qualities
 from nzcvm.query import ModelRange
 from tests.conftest import make_grid
@@ -520,8 +521,6 @@ def _offshore_config() -> OffshoreBasinConfig:
             DepthModel(distance=0.0, bottom_depth=1000.0),
             DepthModel(distance=50_000.0, bottom_depth=1000.0),
         ],
-        # ``_build_model_interpolator`` keeps only layers shallower than the
-        # deepest basin_depth entry, so the first must be shallower than 1000 m.
         model=[
             VelocityModel1D(
                 bottom_depth=500.0,
@@ -575,3 +574,50 @@ def test_offshore_veto_holds_below_the_basin_bottom(depth0: float) -> None:
 
     assert not np.any(np.isclose(vs[0], OFFSHORE_VS))
     assert np.all(np.isclose(vs[1], OFFSHORE_VS))
+
+
+def _velocity_layer(bottom_depth: float, vs: float) -> VelocityModel1D:
+    return VelocityModel1D(
+        bottom_depth=bottom_depth,
+        rho=1800.0,
+        vp=2 * vs,
+        vs=vs,
+        qp=100.0,
+        qs=50.0,
+        alpha=1.0,
+    )
+
+
+def _offshore_vs(model: OffshoreModel, depths: list[float]) -> np.ndarray:
+    query = xr.DataArray(
+        np.array(depths, dtype=np.float32).reshape(1, 1, -1), dims=("i", "j", "k")
+    )
+    return model.qualities(query).vs.values.ravel()
+
+
+def test_offshore_model_keeps_layer_spanning_basin_bottom() -> None:
+    """The model keeps the layer that straddles the deepest basin depth."""
+    model = OffshoreModel.build(
+        [DepthModel(distance=0.0, bottom_depth=500.0)],
+        [
+            _velocity_layer(100.0, 100.0),
+            _velocity_layer(300.0, 300.0),
+            _velocity_layer(600.0, 600.0),
+            _velocity_layer(900.0, 900.0),
+        ],
+    )
+
+    np.testing.assert_array_equal(model.model_top_depths, [0.0, 100.0, 300.0])
+    np.testing.assert_array_equal(
+        _offshore_vs(model, [50.0, 200.0, 400.0]), [100.0, 300.0, 600.0]
+    )
+
+
+def test_offshore_model_single_layer_deeper_than_basin_bottom() -> None:
+    """The model keeps one layer that lies deeper than every basin depth."""
+    model = OffshoreModel.build(
+        [DepthModel(distance=0.0, bottom_depth=50.0)], [_velocity_layer(100.0, 500.0)]
+    )
+
+    np.testing.assert_array_equal(model.model_top_depths, [0.0])
+    np.testing.assert_array_equal(_offshore_vs(model, [10.0, 40.0]), [500.0, 500.0])

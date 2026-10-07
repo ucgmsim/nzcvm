@@ -5,7 +5,7 @@ from typing import Literal
 import numpy as np
 import shapely
 import xarray as xr
-from xarray_dataclasses import AsDataset, Attr, Data, DataOptions
+from xarray_dataclasses import AsDataset, Attr, Coord, Data, DataOptions
 
 from nzcvm.components import Component
 from nzcvm.coordinates import Coordinate
@@ -28,8 +28,14 @@ class GridSchema(AsDataset):
     y: Data[tuple[i, j, k], np.float32]
     z: Data[tuple[i, j, k], np.float32]
     depth: Data[tuple[i, j, k], np.float32]
+    #: Depth of each level in a flat box, before the decay bends it to follow
+    #: the topography.  See :mod:`nzcvm.grids.terrain`.
+    nominal_depth: Coord[k, np.float32]
     name: Attr[str]
     resolution: Attr[float]
+    #: A :class:`~nzcvm.config.grids.terrain.Solver`: whether a solver places
+    #: samples at ``z`` or at ``nominal_depth``.
+    solver: Attr[str]
 
     geometry: Attr[shapely.Geometry]
     origin_lon: Attr[np.float32]
@@ -44,7 +50,11 @@ class GridSchema(AsDataset):
     @classmethod
     def from_dataset(cls, dataset: xr.Dataset) -> Grid:
         """Parses, validates, and builds a Grid from a standard xr.Dataset."""
-        dset = cls.new(**dataset.data_vars, **dataset.attrs)  # ty: ignore[invalid-argument-type]
+        dset = cls.new(
+            **dataset.data_vars,  # ty: ignore[invalid-argument-type]
+            nominal_depth=dataset[Coordinate.NOMINAL_DEPTH],
+            **dataset.attrs,
+        )
         return dset
 
 

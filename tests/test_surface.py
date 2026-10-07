@@ -107,6 +107,31 @@ def test_transform_1d_input(flat_surface: Surface) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("x", "y"),
+    [(20.0, 5.0), (5.0, -20.0), (-1e6, 1e6)],
+    ids=["east", "south", "far"],
+)
+def test_transform_is_nan_outside_the_surface(
+    flat_surface: Surface, x: float, y: float
+) -> None:
+    """Points outside the surface come back NaN, not 0.
+
+    The Ely layer skips NaN Vs30. With 0 it tapered a coastal station just
+    outside the Vs30 surface (ECLS) to Vs = 0 at the free surface.
+    """
+    z = flat_surface.transform(np.array([x], np.float32), np.array([y], np.float32))
+    assert np.isnan(z).all()
+
+
+def test_transform_keeps_hits_beside_misses(flat_surface: Surface) -> None:
+    x = np.array([5.0, 20.0, 2.5, -3.0], dtype=np.float32)
+    y = np.array([5.0, 5.0, 7.5, 5.0], dtype=np.float32)
+    z = flat_surface.transform(x, y)
+    np.testing.assert_array_equal(np.isnan(z), [False, True, False, True])
+    assert z[[0, 2]] == pytest.approx([5.0, 5.0])
+
+
 def test_surface_pickleable(flat_surface: Surface) -> None:
     import pickle
 

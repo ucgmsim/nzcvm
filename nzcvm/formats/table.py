@@ -48,6 +48,7 @@ FIXED_COLUMNS: tuple[str, ...] = (
     Coordinate.Y,
     Coordinate.Z,
     Coordinate.DEPTH,
+    Coordinate.NOMINAL_DEPTH,
     *Component,
 )
 

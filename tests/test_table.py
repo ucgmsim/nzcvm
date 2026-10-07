@@ -45,8 +45,10 @@ def _grid(name: str = "boreholes", sites: list[str] | None = None) -> Grid:
         y=(5_100_000.0 + j).astype(np.float32),
         z=(100.0 * i + k).astype(np.float32),
         depth=(25.0 * k).astype(np.float32),
+        nominal_depth=(25.0 * np.arange(nk)).astype(np.float32),
         name=name,
         resolution=25.0,
+        solver="physical",
         geometry=shapely.box(171.9, -43.6, 172.1, -43.4),
         origin_lon=np.float32(172.0),
         origin_lat=np.float32(-43.5),
@@ -142,6 +144,7 @@ def test_extra_coordinates_become_label_columns(labelled: pd.DataFrame) -> None:
         Coordinate.Y,
         Coordinate.Z,
         Coordinate.DEPTH,
+        Coordinate.NOMINAL_DEPTH,
         *Component,
     ]
 

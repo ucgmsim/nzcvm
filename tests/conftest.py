@@ -1,6 +1,7 @@
 """Shared fixtures for the nzcvm test suite."""
 
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -106,8 +107,10 @@ def make_grid(
         y=y,
         z=z,
         depth=depth,
+        nominal_depth=np.zeros(nz, dtype=np.float32) + depth0,
         name="test",
         resolution=100.0,
+        solver="physical",
         geometry=shapely.box(171.9, -43.6, 172.1, -43.4),
         origin_lon=np.float32(172.0),
         origin_lat=np.float32(-43.5),
@@ -158,8 +161,14 @@ class Terminal(Layer[TerminalConfig]):
 
 
 @pytest.fixture()
-def isolated_layer_registry():
-    """Snapshot and restore ``Layer.registry`` after the test."""
+def isolated_layer_registry() -> Iterator[None]:
+    """Snapshot and restore ``Layer.registry`` after the test.
+
+    Yields
+    ------
+    None
+        Yields control to caller.
+    """
     from nzcvm.layers.core import Layer
 
     original = Layer.registry.copy()

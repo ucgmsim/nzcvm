@@ -14,7 +14,8 @@ nz = 420
 # Resolution in metres now
 resolution = 100.0
 
-topo_type = "squashed_tapered"
+[grid.decay]
+type = "tapered"
 
 [grid.orientation]
 azimuth = 39.0

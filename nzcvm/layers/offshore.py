@@ -68,9 +68,11 @@ def _build_model_interpolator(
     model: list[VelocityModel1D], absolute_bottom: float
 ) -> tuple[np.ndarray, np.ndarray]:
     layers = sorted(model, key=lambda model: model.bottom_depth)
-    # Trim excess layers from velocity model
-    end_idx = max(
-        i for i in range(len(layers)) if layers[i].bottom_depth < absolute_bottom
+    # Trim excess layers from velocity model. The last layer kept is the one
+    # that spans absolute_bottom.
+    end_idx = next(
+        (i for i, layer in enumerate(layers) if layer.bottom_depth >= absolute_bottom),
+        len(layers) - 1,
     )
     layers = layers[: end_idx + 1]
 
@@ -103,7 +105,7 @@ class OffshoreModel:
         depths = np.array([layer.bottom_depth for layer in distance_layers]).astype(
             np.float32
         )
-        absolute_bottom = depths.max()
+        absolute_bottom = float(depths.max())
         model_top_depths, model_qualities = _build_model_interpolator(
             model, absolute_bottom
         )
