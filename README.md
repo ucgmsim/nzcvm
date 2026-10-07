@@ -210,7 +210,7 @@ type = "tapered"
 
 The `sw4`, `emod3d`, `regular` and `borehole` grids store their nominal depths
 as a `nominal_depth` coordinate on `k`, so NetCDF, Zarr, CSV, and Parquet
-outputs carry both sets of coordinates.
+outputs include both sets of coordinates.
 
 ### Borehole grids
 

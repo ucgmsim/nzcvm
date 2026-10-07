@@ -65,11 +65,11 @@ class SW4GridConfig(GridConfig):
         Ordered list of :class:`MeshRefinement` objects.  Must contain at
         least one entry. The *bottom* of the last entry sets the model bottom.
     decay :
-        Unset (the default) for SW4 with topography: the first refinement is
-        stretched linearly between the surface and its flat bottom, and the
+        Unset (the default) for SW4 with topography: the first refinement
+        stretches linearly between the surface and its flat bottom, and the
         sfile stores true positions.  Any decay instead builds an
-        EMOD3D-compatible model for SW4 without topography: the earth is
-        distorted by the decay into a flat nominal box, and the sfile stores
+        EMOD3D-compatible model for SW4 without topography: the decay
+        distorts the earth into a flat nominal box, and the sfile stores
         nominal depths.  See :attr:`solver`.
     transpose :
         If ``True``, swap the I and J axes after applying the affine transform.
