@@ -12,6 +12,7 @@ import numpy as np
 import xarray as xr
 
 from nzcvm.components import Component
+from nzcvm.config.grids.terrain import Solver
 from nzcvm.coordinates import Coordinate
 from nzcvm.qualities import Qualities
 from nzcvm.velocity_model import VelocityModel
@@ -40,7 +41,8 @@ def to_emod3d(velocity_model: VelocityModel, directory: Path):
     Raises
     ------
     ValueError
-        If *dtree* contains more or fewer than one block.
+        If *dtree* contains more or fewer than one block, or any grid
+        targets a physical solver.
     """
 
     # The EMOD3D format expects the grid to have the form z, y, x (with y points
@@ -50,6 +52,15 @@ def to_emod3d(velocity_model: VelocityModel, directory: Path):
     velocity_model = velocity_model.orient(
         Coordinate.J, Coordinate.K, Coordinate.I
     ).flip(Coordinate.J)
+
+    if any(
+        grid.attrs["solver"] != Solver.NOMINAL for grid in velocity_model.grids.values()
+    ):
+        raise ValueError(
+            "EMOD3D places every sample at its nominal depth, but this model was "
+            "built for a physical solver.  Use an emod3d grid, or give the sw4 grid "
+            "a decay."
+        )
 
     resolutions = [grid.resolution for grid in velocity_model.grids.values()]
 

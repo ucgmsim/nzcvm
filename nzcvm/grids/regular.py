@@ -8,7 +8,6 @@ and topography-following ``z`` / ``depth`` arrays at a strictly fixed Z resoluti
 
 import dask
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from nzcvm import coordinates
 from nzcvm.config.grids.regular import RegularGridConfig
@@ -44,15 +43,7 @@ def build_regular(config: RegularGridConfig) -> dict[str, Grid]:
     min_y = min_y.item()
 
     orientation = config.orientation
-    transform = (
-        coordinates.translate(orientation.grid_origin_x, orientation.grid_origin_y)
-        # Consistent with the rotation specified in the z-axis down convention
-        @ Rotation.from_rotvec(
-            np.array([0.0, 0.0, -orientation.grid_azimuth]), degrees=True
-        )
-        .as_matrix()
-        .astype(np.float32)
-    )
+    transform = helpers.grid_transform(orientation)
 
     geometry = helpers.outline(transform, rounded_extent_x, rounded_extent_y)
 

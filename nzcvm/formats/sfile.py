@@ -13,9 +13,12 @@ import dask
 import dask.array as da
 import h5py
 import numpy as np
+import xarray as xr
 
 from nzcvm.components import Component
+from nzcvm.config.grids.terrain import Solver
 from nzcvm.coordinates import Coordinate
+from nzcvm.grids.grid import Grid
 from nzcvm.velocity_model import VelocityModel
 
 # Global attributes
@@ -74,6 +77,24 @@ class AsyncHDF5Writer(AbstractContextManager):
         self.thread.join()
 
 
+def _solver_z(grid: Grid) -> xr.DataArray:
+    """Select the z values SW4 believes this grid has.
+
+    Physical means true z, nominal the flattened nominal depth.
+    """
+    z = grid[Coordinate.Z]
+    if grid.attrs["solver"] == Solver.PHYSICAL:
+        return z
+    # Shape the 1D levels to lie along k, then broadcast them lazily: a 3D
+    # copy would cost as much as z itself.
+    shape = [1] * z.ndim
+    shape[z.dims.index(Coordinate.K)] = -1
+    levels = grid[Coordinate.NOMINAL_DEPTH].values.reshape(shape)
+    if z.chunks is None:
+        return z.copy(data=np.broadcast_to(levels, z.shape))
+    return z.copy(data=da.broadcast_to(da.from_array(levels), z.shape, z.chunks))
+
+
 def to_sfile(velocity_model: VelocityModel, filename: Path):
 
     # The SW4 file format imposes that outermost axis (the i-axis in this
@@ -90,7 +111,11 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
         top_grid, _ = models[0]
         bottom_grid, _ = models[-1]
 
-        global_min, global_max = dask.compute(top_grid.z.min(), bottom_grid.z.max())
+        # SW4 looks the material up in whichever coordinates the file writes
+        # the interfaces in, so they must be the ones the solver runs in.
+        global_min, global_max = dask.compute(
+            _solver_z(top_grid).min(), _solver_z(bottom_grid).max()
+        )
 
         f.attrs.create(
             ORIGIN_AZIM_ATTR,
@@ -144,7 +169,7 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
                 targets.append(writer.target(ds_path))
 
             if i == 0:
-                top = grid.z.isel({Coordinate.K: 0}).data
+                top = _solver_z(grid).isel({Coordinate.K: 0}).data
                 ds_path = f"{SURFACE_GROUP}/z_values_0"
                 f.create_dataset(
                     ds_path, shape=top.shape, chunks=top.chunksize, dtype=top.dtype
@@ -152,7 +177,7 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
                 sources.append(top)
                 targets.append(writer.target(ds_path))
 
-            bottom = grid.z.isel({Coordinate.K: -1}).data
+            bottom = _solver_z(grid).isel({Coordinate.K: -1}).data
             ds_path = f"{SURFACE_GROUP}/z_values_{i + 1}"
             f.create_dataset(
                 ds_path, shape=bottom.shape, chunks=bottom.chunksize, dtype=bottom.dtype

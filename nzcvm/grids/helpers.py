@@ -4,8 +4,11 @@ import dask.array as da
 import numpy as np
 import shapely
 import xarray as xr
+from scipy.spatial.transform import Rotation
 
 from nzcvm import coordinates
+from nzcvm.config.grids.model import Model
+from nzcvm.config.grids.terrain import Solver
 from nzcvm.coordinates import Affine, Coordinate
 from nzcvm.grids.grid import Grid, GridSchema
 from nzcvm.models.surface import Surface
@@ -96,7 +99,29 @@ def topography_following_grid(
     x, y, z, depth = xr.broadcast(x_phys, y_phys, surface + zeta_depth, zeta_depth)
     x, y, z, depth = ensure_chunks(x, y, z, depth)
 
-    return GridSchema.new(x, y, z, depth, **kwargs)
+    return GridSchema.new(
+        x,
+        y,
+        z,
+        depth,
+        nominal_depth=zeta_depth.values,
+        solver=Solver.PHYSICAL.value,
+        **kwargs,
+    )
+
+
+def grid_transform(orientation: Model) -> Affine:
+    """Affine transform from local grid coordinates to *orientation*'s CRS.
+
+    Rotates by the grid azimuth about the origin, then translates to it.
+    """
+    return coordinates.translate(
+        orientation.grid_origin_x, orientation.grid_origin_y
+    ) @ Rotation.from_rotvec(
+        # Consistent with the rotation specified in the z-axis down convention.
+        np.array([0.0, 0.0, -orientation.grid_azimuth]),
+        degrees=True,
+    ).as_matrix().astype(np.float32)
 
 
 def outline(transform: Affine, extent_x: float, extent_y: float) -> shapely.Geometry:
@@ -117,10 +142,19 @@ def raw_coordinates(
     resolution: float,
     offset: float,
     chunks: dict[Coordinate, int],
+    stride: int = 1,
 ) -> tuple[xr.DataArray, xr.DataArray]:
+    """Local, unrotated horizontal coordinates of an ``ni`` by ``nj`` grid.
 
-    i = np.arange(ni)
-    j = np.arange(nj)
+    With *stride* greater than one, the grid keeps only every *stride*-th
+    node.  The kept nodes keep their fine-grid ``i``/``j`` labels and bit-identical
+    coordinates, so coarser refinements coincide with nodes of the finest grid, while
+    the chunks are still *chunks* nodes wide rather than shrinking by
+    *stride*.
+    """
+
+    i = np.arange(0, ni, stride)
+    j = np.arange(0, nj, stride)
     xi_raw = (offset + (i - ni / 2) * resolution).astype(np.float32)
     yi_raw = (offset + (j - nj / 2) * resolution).astype(np.float32)
     xi = da.from_array(xi_raw, chunks=(chunks[Coordinate.I]))
