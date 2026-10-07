@@ -2,7 +2,6 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Literal
 
-import dask.array as da
 import numpy as np
 import shapely
 import xarray as xr
@@ -94,32 +93,3 @@ def grid_like_at_depth(grid: Grid, depth: float) -> Grid:
     layer[Coordinate.Z] -= layer.depth - depth
     layer[Coordinate.DEPTH] = xr.full_like(layer[Coordinate.DEPTH], depth)
     return layer
-
-
-def solver_z(grid: Grid) -> xr.DataArray:
-    """The ``z`` a solver places each sample of *grid* at.
-
-    That's ``z`` itself for a physical grid, and the nominal depth of each
-    level, broadcast and chunked like ``z``, for a nominal one.
-
-    Parameters
-    ----------
-    grid :
-        The grid.
-
-    Returns
-    -------
-    xarray.DataArray
-        Solver ``z`` with the dims and chunks of ``grid.z``.
-    """
-    z = grid[Coordinate.Z]
-    if grid.attrs["solver"] == Solver.PHYSICAL:
-        return z
-    # Shape the 1D levels to lie along k, then broadcast them lazily: a 3D
-    # copy would cost as much as z itself.
-    shape = [1] * z.ndim
-    shape[z.dims.index(Coordinate.K)] = -1
-    levels = grid[Coordinate.NOMINAL_DEPTH].values.reshape(shape)
-    if z.chunks is None:
-        return z.copy(data=np.broadcast_to(levels, z.shape))
-    return z.copy(data=da.broadcast_to(da.from_array(levels), z.shape, z.chunks))

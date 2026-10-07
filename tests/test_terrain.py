@@ -24,8 +24,8 @@ from nzcvm.config.grids.terrain import (
     TaperedDecay,
 )
 from nzcvm.coordinates import Coordinate
+from nzcvm.formats.sfile import _solver_z
 from nzcvm.grids.builder import build_grids_from_config
-from nzcvm.grids.grid import solver_z
 from nzcvm.grids.terrain import decay_weight, terrain_z_depth
 from nzcvm.models.mesh import StructuredMeshSchema
 
@@ -269,11 +269,11 @@ class TestSW4Decays:
 class TestSolverZ:
     def test_physical_solver_uses_z(self, bumpy_surface: Path) -> None:
         grid = build_grids_from_config(_sw4(bumpy_surface))["a"]
-        assert solver_z(grid).identical(grid.z)
+        assert _solver_z(grid).identical(grid.z)
 
     def test_nominal_solver_uses_nominal_depth(self, bumpy_surface: Path) -> None:
         grid = build_grids_from_config(_sw4(bumpy_surface, LinearDecay()))["a"]
-        z = solver_z(grid)
+        z = _solver_z(grid)
         assert z.dims == grid.z.dims
         assert z.chunks == grid.z.chunks
         assert np.all(z.values == grid.nominal_depth.values)
