@@ -99,7 +99,7 @@ def grid_like_at_depth(grid: Grid, depth: float) -> Grid:
 def solver_z(grid: Grid) -> xr.DataArray:
     """The ``z`` a solver places each sample of *grid* at.
 
-    That is ``z`` itself for a physical grid, and the nominal depth of each
+    That's ``z`` itself for a physical grid, and the nominal depth of each
     level, broadcast and chunked like ``z``, for a nominal one.
 
     Parameters

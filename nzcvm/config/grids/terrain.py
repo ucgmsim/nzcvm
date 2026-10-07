@@ -28,7 +28,7 @@ from mashumaro.types import Discriminator
 from nzcvm.config.core import ConfigObject
 from nzcvm.config.validation import PositiveFloat, validate_positive
 
-#: ``PositiveFloat`` validation does not reach through ``| None``, so an
+#: ``PositiveFloat`` validation doesn't reach through ``| None``, so an
 #: optional length annotates the whole union.
 OptionalPositiveFloat = Annotated[float | None, validate_positive]
 
@@ -90,8 +90,8 @@ class SquashedDecay(Decay):
 class LinearDecay(Decay):
     """Linear decay to a flat level at *length* (:math:`B = 1 - A/L`).
 
-    With *length* equal to the bottom of the first block, the first block is
-    stretched linearly between the surface and a flat bottom, which is the
+    With *length* equal to the bottom of the first block, the first block
+    stretches linearly between the surface and a flat bottom, which is the
     SW4 curvilinear grid.
 
     Attributes
@@ -110,7 +110,7 @@ class TaperedDecay(Decay):
     """Linear decay over a length set by each column's own elevation.
 
     The decay length is :math:`L = \\tau E(x, y)` for elevation :math:`E`
-    above sea level.  Columns at or below sea level do not decay at all.
+    above sea level.  Columns at or below sea level don't decay at all.
     With :math:`\\tau = 1` this is EMOD3D's ``squashed_tapered`` topography
     type, which squeezes the earth between :math:`+E` and :math:`-E` into the
     top :math:`E` of the grid and keeps nodes at their true elevation below.

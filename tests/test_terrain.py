@@ -84,7 +84,7 @@ class TestDecayWeight:
     @pytest.mark.parametrize("decay", _RESOLVED, ids=_IDS)
     def test_surface_level_follows_topography(self, decay: Decay) -> None:
         weight = np.broadcast_to(decay_weight(decay, _LEVELS, _SURFACE), (4, 501))
-        # Tapered does not decay offshore.  Every column still starts at 1.
+        # Tapered doesn't decay offshore.  Every column still starts at 1.
         assert weight[:, 0] == pytest.approx(1.0)
 
     @pytest.mark.parametrize("decay", _RESOLVED, ids=_IDS)

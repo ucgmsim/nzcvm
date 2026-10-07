@@ -146,8 +146,8 @@ def raw_coordinates(
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Local, unrotated horizontal coordinates of an ``ni`` by ``nj`` grid.
 
-    With *stride* greater than one, only every *stride*-th node is kept.  The
-    kept nodes keep their fine-grid ``i``/``j`` labels and bit-identical
+    With *stride* greater than one, the grid keeps only every *stride*-th
+    node.  The kept nodes keep their fine-grid ``i``/``j`` labels and bit-identical
     coordinates, so coarser refinements coincide with nodes of the finest grid, while
     the chunks are still *chunks* nodes wide rather than shrinking by
     *stride*.

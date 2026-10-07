@@ -67,7 +67,7 @@ def decay_weight(decay: Decay, levels: np.ndarray, surface: np.ndarray) -> np.nd
         case TaperedDecay(ratio=ratio):
             elevation = -surface
             length = np.where(elevation > 0, ratio * elevation, np.inf)
-            # The weight varies with both the column and the level, so it is
+            # The weight varies with both the column and the level, so it's
             # the full size of the chunk: work on it in place.
             weight = levels / length
             np.subtract(1, weight, out=weight)
@@ -116,7 +116,7 @@ def terrain_z_depth(
 
 @dataclass(frozen=True)
 class Frame:
-    """The rotated horizontal footprint a terrain grid is built on.
+    """The rotated horizontal footprint under a terrain grid.
 
     Attributes
     ----------

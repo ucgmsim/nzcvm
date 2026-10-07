@@ -55,8 +55,8 @@ def build_sw4(config: SW4GridConfig) -> dict[str, Grid]:
     top = 0.0
     for name, refinement in refinements:
         # SW4 runs on the flat nominal box when nominal, so the nominal spacing
-        # is the resolution.  With topography, the stretched first block is
-        # sized from its thickest column instead.
+        # is the resolution.  With topography, the thickest column sizes the
+        # stretched first block instead.
         thickness = refinement.bottom - top
         if config.solver == Solver.PHYSICAL and top == 0.0:
             thickness = refinement.bottom - surface.minimum

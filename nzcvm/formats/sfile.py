@@ -91,8 +91,8 @@ def to_sfile(velocity_model: VelocityModel, filename: Path):
         top_grid, _ = models[0]
         bottom_grid, _ = models[-1]
 
-        # SW4 looks the material up in whichever coordinates the interfaces
-        # are written in, so they must be the ones the solver runs in.
+        # SW4 looks the material up in whichever coordinates the file writes
+        # the interfaces in, so they must be the ones the solver runs in.
         global_min, global_max = dask.compute(
             solver_z(top_grid).min(), solver_z(bottom_grid).max()
         )
