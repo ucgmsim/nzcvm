@@ -8,7 +8,6 @@ import xarray as xr
 from xarray_dataclasses import AsDataset, Attr, Coord, Data, DataOptions
 
 from nzcvm.components import Component
-from nzcvm.config.grids.terrain import Solver
 from nzcvm.coordinates import Coordinate
 
 
@@ -50,20 +49,11 @@ class GridSchema(AsDataset):
 
     @classmethod
     def from_dataset(cls, dataset: xr.Dataset) -> Grid:
-        """Parses, validates, and builds a Grid from a standard xr.Dataset.
-
-        Files written before grids carried solver coordinates load as
-        physical grids with an unknown (NaN) nominal depth.
-        """
-        attrs = {"solver": Solver.PHYSICAL.value, **dataset.attrs}
-        if Coordinate.NOMINAL_DEPTH in dataset.coords:
-            nominal_depth = dataset[Coordinate.NOMINAL_DEPTH]
-        else:
-            nominal_depth = np.full(dataset.sizes[Coordinate.K], np.nan, np.float32)
+        """Parses, validates, and builds a Grid from a standard xr.Dataset."""
         dset = cls.new(
             **dataset.data_vars,  # ty: ignore[invalid-argument-type]
-            nominal_depth=nominal_depth,
-            **attrs,
+            nominal_depth=dataset[Coordinate.NOMINAL_DEPTH],
+            **dataset.attrs,
         )
         return dset
 

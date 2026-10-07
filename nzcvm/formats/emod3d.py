@@ -5,7 +5,6 @@ a directory using memory-mapped I/O via :mod:`numpy.memmap`.
 """
 
 import os
-import warnings
 from pathlib import Path
 
 import dask.array as da
@@ -42,7 +41,8 @@ def to_emod3d(velocity_model: VelocityModel, directory: Path):
     Raises
     ------
     ValueError
-        If *dtree* contains more or fewer than one block.
+        If *dtree* contains more or fewer than one block, or any grid
+        targets a physical solver.
     """
 
     # The EMOD3D format expects the grid to have the form z, y, x (with y points
@@ -56,12 +56,10 @@ def to_emod3d(velocity_model: VelocityModel, directory: Path):
     if any(
         grid.attrs["solver"] != Solver.NOMINAL for grid in velocity_model.grids.values()
     ):
-        warnings.warn(
+        raise ValueError(
             "EMOD3D places every sample at its nominal depth, but this model was "
             "built for a physical solver.  Use an emod3d grid, or give the sw4 grid "
-            "a decay.",
-            UserWarning,
-            stacklevel=2,
+            "a decay."
         )
 
     resolutions = [grid.resolution for grid in velocity_model.grids.values()]

@@ -134,7 +134,7 @@ with Dask.
 |------------|-----------------------------------------------------------------------------|
 | `sw4`      | `extent_x/y`, `refinements` (2:1 nested resolutions, ordered automatically) |
 | `regular`  | `extent_x/y`, `thickness`, `resolution_x/y/z` (fixed vertical resolution)   |
-| `emod3d`   | `nx`, `ny`, `nz`, `resolution`, `topo_type` or `decay`                      |
+| `emod3d`   | `nx`, `ny`, `nz`, `resolution`, `decay`                                     |
 | `borehole` | `sites`, `depth`, `resolution_z` (one vertical profile per site)            |
 
 Every grid takes `surface` (path to a DEM) and optional `[grid.chunks]`. The
@@ -176,9 +176,8 @@ with a `[grid.decay]` table:
 | `tapered`  | `1 - A/(ratio · elevation)` on land, `1` at sea | `ratio` (default 1)                          |
 | `sleve`    | `sinh((L - A)/s) / sinh(L/s)`, flat below `L`  | `scale`, `length` (default: bottom of the first block) |
 
-On `emod3d`, `topo_type = "squashed"` and
-`"squashed_tapered"` are shorthands for `squashed` and `tapered`. Set either
-`topo_type` or `decay`, not both.
+An `emod3d` grid requires a decay. EMOD3D's `squashed` and `squashed_tapered`
+topography types are `squashed` and `tapered` (with the default `ratio = 1`).
 
 The builder rejects a decay that folds a column over itself. This can happen
 with `sleve` under deep water: keep `scale · tanh(length / scale)` deeper than

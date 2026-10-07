@@ -265,7 +265,7 @@ def test_nominal_sfile_interfaces_are_nominal_depths(
         assert list(f.attrs[sfile.MIN_MAX_DEPTH_ATTR]) == [top, bottom_1]
 
 
-def test_emod3d_output_warns_for_a_physical_grid(
+def test_emod3d_output_rejects_a_physical_grid(
     tmp_path: Path, simple_velocity_model: VelocityModel
 ):
     model = VelocityModel(
@@ -273,16 +273,5 @@ def test_emod3d_output_warns_for_a_physical_grid(
         qualities={"g0": simple_velocity_model.qualities["g0"]},
         metadata=ModelMetadata(),
     )
-    with pytest.warns(UserWarning, match="physical solver"):
+    with pytest.raises(ValueError, match="physical solver"):
         emod3d.to_emod3d(model, tmp_path / "emod3d")
-
-
-def test_grids_written_before_solver_coordinates_load_as_physical(
-    simple_velocity_model: VelocityModel,
-):
-    current = simple_velocity_model.grids["g0"]
-    old = current.drop_vars(Coordinate.NOMINAL_DEPTH)
-    old.attrs = {k: v for k, v in current.attrs.items() if k != "solver"}
-    grid = GridSchema.from_dataset(old)
-    assert grid.attrs["solver"] == "physical"
-    assert np.all(np.isnan(grid.nominal_depth.values))

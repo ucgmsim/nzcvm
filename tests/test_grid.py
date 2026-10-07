@@ -13,9 +13,10 @@ import numpy as np
 import pytest
 from pyproj import CRS
 
-from nzcvm.config.grids.emod3d import EMOD3DGrid, TopographyType
+from nzcvm.config.grids.emod3d import EMOD3DGrid
 from nzcvm.config.grids.model import Model
 from nzcvm.config.grids.sw4 import MeshRefinement, SW4GridConfig
+from nzcvm.config.grids.terrain import SquashedDecay
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.grid import Grid
@@ -86,7 +87,6 @@ def _emod3d_config(
     nz: int = 8,
     resolution: float = 1000.0,
     azimuth: float = 0.0,
-    topo_type: TopographyType = TopographyType.SQUASHED,
     chunks: dict | None = None,
 ) -> EMOD3DGrid:
     if chunks is None:
@@ -98,7 +98,7 @@ def _emod3d_config(
         nz=nz,
         resolution=resolution,
         orientation=_model(azimuth),
-        topo_type=topo_type,
+        decay=SquashedDecay(),
         chunks=chunks,
     )
 

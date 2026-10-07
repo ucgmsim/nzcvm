@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from pyproj import CRS
 
-from nzcvm.config.grids.emod3d import EMOD3DGrid, TopographyType
+from nzcvm.config.grids.emod3d import EMOD3DGrid
 from nzcvm.config.grids.model import Model
 from nzcvm.config.grids.sw4 import MeshRefinement, SW4GridConfig
 from nzcvm.config.grids.terrain import (
@@ -294,19 +294,8 @@ def _emod3d(surface: Path, **kwargs) -> EMOD3DGrid:
 
 class TestEMOD3DDecays:
     def test_emod3d_grids_are_nominal(self, bumpy_surface: Path) -> None:
-        grid = build_grids_from_config(
-            _emod3d(bumpy_surface, topo_type=TopographyType.SQUASHED)
-        )
+        grid = build_grids_from_config(_emod3d(bumpy_surface, decay=SquashedDecay()))
         assert grid["grid_0"].attrs["solver"] == Solver.NOMINAL
-
-    def test_topo_type_is_shorthand_for_decay(self, bumpy_surface: Path) -> None:
-        by_name = build_grids_from_config(
-            _emod3d(bumpy_surface, topo_type=TopographyType.SQUASHED_TAPERED)
-        )["grid_0"]
-        by_decay = build_grids_from_config(
-            _emod3d(bumpy_surface, decay=TaperedDecay(ratio=1.0))
-        )["grid_0"]
-        assert np.all(by_name.z.values == by_decay.z.values)
 
     def test_sleve_decays_over_the_whole_grid(self, bumpy_surface: Path) -> None:
         grid = build_grids_from_config(
@@ -314,17 +303,6 @@ class TestEMOD3DDecays:
         )["grid_0"]
         assert np.all(grid.z.isel(k=-1).values == 4900.0)
         assert np.all(grid.depth.isel(k=0).values == 0)
-
-    @pytest.mark.parametrize(
-        "kwargs",
-        [{}, {"topo_type": TopographyType.SQUASHED, "decay": SquashedDecay()}],
-        ids=["neither", "both"],
-    )
-    def test_exactly_one_of_topo_type_or_decay(
-        self, bumpy_surface: Path, kwargs: dict
-    ) -> None:
-        with pytest.raises(ValueError, match="exactly one"):
-            _emod3d(bumpy_surface, **kwargs)
 
 
 class TestDecayConfig:
