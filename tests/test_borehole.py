@@ -22,7 +22,7 @@ from nzcvm.config.grids.model import Projection
 from nzcvm.config.metadata import ModelMetadata
 from nzcvm.config.velocity_model import VelocityModelConfig
 from nzcvm.coordinates import Coordinate
-from nzcvm.formats import Format, write_velocity_model
+from nzcvm.formats import write_velocity_model
 from nzcvm.grids.borehole import read_sites, resolve_sites
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.grid import Grid
@@ -473,7 +473,7 @@ def test_grid_survives_the_chunked_pipeline(synthetic_surface: Path) -> None:
 def test_output_round_trips_through_zarr(grid: Grid, tmp_path: Path) -> None:
     """A profile is only useful when a reader can pick out one station."""
     path = tmp_path / "boreholes.zarr"
-    write_velocity_model(_run(grid), path, Format.ZARR, quantise_arrays=False)
+    write_velocity_model(_run(grid), path, "zarr", quantise_arrays=False)
 
     with xr.open_datatree(path, engine="zarr") as tree:
         stored = tree["grids/boreholes"].ds

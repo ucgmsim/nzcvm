@@ -45,7 +45,8 @@ jobs:
           # Benchmark the optimised extension, not a debug build.
           SETUPTOOLS_RUST_CARGO_PROFILE: release
         run: |
-          uv run --dev python benchmarks/benchmark_generate.py >> $GITHUB_STEP_SUMMARY
+          uv run --dev python benchmarks/benchmark_generate.py \
+            >> $GITHUB_STEP_SUMMARY
 
       # Run Criterion benchmarks and compare against the base branch.
       - name: Criterion benchmark comparison

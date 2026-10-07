@@ -102,6 +102,7 @@ uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
 | `nzcvm convert-tiff` | Convert a GeoTIFF raster to a surface                         |
 | `nzcvm tree-stats`   | Benchmark BVH query performance                               |
 | `nzcvm synthetic`    | Write synthetic DEM, Vs30, basin, and tomography inputs       |
+| `nzcvm plugins`      | List available layers, grids, and formats, and their packages |
 
 Useful `generate` options:
 
@@ -343,6 +344,8 @@ Inferred from the output path, or forced with `--format`.
 | `csv`     | `*.csv`   | Flat table, one row per point, labelled by grid, and by site   |
 | `parquet` | `*.parquet`, `*.pq` | The same table, with the float32 columns kept typed |
 
+Plugin packages can add more formats (see [Plugins](#plugins)).
+
 `csv` and `parquet` share one flattening step, so the columns are the same
 either way. Both hold the whole table in memory, which suits the outputs a
 person reads: boreholes, transects, a few profiles. Volumetric grids belong in
@@ -576,9 +579,9 @@ typed velocity, density and quality-factor arrays returned by every layer.
 
 ---
 
-## Extending with custom grids and layers
+## Extending with custom grids, layers, and formats
 
-Both grids and layers are extension points.
+Grids, layers, and output formats are all extension points.
 
 ### Functional layers (simple case)
 
@@ -809,3 +812,57 @@ dz = 100.0
 `nzcvm.grids.borehole` is the built-in version of this pattern: a registered
 `GridConfig` whose builder reads its own sites and DEM, over Dask-backed
 coordinates.
+
+### Custom output formats
+
+Register a writer with `@register_format`. It receives the populated velocity
+model and the output path. Any `extensions` let `nzcvm generate` infer the
+format from the output path. Without them, select the format with `--format`.
+
+```python
+from pathlib import Path
+
+from nzcvm.formats import register_format
+from nzcvm.velocity_model import VelocityModel
+
+
+@register_format("vs_summary", extensions=(".vs.txt",))
+def to_vs_summary(velocity_model: VelocityModel, path: Path) -> None:
+    with path.open("w") as f:
+        for name, (_grid, qualities) in velocity_model.pairwise.items():
+            f.write(f"{name}: mean Vs {float(qualities['vs'].mean()):.1f} m/s\n")
+```
+
+Pass `supports_quantisation=True` if the writer accepts a `quantise_arrays`
+keyword for `--quantise`.
+
+### Plugins
+
+To make custom layers, grids, or formats available to `nzcvm generate` without
+importing them yourself, declare entry points in the package that provides
+them. NZCVM imports each group as it loads the matching subsystem:
+
+| Entry-point group     | Module contents                                       |
+|-----------------------|-------------------------------------------------------|
+| `nzcvm.layer_configs` | `LayerConfig` subclasses                              |
+| `nzcvm.layer_impls`   | `Layer` subclasses or `@functional_layer` functions   |
+| `nzcvm.grid_configs`  | `GridConfig` subclasses                               |
+| `nzcvm.grid_impls`    | `@build_grids_from_config.register` builders          |
+| `nzcvm.formats`       | `@register_format` writers                            |
+
+```toml
+# pyproject.toml of the plugin package
+[project.entry-points."nzcvm.layer_configs"]
+depth_floor = "nzcvm_depth_floor.config"
+
+[project.entry-points."nzcvm.layer_impls"]
+depth_floor = "nzcvm_depth_floor.layer"
+```
+
+Configs and implementations load separately, so reading a config doesn't
+import a plugin's runtime dependencies. A `@functional_layer` module defines
+both at once, so list it only under `nzcvm.layer_impls`. Its configs then
+decode once something imports `nzcvm.layers`, which `nzcvm generate` always
+does. A plugin that fails to import logs a warning rather than breaking NZCVM.
+`nzcvm plugins` lists every available layer, grid, and format, which package
+provides it, and any plugin that failed to load.

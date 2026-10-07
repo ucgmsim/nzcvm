@@ -18,6 +18,7 @@ import xarray as xr
 from nzcvm.components import Component
 from nzcvm.config.grids.terrain import Solver
 from nzcvm.coordinates import Coordinate
+from nzcvm.formats.core import register_format
 from nzcvm.grids.grid import Grid
 from nzcvm.velocity_model import VelocityModel
 
@@ -95,6 +96,7 @@ def _solver_z(grid: Grid) -> xr.DataArray:
     return z.copy(data=da.broadcast_to(da.from_array(levels), z.shape, z.chunks))
 
 
+@register_format("sfile", extensions=(".sfile",))
 def to_sfile(velocity_model: VelocityModel, filename: Path):
 
     # The SW4 file format imposes that outermost axis (the i-axis in this

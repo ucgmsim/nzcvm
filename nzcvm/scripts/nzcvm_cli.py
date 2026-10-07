@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import sys
+from enum import StrEnum
 from json import JSONDecodeError
 from pathlib import Path
 from tomllib import TOMLDecodeError
@@ -18,9 +19,10 @@ from mashumaro.exceptions import InvalidFieldValue
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 from tqdm.dask import TqdmCallback
 
-from nzcvm import formats, registry
+from nzcvm import formats, plugins, registry
 from nzcvm.config import VelocityModelConfig, VelocityModelConfigFormat
 from nzcvm.layers import pipeline
 from nzcvm.layers.pipeline import execute_model_pipeline
@@ -166,6 +168,11 @@ def num_cores() -> int:
 
 console = Console(stderr=True)
 
+# Built from the registry so plugin formats appear as --format choices.
+OutputFormatChoice = StrEnum(
+    "OutputFormatChoice", {name: name for name in sorted(formats.FORMATS)}
+)
+
 
 app = typer.Typer(help="NZCVM velocity model toolkit.")
 app.add_typer(construct_mesh.app, name="basin")
@@ -175,6 +182,40 @@ app.add_typer(tree_stats.app, name="tree-stats")
 app.add_typer(view.app, name="view")
 app.add_typer(convert_tiff.app, name="convert-tiff")
 app.add_typer(synthetic.app, name="synthetic")
+
+
+@app.command(name="plugins")
+def list_plugins() -> None:
+    """List the available layers, grids and output formats, and any failed plugins."""
+    out = Console()
+    table = Table("Kind", "Type", "Implementation", "Provider")
+    for registered in sorted(
+        plugins.registered_types(), key=lambda t: (t.kind, t.provider, t.name)
+    ):
+        table.add_row(
+            registered.kind,
+            registered.name,
+            registered.implementation,
+            registered.provider,
+        )
+    out.print(table)
+
+    failed = plugins.failed_plugins()
+    if failed:
+        failures = Table(
+            "Group", "Name", "Target", "Distribution", "Error", title="Failed plugins"
+        )
+        for status in failed:
+            entry_point = status.entry_point
+            dist = entry_point.dist
+            failures.add_row(
+                entry_point.group,
+                entry_point.name,
+                entry_point.value,
+                f"{dist.name} {dist.version}" if dist else "",
+                f"[red]{status.error!r}[/red]",
+            )
+        out.print(failures)
 
 
 @app.command()
@@ -197,11 +238,12 @@ def generate(
         typer.Option(help="Number of threads to spawn to query the model.", min=1),
     ] = None,
     output_format: Annotated[
-        formats.Format,
+        OutputFormatChoice | None,
         typer.Option(
-            "--format", help="Output format. You can usually leave this as inferred."
+            "--format",
+            help="Output format. Inferred from the output path when not given.",
         ),
-    ] = formats.Format.INFERRED,
+    ] = None,
     config_format: Annotated[
         VelocityModelConfigFormat,
         typer.Option(

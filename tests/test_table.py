@@ -23,7 +23,7 @@ import xarray as xr
 from nzcvm.components import Component
 from nzcvm.config.metadata import ModelMetadata
 from nzcvm.coordinates import Coordinate
-from nzcvm.formats import Format, from_path, write_velocity_model
+from nzcvm.formats import from_path, write_velocity_model
 from nzcvm.formats.table import GRID_COLUMN, to_csv, to_parquet
 from nzcvm.grids.grid import Grid, GridSchema
 from nzcvm.qualities import QualitiesSchema
@@ -98,17 +98,17 @@ def labelled(tmp_path: Path) -> pd.DataFrame:
 @pytest.mark.parametrize(
     "suffix, expected",
     [
-        (".csv", Format.CSV),
-        (".parquet", Format.PARQUET),
-        (".pq", Format.PARQUET),
+        (".csv", "csv"),
+        (".parquet", "parquet"),
+        (".pq", "parquet"),
     ],
 )
-def test_format_is_inferred_from_the_extension(suffix: str, expected: Format) -> None:
-    assert from_path(Path("boreholes").with_suffix(suffix)) is expected
+def test_format_is_inferred_from_the_extension(suffix: str, expected: str) -> None:
+    assert from_path(Path("boreholes").with_suffix(suffix)) == expected
 
 
-@pytest.mark.parametrize("format", [Format.CSV, Format.PARQUET])
-def test_quantisation_is_rejected(format: Format, tmp_path: Path) -> None:
+@pytest.mark.parametrize("format", ["csv", "parquet"])
+def test_quantisation_is_rejected(format: str, tmp_path: Path) -> None:
     """ZFP applies to the array stores, so it can't mean anything here."""
     with pytest.raises(ValueError, match="quantisation"):
         write_velocity_model(
@@ -118,13 +118,13 @@ def test_quantisation_is_rejected(format: Format, tmp_path: Path) -> None:
 
 def test_write_velocity_model_dispatches_to_csv(tmp_path: Path) -> None:
     path = tmp_path / "out.csv"
-    write_velocity_model(_model(_grid()), path, Format.INFERRED, quantise_arrays=False)
+    write_velocity_model(_model(_grid()), path, quantise_arrays=False)
     assert path.read_text().startswith(f"{GRID_COLUMN},")
 
 
 def test_write_velocity_model_dispatches_to_parquet(tmp_path: Path) -> None:
     path = tmp_path / "out.parquet"
-    write_velocity_model(_model(_grid()), path, Format.INFERRED, quantise_arrays=False)
+    write_velocity_model(_model(_grid()), path, quantise_arrays=False)
     assert pd.read_parquet(path).columns[0] == GRID_COLUMN
 
 
