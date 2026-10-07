@@ -104,7 +104,9 @@ class Surface:
             Elevation (z) values with the same shape as *x*.
         """
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
-        pts = np.stack((x.flatten(), y.flatten()), axis=-1).astype(np.float32, copy=False)
+        pts = np.stack((x.flatten(), y.flatten()), axis=-1).astype(
+            np.float32, copy=False
+        )
 
         z = self.inner.query_many(pts)
         logger.debug("Query complete.")
