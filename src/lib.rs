@@ -580,7 +580,8 @@ mod nzcvm {
         ///
         /// `xy` is an `(N, 2)` float array with columns `[x, y]`.
         ///
-        /// Returns an `(N,)` float array. Points outside the surface are set to 0.0.
+        /// Returns an `(N,)` float array. Points outside the surface are NaN, so a
+        /// caller cannot mistake a miss for a real value of zero.
         pub fn query_many<'py>(
             &self,
             py: Python<'py>,
@@ -595,8 +596,8 @@ mod nzcvm {
             let coords = xy.as_array();
             let n = coords.nrows();
 
-            // Initialise output buffer
-            let mut buf = Array1::<Real>::zeros(n);
+            // Every point starts as a miss and is overwritten only on a hit.
+            let mut buf = Array1::<Real>::from_elem(n, Real::NAN);
 
             // Detach from GIL to allow multi-threaded Python to keep moving
             // (or to allow Rayon par_iter if you decide to add it later)
