@@ -19,13 +19,6 @@ import xarray as xr
 from nzcvm.qualities import Qualities, QualitiesSchema
 
 # Brocher Vp/Vs relations, converted to accept and return m/s instead of km/s using sympy.
-# Coefficients are ordered from the highest degree down, as np.polyval expects.
-#
-# These are plain arrays evaluated with np.polyval rather than DataArrays passed
-# to xr.polyval. xr.polyval reindexes the coefficients on every call, which
-# lazily builds a pandas index hash table on the shared module-level DataArray.
-# That initialisation isn't thread-safe, and under the dask threaded scheduler
-# it raised spurious "index has duplicate values" errors.
 BROCHER_VP_COEFFS = np.array(
     [-2.51e-11, 2.683e-07, -0.0008206, 2.0947, 940.9], dtype=np.float32
 )
@@ -36,9 +29,7 @@ BROCHER_DENSITY_COEFFS = np.array(
 
 def _polyval(coeffs: np.ndarray, x: xr.DataArray) -> xr.DataArray:
     """Evaluate the polynomial with ``coeffs`` element-wise over ``x``."""
-    return xr.apply_ufunc(
-        functools.partial(np.polyval, coeffs), x, dask="parallelized"
-    )
+    return xr.apply_ufunc(functools.partial(np.polyval, coeffs), x, dask="parallelized")
 
 
 VP_FROM_VS_RELATION = functools.partial(_polyval, BROCHER_VP_COEFFS)
