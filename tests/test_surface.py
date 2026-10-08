@@ -144,3 +144,37 @@ def test_surface_pickleable(flat_surface: Surface) -> None:
         restored.transform(x, y),
         rtol=1e-5,
     )
+
+
+def _sloped_surface() -> Surface:
+    """5x5 grid over [0, 4]² with z = x + 10 y, so every vertex is distinct."""
+    xs = np.arange(5, dtype=np.float32)
+    xx, yy = np.meshgrid(xs, xs, indexing="ij")
+    mesh = StructuredMeshSchema.new(
+        x=xx, y=yy, z=xx + 10 * yy, i=np.arange(5), j=np.arange(5), name="sloped"
+    )
+    return Surface.from_dataset(mesh)
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "expected"),
+    [(10.0, 2.0, 24.0), (2.0, -7.0, 2.0), (-3.0, 9.0, 40.0), (1e6, 1e6, 44.0)],
+    ids=["east", "south", "north-west", "far"],
+)
+def test_transform_extrapolates_nearest_boundary_vertex(
+    x: float, y: float, expected: float
+) -> None:
+    surface = _sloped_surface()
+    z = surface.transform(
+        np.array([x], np.float32), np.array([y], np.float32), extrapolate=True
+    )
+    assert z == pytest.approx([expected])
+
+
+def test_extrapolate_leaves_hits_alone() -> None:
+    surface = _sloped_surface()
+    x = np.array([1.5, 2.5], dtype=np.float32)
+    y = np.array([0.5, 3.0], dtype=np.float32)
+    np.testing.assert_allclose(
+        surface.transform(x, y, extrapolate=True), surface.transform(x, y)
+    )

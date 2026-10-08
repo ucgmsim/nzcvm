@@ -18,6 +18,7 @@ from typing import Self
 import h5py
 import numpy as np
 import pyproj
+import scipy.spatial
 import xarray as xr
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.tree import Tree
@@ -49,6 +50,11 @@ class Surface:
     inner: PySurfaceModel
     bounds: np.ndarray
     n_points: int
+    #: Values on the mesh boundary, and a tree over their (x, y), for
+    #: nearest-neighbour extrapolation.  The nearest mesh vertex to a point
+    #: outside the mesh lies on its boundary.
+    edge_tree: scipy.spatial.KDTree
+    edge_z: np.ndarray
 
     @classmethod
     def from_dataset(cls, mesh: StructuredMesh) -> Self:
@@ -70,7 +76,23 @@ class Surface:
             ]
         )
 
-        return cls(inner, bounds=bounds, n_points=len(points))
+        edges = (
+            (slice(None), 0),
+            (slice(None), -1),
+            (0, slice(None)),
+            (-1, slice(None)),
+        )
+        edge_x = np.concatenate([mesh.x.values[e] for e in edges])
+        edge_y = np.concatenate([mesh.y.values[e] for e in edges])
+        edge_z = np.concatenate([mesh.z.values[e] for e in edges])
+
+        return cls(
+            inner,
+            bounds=bounds,
+            n_points=len(points),
+            edge_tree=scipy.spatial.KDTree(np.c_[edge_x, edge_y]),
+            edge_z=edge_z,
+        )
 
     @classmethod
     def load(cls, path: Path) -> Self:
@@ -90,19 +112,24 @@ class Surface:
             mesh = StructuredMeshSchema.from_dataset(dset)
             return cls.from_dataset(mesh)
 
-    def transform(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    def transform(
+        self, x: np.ndarray, y: np.ndarray, extrapolate: bool = False
+    ) -> np.ndarray:
         """Interpolate surface elevation at query (x, y) locations.
 
         Parameters
         ----------
         x, y :
             Query point coordinates in the same projected CRS as the mesh.
+        extrapolate :
+            If True, a point outside the surface takes the value of the
+            nearest vertex on the surface's boundary.  If False, it takes NaN.
 
         Returns
         -------
         numpy.ndarray
             Elevation (z) values with the same shape as *x*, NaN where a
-            point falls outside the surface.
+            point falls outside the surface, unless *extrapolate* fills it.
         """
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
         pts = np.stack((x.flatten(), y.flatten()), axis=-1).astype(
@@ -111,6 +138,11 @@ class Surface:
 
         z = self.inner.query_many(pts)
         logger.debug("Query complete.")
+        if extrapolate:
+            outside = np.isnan(z)
+            if outside.any():
+                _, nearest = self.edge_tree.query(pts[outside])
+                z[outside] = self.edge_z[nearest]
         return z.reshape(x.shape).astype(x.dtype)
 
     def __getstate__(self):
