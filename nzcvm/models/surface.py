@@ -129,7 +129,7 @@ class Surface:
         -------
         numpy.ndarray
             Elevation (z) values with the same shape as *x*, NaN where a
-            point falls outside the surface unless *extrapolate* is set.
+            point falls outside the surface, unless *extrapolate* fills it.
         """
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
         pts = np.stack((x.flatten(), y.flatten()), axis=-1).astype(
