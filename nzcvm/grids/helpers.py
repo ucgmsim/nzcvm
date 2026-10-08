@@ -31,12 +31,15 @@ def compute_surface_elevation(
     Returns
     -------
     xarray.DataArray
-        Elevation values with the same shape and chunks as *x*.
+        Elevation values with the same shape and chunks as *x*.  Points
+        beyond the edge of *topography* take the value of the nearest
+        boundary vertex.
     """
     return xr.apply_ufunc(
         topography.transform,
         x,
         y,
+        kwargs={"extrapolate": True},
         dask="parallelized",
         output_dtypes=[x.dtype],
     )
