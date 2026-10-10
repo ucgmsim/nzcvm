@@ -1,4 +1,4 @@
-from typing import Annotated, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Annotated, get_args, get_origin, get_type_hints
 
 from mashumaro.config import BaseConfig
 from mashumaro.exceptions import InvalidFieldValue
@@ -6,6 +6,12 @@ from mashumaro.mixins.dict import DataClassDictMixin
 from mashumaro.mixins.json import DataClassJSONMixin
 from mashumaro.mixins.toml import DataClassTOMLMixin
 from mashumaro.mixins.yaml import DataClassYAMLMixin
+
+
+class ConfigObjectConfig(BaseConfig):
+    serialize_by_alias = True
+    omit_none = True
+    forbid_extra_keys = True
 
 
 class ConfigObject(
@@ -53,7 +59,11 @@ class ConfigObject(
                         msg=str(e),
                     ) from e
 
-    class Config(BaseConfig):
-        serialize_by_alias = True
-        omit_none = True
-        forbid_extra_keys = True
+    # Declared as ``type[BaseConfig]`` rather than a nested class so that
+    # subclasses can override it with their own ``class Config(...)``
+    # without ty flagging an invalid attribute override. The annotation is
+    # hidden at runtime because mashumaro would treat it as a field.
+    if TYPE_CHECKING:
+        Config: type[BaseConfig]
+    else:
+        Config = ConfigObjectConfig
