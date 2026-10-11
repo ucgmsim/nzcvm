@@ -18,10 +18,11 @@ import typer
 import xarray as xr
 
 from nzcvm.models.mesh import (
-    DEFAULT_ENCODING_SETTINGS,
+    ModelType,
     TetrahedralMesh,
     TetrahedralMeshSchema,
     make_mesh,
+    mesh_encoding,
 )
 from nzcvm.models.surface import SurfaceGrid, read_surface_file
 from nzcvm.scripts._extras import missing_extra
@@ -249,7 +250,10 @@ def construct_volumetric_mesh(
     )
 
     model_type = np.concatenate(
-        [np.full((len(layer.tetra),), 1, dtype=np.uint8) for layer in layers]
+        [
+            np.full(len(layer.tetra), ModelType.INTERPOLATE, dtype=np.uint8)
+            for layer in layers
+        ]
     )
 
     for layer in layers:
@@ -453,7 +457,12 @@ def volumes(vertices: np.ndarray, tetra: np.ndarray) -> np.ndarray:
 
 def cull_mesh(
     vertices: np.ndarray, tetra: np.ndarray, culling_volume: float
-) -> tuple[np.ndarray, np.ndarray, int, int]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Drop tetrahedra at or below `culling_volume`, and the vertices left unused.
+
+    Returns the kept vertices, the re-indexed kept tetrahedra, a mask of the
+    kept vertices, and the number of tetrahedra dropped.
+    """
     volume = volumes(vertices, tetra)
     has_non_zero_volume = volume > culling_volume
     non_zero_tetra = tetra[has_non_zero_volume]
@@ -471,21 +480,19 @@ def cull_mesh(
     return (
         culled_vertices,
         culled_tetra,
-        int(len(vertices) - np.sum(has_vertex_neighbours)),
+        has_vertex_neighbours,
         int(len(tetra) - np.sum(has_non_zero_volume)),
     )
 
 
-def slice_with_model(
-    triangulation: Triangulation,
-    topography: np.ndarray,
-    top_surface: np.ndarray,
-    bottom_surface: np.ndarray,
-    model: pd.DataFrame,
-    culling_volume: float,
-    pad_top: bool,
-) -> list[Layer]:
-    layers = []
+def prism_tetra(triangulation: Triangulation) -> np.ndarray:
+    """Split the prism under each triangle into three tetrahedra.
+
+    Vertex ``2 n`` is the top of column ``n`` and ``2 n + 1`` its bottom (see
+    :func:`interleave_top_and_bottom`).  Sorting each triangle's vertices
+    makes neighbouring prisms split their shared face along the same
+    diagonal, so the tetrahedra conform.
+    """
     tri_verts = np.stack(
         [
             triangulation.triangles["i"],
@@ -500,8 +507,97 @@ def slice_with_model(
     sorted_triangles["i"] = tri_verts[:, 0]
     sorted_triangles["j"] = tri_verts[:, 1]
     sorted_triangles["k"] = tri_verts[:, 2]
+    return construct_mesh_tetra(sorted_triangles)
 
-    tetra = construct_mesh_tetra(sorted_triangles)
+
+def profile_mesh(
+    name: str,
+    geometry: shapely.Geometry,
+    triangulation: Triangulation,
+    topography: np.ndarray,
+    top_surface: np.ndarray,
+    bottom_surface: np.ndarray,
+    model: pd.DataFrame,
+    culling_volume: float,
+    pad_top: bool,
+    priority: int,
+) -> TetrahedralMesh:
+    """Fill the space between two surfaces with one layer of depth-profile tetrahedra.
+
+    Every tetrahedron evaluates `model` at the query point's depth below the
+    topography, so the profile's layer interfaces don't need tetrahedra of
+    their own: one prism column per triangle spans the whole basin.  As in
+    the layered meshes, the basin stops at the bottom of the model's last
+    layer.
+
+    Raises
+    ------
+    ValueError
+        If the model's layer tops decrease with depth.
+    """
+    tops = model["z"].to_numpy(dtype=np.float32)
+    # A layer whose top equals the next one's (in float32) spans no depth.
+    keep = np.r_[tops[:-1] != tops[1:], True]
+    model, tops = model[keep], tops[keep]
+    if np.any(np.diff(tops[1:]) <= 0):
+        raise ValueError("1-D model layer tops must increase with depth")
+
+    model_bottom = topography + (model["z"].iloc[-1] + model["thickness"].iloc[-1])
+    bottom_surface = np.maximum(np.minimum(bottom_surface, model_bottom), top_surface)
+    if pad_top:
+        # Raise the top where the basin has thickness so topography slightly
+        # above the top surface still lands inside the mesh.  The first
+        # profile layer extends upwards to cover it.
+        top_surface = np.where(
+            bottom_surface > top_surface, top_surface - PAD_DEPTH, top_surface
+        )
+    columns = np.c_[triangulation.vertices["x"], triangulation.vertices["y"]]
+    vertices = interleave_top_and_bottom(
+        np.c_[columns, top_surface], np.c_[columns, bottom_surface]
+    )
+    vertices, tetra, kept, zero_volume = cull_mesh(
+        vertices, prism_tetra(triangulation), culling_volume
+    )
+    print(
+        f"Culled {zero_volume} degenerate tetrahedra, "
+        f"leaving {len(tetra)} tetrahedra on {len(vertices)} vertices"
+    )
+
+    depth = vertices[:, 2] - np.repeat(topography, 2)[kept]
+    # The layer each vertex lies in, matching the Rust `DepthProfile::at`: a
+    # depth on a boundary belongs to the deeper layer.
+    vertex_layer = np.searchsorted(tops[1:], depth, side="right")
+    fields = ("rho", "vp", "vs", "qp", "qs")
+    profile = {f: model[f].to_numpy(dtype=np.float32) for f in fields}
+    return make_mesh(
+        name=name,
+        points=vertices,
+        connectivity=tetra,
+        cell_data={
+            "model_type": np.full(len(tetra), ModelType.DEPTH_PROFILE, dtype=np.uint8),
+            "priority": np.full(len(tetra), priority, dtype=np.uint8),
+        },
+        geometry=geometry,
+        # The vertex qualities are only for display: depth-profile
+        # tetrahedra read just the vertex alpha.
+        field_data={f: profile[f][vertex_layer] for f in fields}
+        | {"alpha": np.ones(len(vertices), dtype=np.float32)},
+        depth_profile={"depth": depth.astype(np.float32), "profile_top": tops}
+        | {f"profile_{f}": profile[f] for f in fields},
+    )
+
+
+def slice_with_model(
+    triangulation: Triangulation,
+    topography: np.ndarray,
+    top_surface: np.ndarray,
+    bottom_surface: np.ndarray,
+    model: pd.DataFrame,
+    culling_volume: float,
+    pad_top: bool,
+) -> list[Layer]:
+    layers = []
+    tetra = prism_tetra(triangulation)
     emitted_layer = False
     for _, row in model.iterrows():
         z = row["z"]
@@ -532,9 +628,10 @@ def slice_with_model(
         ]
 
         mesh_vertices = interleave_top_and_bottom(mesh_top, mesh_bottom)
-        mesh_vertices, mesh_tetra, no_neighbours, zero_volume = cull_mesh(
+        mesh_vertices, mesh_tetra, kept, zero_volume = cull_mesh(
             mesh_vertices, tetra, culling_volume
         )
+        no_neighbours = int(np.count_nonzero(~kept))
         if zero_volume or no_neighbours:
             print(
                 f"Found {zero_volume} degenerate tetra in this layer and {no_neighbours} vertices to remove"
@@ -729,6 +826,15 @@ def main(
             help="If true, pad the top layer (useful to prevent topography peek through)."
         ),
     ] = True,
+    layered: Annotated[
+        bool,
+        typer.Option(
+            help="Slice the basin into one tetrahedral layer per 1-D model layer "
+            "and interpolate vertex qualities, instead of evaluating the model "
+            "as a depth profile.  Many times larger; only needed when the "
+            "vertex qualities are rewritten afterwards (see banks.py)."
+        ),
+    ] = False,
 ) -> None:
     """Entry point for the ``nzcvm construct-mesh`` command."""
 
@@ -807,18 +913,33 @@ def main(
         topo_grid, triangulation.vertices, label="topography"
     )
 
-    print("Slicing model into volumetric mesh")
-    layers = slice_with_model(
-        triangulation,
-        mesh_topography,
-        mesh_top,
-        mesh_bottom,
-        model,
-        culling_volume,
-        pad_top=pad_top,
-    )
     name = output.stem
-    mesh = construct_volumetric_mesh(name, poly, layers, priority)
+    if layered:
+        print("Slicing model into volumetric mesh")
+        layers = slice_with_model(
+            triangulation,
+            mesh_topography,
+            mesh_top,
+            mesh_bottom,
+            model,
+            culling_volume,
+            pad_top=pad_top,
+        )
+        mesh = construct_volumetric_mesh(name, poly, layers, priority)
+    else:
+        print("Filling basin with depth-profile tetrahedra")
+        mesh = profile_mesh(
+            name,
+            poly,
+            triangulation,
+            mesh_topography,
+            mesh_top,
+            mesh_bottom,
+            model,
+            culling_volume,
+            pad_top=pad_top,
+            priority=priority,
+        )
 
     if smoothing > 0:
         print("Applying smoothing boundary")
@@ -833,6 +954,6 @@ def main(
         mesh["alpha"].loc[:] = alpha
 
     print(mesh)
-    mesh.to_zarr(output, mode="w", encoding=DEFAULT_ENCODING_SETTINGS)
-    nbytes = output.stat().st_size
+    mesh.to_zarr(output, mode="w", encoding=mesh_encoding(mesh))
+    nbytes = sum(f.stat().st_size for f in output.rglob("*") if f.is_file())
     print(f"Saved model with size {nbytes / (1024**2):.1f} MB")

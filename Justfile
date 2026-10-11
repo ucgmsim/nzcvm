@@ -8,7 +8,7 @@ coastline := "resources/coastline.wkb.gz"
 
 banks:
     if [ ! -d models/BanksPeninsula_GTL.zarr ]; then \
-        {{ construct }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_outline_WGS84.geojson ${NZCVM_DATA_ROOT}/regional/Canterbury/CantDEM.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_Miocene_WGS84.h5 models/BanksPeninsula.zarr --priority 44 --vm-1d ${NZCVM_DATA_ROOT}/vm1d/banks_dummy.fd_modfile --no-pad-top; \
+        {{ construct }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_outline_WGS84.geojson ${NZCVM_DATA_ROOT}/regional/Canterbury/CantDEM.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_Miocene_WGS84.h5 models/BanksPeninsula.zarr --priority 44 --vm-1d ${NZCVM_DATA_ROOT}/vm1d/banks_dummy.fd_modfile --no-pad-top --layered; \
         uv run nzcvm/scripts/banks.py; \
         rm -r models/BanksPeninsula.zarr; \
     fi

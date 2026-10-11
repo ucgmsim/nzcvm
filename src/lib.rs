@@ -19,7 +19,7 @@ mod nzcvm {
     use crate::coastline::{Coastline, Segment};
     use crate::grid::StructuredGrid;
     use crate::mesh::MeshModel;
-    use crate::model::{AnyField, Interpolated};
+    use crate::model::{AnyField, DepthProfile, Interpolated, Profiled};
     use crate::model_tree::{ModelTree, TreeModel};
     use crate::quality::Quality;
     use crate::query::Query;
@@ -211,6 +211,59 @@ mod nzcvm {
                 .map(Quality::from)
                 .collect();
             self.build(Interpolated::new(qualities).into())
+        }
+
+        /// Finish with a 1-D depth profile, evaluated at the barycentrically
+        /// interpolated depth below the profile's reference surface.
+        ///
+        /// Parameters
+        /// ----------
+        /// alpha :
+        ///     ``(N,)`` alpha of each vertex.
+        /// depth :
+        ///     ``(N,)`` depth of each vertex below the reference surface.
+        /// tops :
+        ///     ``(L,)`` depth of the top of each layer, strictly increasing
+        ///     after the first, which is ignored: the first layer extends
+        ///     upwards without limit.
+        /// layers :
+        ///     ``(L, 5)`` ``[rho, vp, vs, qp, qs]`` of each layer.
+        fn depth_profile(
+            &mut self,
+            alpha: PyReadonlyArray1<Real>,
+            depth: PyReadonlyArray1<Real>,
+            tops: PyReadonlyArray1<Real>,
+            layers: PyReadonlyArray2<Real>,
+        ) -> PyResult<PyMeshModel> {
+            let layers = layers.as_array();
+            if layers.ncols() != 5 {
+                return Err(PyValueError::new_err(format!(
+                    "profile qualities must have 5 columns [rho, vp, vs, qp, qs], got {}",
+                    layers.ncols()
+                )));
+            }
+            let layers = layers
+                .rows()
+                .into_iter()
+                .map(|r| Quality {
+                    rho: r[0],
+                    vp: r[1],
+                    vs: r[2],
+                    qp: r[3],
+                    qs: r[4],
+                    alpha: 1.0,
+                })
+                .collect();
+            let profile = DepthProfile::new(&tops.as_array().to_vec(), layers)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let (alpha, depth) = (alpha.as_array(), depth.as_array());
+            if alpha.len() != depth.len() {
+                return Err(PyValueError::new_err(
+                    "depth profile needs one alpha and one depth per vertex",
+                ));
+            }
+            let vertices = depth.iter().zip(alpha).map(|(&d, &a)| [d, a]).collect();
+            self.build(Profiled::new(vertices, profile).into())
         }
     }
 

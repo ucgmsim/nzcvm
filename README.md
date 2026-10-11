@@ -548,12 +548,16 @@ the tetrahedral and structured mesh dataclasses and their I/O.
 
 Each mesh has one field type, its `model_type`, which turns a query point
 into a quality: `INTERPOLATE` (barycentric interpolation of the vertex
-qualities).
+qualities, used by tomography) or `DEPTH_PROFILE`. A depth-profile
+mesh interpolates the depth below the topography from a tetrahedron's
+vertices, then looks that depth up in the mesh's 1-D profile. Basin meshes
+use depth profiles, so one layer of tetrahedra spans the basin however many
+layers the 1-D model has.
 
 In Rust, `TetMesh` holds the connectivity and locates the tetrahedron that
-contains a point. A `Field` (`Interpolated`, or `Constant` for in-memory
-meshes) turns the point's barycentric coordinates in that tetrahedron into a
-quality, and `MeshModel<F>` pairs one of each. `ModelTree` holds `TreeModel`s: a `MeshModel<AnyField>` with its
+contains a point. A `Field` (`Interpolated`, `Profiled`, or `Constant` for
+in-memory meshes) turns the point's barycentric coordinates in that
+tetrahedron into a quality, and `MeshModel<F>` pairs one of each. `ModelTree` holds `TreeModel`s: a `MeshModel<AnyField>` with its
 priority and name.
 
 ### `nzcvm.layers`

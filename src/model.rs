@@ -2,14 +2,74 @@
 //!
 //! A [`Field`] turns a point inside one of a mesh's simplices, given by its
 //! barycentric coordinates, into a [`Quality`].  Each field type owns the
-//! per-vertex or per-simplex data it reads; the mesh owns the connectivity
-//! and checks the field covers it when the two are paired.  [`AnyField`] holds any of them
+//! per-vertex or per-simplex data it reads, so a depth-profile field can't
+//! exist without its profile; the mesh owns the connectivity and checks the
+//! field covers it when the two are paired.  [`AnyField`] holds any of them
 //! for meshes whose field type is only known at run time.
 
 use crate::quality::{Quality, barycentric_interpolate};
 use crate::real::Real;
 use enum_dispatch::enum_dispatch;
 use nalgebra::Point4;
+
+/// A 1-D velocity profile: piecewise-constant qualities as a function of
+/// depth below a reference surface.
+///
+/// Layer `i` spans depths `[boundaries[i - 1], boundaries[i])`.  The first
+/// layer extends upwards without limit and the last downwards without
+/// limit, so every depth maps to a layer.  The `alpha` of each layer is
+/// ignored: [`Profiled`] takes alpha from the mesh vertices.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DepthProfile {
+    boundaries: Vec<Real>,
+    layers: Vec<Quality>,
+}
+
+/// Reasons a [`DepthProfile`] cannot be built.
+#[derive(Debug, PartialEq)]
+pub enum DepthProfileError {
+    /// The profile has no layers.
+    Empty,
+    /// `tops` and `layers` differ in length.
+    LengthMismatch,
+    /// Layer tops are not strictly increasing (or are NaN).
+    Unsorted,
+}
+
+impl std::fmt::Display for DepthProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Empty => "depth profile has no layers",
+            Self::LengthMismatch => "profile tops and qualities differ in length",
+            Self::Unsorted => "profile layer tops must strictly increase",
+        })
+    }
+}
+
+impl DepthProfile {
+    /// Build a profile from the depth of the top of each layer and the
+    /// layer qualities.  `tops[0]` is ignored, because the first layer
+    /// extends upwards without limit.
+    pub fn new(tops: &[Real], layers: Vec<Quality>) -> Result<Self, DepthProfileError> {
+        if layers.is_empty() {
+            return Err(DepthProfileError::Empty);
+        }
+        if tops.len() != layers.len() {
+            return Err(DepthProfileError::LengthMismatch);
+        }
+        let boundaries = tops[1..].to_vec();
+        if boundaries.iter().any(|b| b.is_nan()) || !boundaries.windows(2).all(|w| w[0] < w[1]) {
+            return Err(DepthProfileError::Unsorted);
+        }
+        Ok(Self { boundaries, layers })
+    }
+
+    /// Return the quality of the layer containing `depth`.  A depth on a
+    /// boundary belongs to the deeper layer.
+    pub fn at(&self, depth: Real) -> Quality {
+        self.layers[self.boundaries.partition_point(|&b| b <= depth)]
+    }
+}
 
 /// A quality field over the simplices of a mesh.
 ///
@@ -98,6 +158,55 @@ impl Field for Constant {
     }
 }
 
+/// A [`DepthProfile`] evaluated at the depth below a reference surface.  Used
+/// by basins.
+///
+/// Depth and alpha are interpolated barycentrically from the vertices, so a
+/// single simplex can span any number of profile layers: the layer
+/// interfaces need no simplices of their own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profiled {
+    /// `[depth below the reference surface, alpha]` of each vertex, kept
+    /// together so a query reads one array.
+    vertices: Vec<[Real; 2]>,
+    profile: DepthProfile,
+}
+
+impl Profiled {
+    /// A field evaluating `profile` at the interpolated depth, with each
+    /// vertex given as `[depth, alpha]`.
+    pub fn new(vertices: Vec<[Real; 2]>, profile: DepthProfile) -> Self {
+        Self { vertices, profile }
+    }
+}
+
+impl Field for Profiled {
+    fn covers(&self, num_vertices: usize, _num_simplices: usize) -> bool {
+        self.vertices.len() == num_vertices
+    }
+
+    fn quality_at(&self, _simplex: usize, corners: [u32; 4], bary: &Point4<Real>) -> Quality {
+        let corners = corners.map(|v| self.vertices[v as usize]);
+        let weights = [bary.x, bary.y, bary.z, bary.w];
+        let [depth, alpha] = corners
+            .iter()
+            .zip(weights)
+            .fold([0.0, 0.0], |[depth, alpha], (&[d, a], weight)| {
+                [depth + weight * d, alpha + weight * a]
+            });
+        Quality {
+            alpha,
+            ..self.profile.at(depth)
+        }
+    }
+
+    fn heap_size(&self) -> usize {
+        vec_bytes(&self.vertices)
+            + vec_bytes(&self.profile.boundaries)
+            + vec_bytes(&self.profile.layers)
+    }
+}
+
 /// Any of the field types, for meshes whose field type is only known at
 /// run time.  Queries pay one dispatch per simplex hit.
 #[enum_dispatch(Field)]
@@ -105,6 +214,7 @@ impl Field for Constant {
 pub enum AnyField {
     Interpolated,
     Constant,
+    Profiled,
 }
 
 #[cfg(test)]
@@ -121,6 +231,64 @@ mod tests {
             qs: 50.0,
             alpha: 1.0,
         }
+    }
+
+    fn three_layers() -> DepthProfile {
+        DepthProfile::new(
+            &[0.0, 100.0, 300.0],
+            vec![layer(400.0), layer(800.0), layer(1600.0)],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_profile_picks_layer_by_depth() {
+        let profile = three_layers();
+        assert_eq!(profile.at(50.0).vs, 400.0);
+        assert_eq!(profile.at(150.0).vs, 800.0);
+        assert_eq!(profile.at(299.0).vs, 800.0);
+        assert_eq!(profile.at(5000.0).vs, 1600.0);
+    }
+
+    #[test]
+    fn test_profile_boundary_belongs_to_deeper_layer() {
+        let profile = three_layers();
+        assert_eq!(profile.at(100.0).vs, 800.0);
+        assert_eq!(profile.at(300.0).vs, 1600.0);
+    }
+
+    #[test]
+    fn test_profile_extends_above_first_top() {
+        // Points above the reference surface (e.g. a padded top) take the
+        // first layer.
+        assert_eq!(three_layers().at(-50.0).vs, 400.0);
+    }
+
+    #[test]
+    fn test_profile_rejects_bad_input() {
+        assert_eq!(
+            DepthProfile::new(&[], vec![]),
+            Err(DepthProfileError::Empty)
+        );
+        assert_eq!(
+            DepthProfile::new(&[0.0], vec![layer(1.0), layer(2.0)]),
+            Err(DepthProfileError::LengthMismatch)
+        );
+        assert_eq!(
+            DepthProfile::new(&[0.0, 200.0, 100.0], vec![layer(1.0); 3]),
+            Err(DepthProfileError::Unsorted)
+        );
+        assert_eq!(
+            DepthProfile::new(&[0.0, Real::NAN], vec![layer(1.0); 2]),
+            Err(DepthProfileError::Unsorted)
+        );
+    }
+
+    #[test]
+    fn test_single_layer_profile_ignores_first_top() {
+        let profile = DepthProfile::new(&[Real::NAN], vec![layer(700.0)]).unwrap();
+        assert_eq!(profile.at(-1e6).vs, 700.0);
+        assert_eq!(profile.at(1e6).vs, 700.0);
     }
 
     /// The barycentric coordinates of vertex `i` of a simplex.
@@ -141,6 +309,26 @@ mod tests {
         assert_relative_eq!(field.quality_at(0, corners, &centre).vs, 7.0 / 4.0);
     }
 
+    /// One simplex spanning all three layers: the profile is evaluated at
+    /// the interpolated depth, and alpha is interpolated from the vertices.
+    #[test]
+    fn test_profiled_spans_layers() {
+        // Vertices 0-2 on the reference surface, vertex 3 400 m below it.
+        let vertices = vec![[0.0, 1.0], [0.0, 1.0], [0.0, 0.5], [400.0, 0.5]];
+        let field = Profiled::new(vertices, three_layers());
+        let corners = [0, 1, 2, 3];
+        for (depth, vs) in [(50.0, 400.0), (150.0, 800.0), (350.0, 1600.0)] {
+            let w = depth / 400.0;
+            let bary = Point4::new((1.0 - w) / 3.0, (1.0 - w) / 3.0, (1.0 - w) / 3.0, w);
+            assert_eq!(field.quality_at(0, corners, &bary).vs, vs, "depth {depth}");
+        }
+        let bary = Point4::new(0.4, 0.3, 0.2, 0.1);
+        assert_relative_eq!(
+            field.quality_at(0, corners, &bary).alpha,
+            0.4 + 0.3 + 0.5 * 0.3
+        );
+    }
+
     #[test]
     fn test_constant_ignores_position() {
         let field = Constant::new(vec![layer(1.0), layer(2.0)]);
@@ -152,6 +340,7 @@ mod tests {
     fn test_coverage() {
         assert!(Interpolated::new(vec![layer(0.0); 4]).covers(4, 9));
         assert!(!Interpolated::new(vec![layer(0.0); 3]).covers(4, 9));
+        assert!(Profiled::new(vec![[0.0, 1.0]; 4], three_layers()).covers(4, 9));
         assert!(Constant::new(vec![layer(0.0); 9]).covers(4, 9));
         assert!(!Constant::new(vec![layer(0.0); 4]).covers(4, 9));
     }

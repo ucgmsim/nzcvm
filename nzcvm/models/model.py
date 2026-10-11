@@ -660,6 +660,9 @@ def _mesh_model_from_tetra(
             f"Model {name!r} has unknown model type {model_types[0]}"
         ) from None
 
+    if model_type == ModelType.DEPTH_PROFILE and not mesh_model.has_depth_profile:
+        raise ValueError(f"Model {name!r} is a depth-profile mesh but has no profile")
+
     points = np.c_[mesh_model.x.values, mesh_model.y.values, mesh_model.z.values]
     priority = mesh_model.priority.isel(j=0).item()
     builder = nzcvm.MeshModelBuilder(points, connectivity, priority).name(name)
@@ -679,6 +682,20 @@ def _mesh_model_from_tetra(
                     mesh_model.alpha.values,
                 ]
                 return builder.interpolated(qualities)
+            case ModelType.DEPTH_PROFILE:
+                layers = np.c_[
+                    mesh_model.profile_rho.values,
+                    mesh_model.profile_vp.values,
+                    mesh_model.profile_vs.values,
+                    mesh_model.profile_qp.values,
+                    mesh_model.profile_qs.values,
+                ]
+                return builder.depth_profile(
+                    mesh_model.alpha.values,
+                    mesh_model.depth.values,
+                    mesh_model.profile_top.values,
+                    layers,
+                )
     except ValueError as e:
         e.add_note(f"While building model: {mesh_model.name!r}")
         raise

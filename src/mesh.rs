@@ -282,7 +282,7 @@ impl MeshModel<Interpolated> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Constant;
+    use crate::model::{Constant, DepthProfile, Profiled};
     use approx::assert_relative_eq;
     use bvh::aabb::Bounded;
 
@@ -636,6 +636,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_profiled_mesh_queries_profile() {
+        let profile =
+            DepthProfile::new(&[0.0, 0.5], vec![mock_quality(10.0), mock_quality(20.0)]).unwrap();
+        // Depth equals z; alpha 1 everywhere.
+        let vertices = unit_tetrahedron_universe()
+            .iter()
+            .map(|p| [p.z, 1.0])
+            .collect();
+        let field = Profiled::new(vertices, profile);
+        let mesh = unit_mesh(field, None);
+        assert_relative_eq!(mesh.query(Point3::new(0.1, 0.1, 0.2)).unwrap().vs, 10.0);
+        assert_relative_eq!(mesh.query(Point3::new(0.1, 0.1, 0.7)).unwrap().vs, 20.0);
+        // Alpha comes from the vertices, not the profile layer.
+        assert_relative_eq!(mesh.query(Point3::new(0.1, 0.1, 0.7)).unwrap().alpha, 1.0);
     }
 
     #[test]

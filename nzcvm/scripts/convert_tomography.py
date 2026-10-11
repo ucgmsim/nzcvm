@@ -12,7 +12,8 @@ from pyproj import CRS, Transformer
 from scipy.spatial.transform import Rotation
 
 from nzcvm.coordinates import Affine, affine, reflect_x, scale, translate
-from nzcvm.models.mesh import DEFAULT_ENCODING_SETTINGS, TetrahedralMesh, make_mesh
+from nzcvm.models.mesh import ModelType as CellModel
+from nzcvm.models.mesh import TetrahedralMesh, make_mesh, mesh_encoding
 
 CRS_NZTM = CRS.from_epsg(2193)
 CRS_WGS = CRS.from_epsg(4326)
@@ -209,7 +210,7 @@ def data_frame_to_mesh(
         "transform": transform,
     }
     num_cells = len(connectivity)
-    model_type = np.full(num_cells, 1, dtype=np.uint8)
+    model_type = np.full(num_cells, CellModel.INTERPOLATE, dtype=np.uint8)
     priority = np.full(num_cells, np.iinfo(np.uint8).max, dtype=np.uint8)
 
     return make_mesh(
@@ -277,4 +278,4 @@ def convert(
     column_keys = MODEL_COLUMNS[model_type]
 
     mesh = data_frame_to_mesh(model.stem, df, column_keys)
-    mesh.to_zarr(output, mode="w", encoding=DEFAULT_ENCODING_SETTINGS)
+    mesh.to_zarr(output, mode="w", encoding=mesh_encoding(mesh))
