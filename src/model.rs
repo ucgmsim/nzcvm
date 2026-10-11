@@ -7,6 +7,7 @@
 //! field covers it when the two are paired.  [`AnyField`] holds any of them
 //! for meshes whose field type is only known at run time.
 
+use crate::barycentric::interpolate;
 use crate::quality::{Quality, barycentric_interpolate};
 use crate::real::Real;
 use enum_dispatch::enum_dispatch;
@@ -188,12 +189,8 @@ impl Field for Profiled {
     fn quality_at(&self, _simplex: usize, corners: [u32; 4], bary: &Point4<Real>) -> Quality {
         let corners = corners.map(|v| self.vertices[v as usize]);
         let weights = [bary.x, bary.y, bary.z, bary.w];
-        let [depth, alpha] = corners
-            .iter()
-            .zip(weights)
-            .fold([0.0, 0.0], |[depth, alpha], (&[d, a], weight)| {
-                [depth + weight * d, alpha + weight * a]
-            });
+        let depth = interpolate(corners.map(|[d, _]| d), weights);
+        let alpha = interpolate(corners.map(|[_, a]| a), weights);
         Quality {
             alpha,
             ..self.profile.at(depth)

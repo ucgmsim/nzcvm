@@ -1,3 +1,4 @@
+pub mod barycentric;
 pub mod blend;
 pub mod coastline;
 pub mod compact_bvh;

@@ -13,6 +13,7 @@
 //! surface exactly where it adds a vertex and spends triangles only where a
 //! surface bends.  A planar slope, however steep, needs none.
 
+use crate::barycentric::{self, triangle_coordinates};
 use crate::grid::StructuredGrid;
 use spade::handles::{FixedFaceHandle, FixedVertexHandle, InnerTag};
 use spade::{ConstrainedDelaunayTriangulation, Point2, PositionInTriangulation, Triangulation};
@@ -81,6 +82,12 @@ impl std::fmt::Display for TinError {
 
 type Cdt = ConstrainedDelaunayTriangulation<Point2<f64>>;
 
+/// Distance, relative to the boundary's extent, within which a new point is
+/// taken to be the vertex already there.  A long-edge midpoint can land a
+/// rounding error from a sample, and two vertices that close would leave a
+/// sliver triangle that collapses in single precision.
+const SNAP: f64 = 1e-9;
+
 /// Triangulate the polygon `boundary` to fit every surface within its
 /// tolerance.
 ///
@@ -122,6 +129,17 @@ pub fn adaptive_tin(
         })
         .collect();
 
+    let (min, max) = boundary.iter().fold(
+        ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]),
+        |(min, max), p| {
+            (
+                [min[0].min(p.x), min[1].min(p.y)],
+                [max[0].max(p.x), max[1].max(p.y)],
+            )
+        },
+    );
+    let snap = SNAP * (max[0] - min[0]).hypot(max[1] - min[1]);
+
     let mut known_vertices = cdt.num_vertices();
     let mut settled: Vec<Vec<Settled>> = surfaces
         .iter()
@@ -135,11 +153,12 @@ pub fn adaptive_tin(
         }
         let vertices_before = cdt.num_vertices();
         for insert in inserts {
-            let Some(handle) = insert_vertex(&mut cdt, &insert)? else {
+            let Some(handle) = insert_vertex(&mut cdt, &insert, snap)? else {
                 continue;
             };
             if handle.index() < known_vertices {
-                // Already a vertex (two faces split the same edge).
+                // Already a vertex (two faces split the same edge, or the
+                // point snapped to one).
                 continue;
             }
             known_vertices += 1;
@@ -187,7 +206,15 @@ struct Insert {
 
 /// Add `insert`'s point to the triangulation, returning its vertex, or
 /// `None` if an earlier insert in the pass already split its boundary edge.
-fn insert_vertex(cdt: &mut Cdt, insert: &Insert) -> Result<Option<FixedVertexHandle>, TinError> {
+/// A point within `snap` of a vertex returns that vertex instead.
+fn insert_vertex(
+    cdt: &mut Cdt,
+    insert: &Insert,
+    snap: f64,
+) -> Result<Option<FixedVertexHandle>, TinError> {
+    if let Some(v) = vertex_near(cdt, insert.position, insert.hint, snap) {
+        return Ok(Some(v));
+    }
     let Some([a, b]) = insert.boundary_edge else {
         // Inserts come in face order, which jumps about the map, so start
         // the point location next to the point rather than at the last
@@ -357,6 +384,32 @@ fn boundary_splits(cdt: &Cdt, surfaces: &[TinSurface], values: &[Vec<f64>]) -> V
         .collect()
 }
 
+/// A vertex within `snap` of `position`, if one is a corner of the face or
+/// edge containing it.
+fn vertex_near(
+    cdt: &Cdt,
+    position: Point2<f64>,
+    hint: FixedVertexHandle,
+    snap: f64,
+) -> Option<FixedVertexHandle> {
+    let near = |v: spade::handles::VertexHandle<_, _, _, _>| {
+        (v.position().distance_2(position) <= snap * snap).then(|| v.fix())
+    };
+    match cdt.locate_with_hint(position, hint) {
+        PositionInTriangulation::OnVertex(v) => Some(v),
+        PositionInTriangulation::OnEdge(edge) => cdt
+            .directed_edge(edge)
+            .vertices()
+            .into_iter()
+            .find_map(near),
+        PositionInTriangulation::OnFace(face) => {
+            cdt.face(face).vertices().into_iter().find_map(near)
+        }
+        PositionInTriangulation::OutsideOfConvexHull(_)
+        | PositionInTriangulation::NoTriangulation => None,
+    }
+}
+
 /// The inner face containing `position`, or `None` if it is a vertex or
 /// outside the triangulation.  A point on an edge takes either adjacent
 /// inner face; the interpolant agrees on the shared edge.
@@ -382,11 +435,8 @@ fn containing_face(
 
 /// Linear interpolation of `values` at the corners of a triangle.
 fn linear_interpolate(corners: [Point2<f64>; 3], values: [f64; 3], p: Point2<f64>) -> f64 {
-    let [a, b, c] = corners;
-    let det = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-    let lb = ((p.x - a.x) * (c.y - a.y) - (c.x - a.x) * (p.y - a.y)) / det;
-    let lc = ((b.x - a.x) * (p.y - a.y) - (p.x - a.x) * (b.y - a.y)) / det;
-    values[0] + lb * (values[1] - values[0]) + lc * (values[2] - values[0])
+    let point = |q: Point2<f64>| nalgebra::Point2::new(q.x, q.y);
+    barycentric::interpolate(values, triangle_coordinates(corners.map(point), point(p)))
 }
 
 /// The surface at `p`, extending the edge of its grid outside it.
@@ -471,6 +521,7 @@ fn long_edge_splits(cdt: &Cdt, max_edge: f64, inserts: &[Insert]) -> Vec<Insert>
 mod tests {
     use super::*;
     use ndarray::Array2;
+    use proptest::prelude::*;
 
     /// A `(n, n)` grid over `[0, side]²` sampling `f`, with every node a
     /// sample.  The grid is leaked, which is fine for a test.
@@ -500,6 +551,7 @@ mod tests {
 
     /// The largest error of the TIN's interpolant at the surface's samples.
     fn max_error(tin: &Tin, surface: &TinSurface) -> f64 {
+        let point = |q: Point2<f64>| nalgebra::Point2::new(q.x, q.y);
         let vertex_values: Vec<f64> = tin
             .vertices
             .iter()
@@ -509,25 +561,95 @@ mod tests {
             .samples
             .iter()
             .map(|&(p, value)| {
-                let triangle = tin
+                // The triangle the sample is deepest inside, whose smallest
+                // coordinate is about zero for a sample on an edge.
+                let (triangle, weights) = tin
                     .triangles
                     .iter()
-                    .find(|t| {
-                        let [a, b, c] = t.map(|i| tin.vertices[i]);
-                        let orient = |u: Point2<f64>, v: Point2<f64>| {
-                            (v.x - u.x) * (p.y - u.y) - (p.x - u.x) * (v.y - u.y)
-                        };
-                        orient(a, b) >= -1e-9 && orient(b, c) >= -1e-9 && orient(c, a) >= -1e-9
+                    .map(|t| {
+                        let corners = t.map(|i| point(tin.vertices[i]));
+                        (t, triangle_coordinates(corners, point(p)))
                     })
-                    .expect("sample inside the TIN");
-                let interpolated = linear_interpolate(
-                    triangle.map(|i| tin.vertices[i]),
-                    triangle.map(|i| vertex_values[i]),
-                    p,
+                    .max_by(|(_, a), (_, b)| {
+                        let min = |w: &[f64; 3]| w.iter().copied().fold(f64::INFINITY, f64::min);
+                        min(a).total_cmp(&min(b))
+                    })
+                    .expect("a TIN has a triangle");
+                assert!(
+                    weights.iter().all(|&w| w >= -1e-9),
+                    "sample {p:?} outside the TIN"
                 );
+                let interpolated =
+                    barycentric::interpolate(triangle.map(|i| vertex_values[i]), weights);
                 (interpolated - value).abs()
             })
             .fold(0.0, f64::max)
+    }
+
+    /// A smooth random surface: a plane, a sinusoid and a Gaussian bump.
+    #[derive(Clone, Debug)]
+    struct Terrain {
+        slope: (f64, f64),
+        wave: (f64, f64, f64, f64),
+        bump: (f64, f64, f64, f64),
+    }
+
+    impl Terrain {
+        fn at(&self, x: f64, y: f64) -> f64 {
+            let (amplitude, kx, ky, phase) = self.wave;
+            let (height, cx, cy, width) = self.bump;
+            let r2 = (x - cx).powi(2) + (y - cy).powi(2);
+            self.slope.0 * x
+                + self.slope.1 * y
+                + amplitude * (kx * x + ky * y + phase).sin()
+                + height * (-r2 / (width * width)).exp()
+        }
+    }
+
+    fn terrain(side: f64) -> impl Strategy<Value = Terrain> {
+        let k = 0.5..10.0;
+        (
+            (-2.0..2.0, -2.0..2.0),
+            (0.0..20.0, k.clone(), k, 0.0..std::f64::consts::TAU),
+            (-50.0..50.0, 0.0..side, 0.0..side, 2.0..side / 2.0),
+        )
+            .prop_map(move |(slope, (amplitude, kx, ky, phase), bump)| Terrain {
+                slope,
+                // Wavenumbers in cycles across the square.
+                wave: (amplitude, kx / side, ky / side, phase),
+                bump,
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// The TIN's guarantee: every surface's interpolant is within its
+        /// tolerance at each of its samples, with or without `max_edge`.
+        #[test]
+        fn prop_every_sample_is_within_tolerance(
+            terrains in prop::collection::vec((terrain(100.0), 0.05..5.0, 5usize..30), 1..3),
+            max_edge in prop::option::of(10.0..100.0),
+        ) {
+            let surfaces: Vec<_> = terrains
+                .iter()
+                .map(|(t, tolerance, n)| surface(*n, 100.0, *tolerance, |x, y| t.at(x, y)))
+                .collect();
+            let tin = adaptive_tin(&square(100.0), &surfaces, max_edge).unwrap();
+            // No near-duplicate vertices leave slivers behind.
+            for t in &tin.triangles {
+                let [a, b, c] = t.map(|i| tin.vertices[i]);
+                let area = 0.5 * ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y));
+                prop_assert!(area > 1e-6, "sliver {:?} of area {area}", [a, b, c]);
+            }
+            for surface in &surfaces {
+                let error = max_error(&tin, surface);
+                prop_assert!(
+                    error <= surface.tolerance * (1.0 + 1e-9),
+                    "error {error} over tolerance {}", surface.tolerance
+                );
+            }
+        }
     }
 
     #[test]
