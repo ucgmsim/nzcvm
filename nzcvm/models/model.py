@@ -29,7 +29,7 @@ from rich.tree import Tree
 
 from nzcvm import nzcvm, registry  # ty: ignore[unresolved-import]
 from nzcvm.components import Component
-from nzcvm.models.mesh import TetrahedralMesh, TetrahedralMeshSchema
+from nzcvm.models.mesh import ModelType, TetrahedralMesh, TetrahedralMeshSchema
 from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
     PyModelTree,
     QueryCoordinates,
@@ -179,8 +179,8 @@ class MeshModel:
         Parameters
         ----------
         raw :
-            Compiled Rust ``PyMeshModel`` object returned by
-            :func:`nzcvm.nzcvm.mesh_model`.
+            Compiled Rust ``PyMeshModel`` object built by
+            :class:`nzcvm.nzcvm.MeshModelBuilder`.
         """
         self._raw = raw
 
@@ -653,33 +653,32 @@ def _mesh_model_from_tetra(
             "A mesh must use one."
         )
 
-    qualities = np.c_[
-        mesh_model.rho.values,
-        mesh_model.vp.values,
-        mesh_model.vs.values,
-        mesh_model.qp.values,
-        mesh_model.qs.values,
-        mesh_model.alpha.values,
-    ]
-
-    priority = mesh_model.priority.isel(j=0).item()
-
-    transform = mesh_model.attrs.get("transform")
-
-    if transform is not None:
-        transform = np.array(transform, dtype=np.float32)
+    try:
+        model_type = ModelType(model_types[0])
+    except ValueError:
+        raise ValueError(
+            f"Model {name!r} has unknown model type {model_types[0]}"
+        ) from None
 
     points = np.c_[mesh_model.x.values, mesh_model.y.values, mesh_model.z.values]
+    priority = mesh_model.priority.isel(j=0).item()
+    builder = nzcvm.MeshModelBuilder(points, connectivity, priority).name(name)
+    transform = mesh_model.attrs.get("transform")
+    if transform is not None:
+        builder.transform(np.array(transform, dtype=np.float32))
+
     try:
-        return nzcvm.mesh_model(
-            points,
-            connectivity,
-            int(model_types[0]),
-            qualities,
-            priority,
-            transform,
-            name,
-        )
+        match model_type:
+            case ModelType.INTERPOLATE:
+                qualities = np.c_[
+                    mesh_model.rho.values,
+                    mesh_model.vp.values,
+                    mesh_model.vs.values,
+                    mesh_model.qp.values,
+                    mesh_model.qs.values,
+                    mesh_model.alpha.values,
+                ]
+                return builder.interpolated(qualities)
     except ValueError as e:
         e.add_note(f"While building model: {mesh_model.name!r}")
         raise

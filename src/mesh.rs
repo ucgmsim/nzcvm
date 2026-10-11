@@ -60,6 +60,10 @@ impl TetMesh {
             })
             .collect::<Option<Vec<_>>>()
             .ok_or(MeshModelError::DegenerateSimplex)?;
+        // Each intermediate is dropped as soon as it is consumed, not at the
+        // end of the function: the vertices before the BVH is built, the full
+        // BVH before the simplices are gathered, and the build simplices
+        // before the faces are.  On large meshes this lowers peak memory.
         let num_vertices = vertices.len();
         drop(vertices);
 

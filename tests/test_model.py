@@ -96,7 +96,7 @@ def test_mesh_model_view_label_contains_name() -> None:
 
 
 def _tetrahedral_mesh(model_type: np.ndarray | None = None):
-    """Two interpolated tetrahedra sharing a face."""
+    """Interpolated tetrahedra 0-1-2-3 and 1-2-3-4, sharing a face."""
     points = np.array(
         [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]], dtype=np.float32
     )
@@ -129,14 +129,11 @@ def test_mixed_cell_model_types_are_rejected() -> None:
         MeshModel.from_mesh(_tetrahedral_mesh(model_type))
 
 
-def test_constant_fields_are_rejected_clearly() -> None:
-    with pytest.raises(ValueError, match="constant field"):
-        MeshModel.from_mesh(_tetrahedral_mesh(np.zeros(2, dtype=np.uint8)))
-
-
-def test_unknown_field_types_are_rejected() -> None:
-    with pytest.raises(ValueError, match="unknown field type"):
-        MeshModel.from_mesh(_tetrahedral_mesh(np.full(2, 9, dtype=np.uint8)))
+@pytest.mark.parametrize("model_type", [0, 9], ids=["constant", "unknown"])
+def test_unknown_model_types_are_rejected(model_type: int) -> None:
+    # Constant fields (0) have no file format, so are unknown to it.
+    with pytest.raises(ValueError, match="unknown model type"):
+        MeshModel.from_mesh(_tetrahedral_mesh(np.full(2, model_type, dtype=np.uint8)))
 
 
 def test_empty_meshes_are_rejected() -> None:

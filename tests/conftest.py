@@ -16,7 +16,6 @@ from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
 from nzcvm.config.layers.core import LayerConfig
 from nzcvm.grids.grid import Grid, GridSchema
 from nzcvm.layers.core import Layer
-from nzcvm.models.mesh import ModelType
 from nzcvm.qualities import Qualities, QualitiesSchema
 from nzcvm.query import ModelRange
 
@@ -61,15 +60,10 @@ def _mesh_model(
     qualities = np.tile(
         np.array([rho, vp, vs, qp, qs, alpha], dtype=np.float32), (4, 1)
     )
-    return _nzcvm.mesh_model(
-        vertices,
-        faces,
-        ModelType.INTERPOLATE,
-        qualities,
-        np.uint8(priority),
-        None,
-        name,
-    )
+    builder = _nzcvm.MeshModelBuilder(vertices, faces, np.uint8(priority))
+    if name is not None:
+        builder.name(name)
+    return builder.interpolated(qualities)
 
 
 @pytest.fixture()

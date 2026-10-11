@@ -28,7 +28,8 @@ pub trait Field {
     /// Reorder per-simplex data so the new entry `i` is the old entry
     /// `order[i]`, to match the mesh's BVH leaf order.  Fields holding only per-vertex data
     /// have nothing to reorder.
-    fn reorder(&mut self, _order: &[u32]) {}
+    #[allow(unused_variables)]
+    fn reorder(&mut self, order: &[u32]) {}
 
     /// Bytes the field holds on the heap.
     fn heap_size(&self) -> usize;
