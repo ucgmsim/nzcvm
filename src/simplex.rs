@@ -103,24 +103,27 @@ impl Simplex {
         Point4::new(l0, l1, l2, l3)
     }
 
-    /// Test whether `query_point` lies inside this simplex (within
-    /// [`CONTAINMENT_EPS`] of each face).
-    // This one inline statement speeds up calculations by 6%!
+    /// The barycentric coordinates of `query_point` if it lies inside this
+    /// simplex (within [`CONTAINMENT_EPS`] of each face), else `None`.
+    ///
+    /// Computes the coordinates once for both the containment test and the
+    /// caller's interpolation.
     #[inline(always)]
-    pub fn contains(&self, query_point: &Point3<Real>) -> bool {
-        let diff = query_point - self.c3;
-        // This duplication of the matrix multiply from
-        // `barycentric_coordinates` is deliberate. `l3` is not needed here, so
-        // the subtraction is skipped.
-
-        let l = self.inv_matrix * diff;
-
+    pub fn locate(&self, query_point: &Point3<Real>) -> Option<Point4<Real>> {
+        let l = self.inv_matrix * (query_point - self.c3);
         let sum = l.x + l.y + l.z;
-
-        (l.x >= -CONTAINMENT_EPS)
+        let inside = (l.x >= -CONTAINMENT_EPS)
             && (l.y >= -CONTAINMENT_EPS)
             && (l.z >= -CONTAINMENT_EPS)
-            && (sum <= 1.0 + CONTAINMENT_EPS)
+            && (sum <= 1.0 + CONTAINMENT_EPS);
+        inside.then(|| Point4::new(l.x, l.y, l.z, 1.0 - sum))
+    }
+
+    /// Test whether `query_point` lies inside this simplex (within
+    /// [`CONTAINMENT_EPS`] of each face).
+    #[inline(always)]
+    pub fn contains(&self, query_point: &Point3<Real>) -> bool {
+        self.locate(query_point).is_some()
     }
 }
 

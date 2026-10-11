@@ -19,6 +19,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
+from nzcvm.models.mesh import ModelType, make_mesh
 from nzcvm.models.model import MeshModel, ModelRange, ModelTree
 from tests.conftest import _mesh_model
 
@@ -87,6 +88,60 @@ def test_mesh_model_view_label_contains_name() -> None:
     m = MeshModel(_mesh_model(name="crust"))
     view = m.view()
     assert "crust" in str(view.label)
+
+
+# ---------------------------------------------------------------------------
+# Loading a TetrahedralMesh
+# ---------------------------------------------------------------------------
+
+
+def _tetrahedral_mesh(model_type: np.ndarray | None = None):
+    """Two interpolated tetrahedra sharing a face."""
+    points = np.array(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]], dtype=np.float32
+    )
+    connectivity = np.array([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=np.uint64)
+    if model_type is None:
+        model_type = np.full(len(connectivity), ModelType.INTERPOLATE, dtype=np.uint8)
+    ones = np.ones(len(points), dtype=np.float32)
+    return make_mesh(
+        name="mesh",
+        points=points,
+        connectivity=connectivity,
+        cell_data={
+            "model_type": model_type,
+            "priority": np.zeros(len(connectivity), dtype=np.uint8),
+        },
+        field_data={k: ones for k in ("rho", "vp", "vs", "qp", "qs", "alpha")},
+        geometry=None,
+    )
+
+
+def test_interpolated_mesh_loads() -> None:
+    q = MeshModel.from_mesh(_tetrahedral_mesh()).query(0.1, 0.1, 0.1)
+    assert q is not None
+    assert q.vs == pytest.approx(1.0)
+
+
+def test_mixed_cell_model_types_are_rejected() -> None:
+    model_type = np.array([ModelType.INTERPOLATE, 2], dtype=np.uint8)
+    with pytest.raises(ValueError, match="mixes"):
+        MeshModel.from_mesh(_tetrahedral_mesh(model_type))
+
+
+def test_constant_fields_are_rejected_clearly() -> None:
+    with pytest.raises(ValueError, match="constant field"):
+        MeshModel.from_mesh(_tetrahedral_mesh(np.zeros(2, dtype=np.uint8)))
+
+
+def test_unknown_field_types_are_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown field type"):
+        MeshModel.from_mesh(_tetrahedral_mesh(np.full(2, 9, dtype=np.uint8)))
+
+
+def test_empty_meshes_are_rejected() -> None:
+    with pytest.raises(ValueError, match="no cells"):
+        MeshModel.from_mesh(_tetrahedral_mesh().isel(j=slice(0, 0)))
 
 
 # ---------------------------------------------------------------------------

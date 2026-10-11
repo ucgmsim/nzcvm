@@ -8,6 +8,7 @@ and structured grids (topographic surfaces).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any, Literal
 
 import numpy as np
@@ -21,6 +22,13 @@ from nzcvm.xarray import encode
 I = Literal["i"]
 J = Literal["j"]
 K = Literal["k"]
+
+
+class ModelType(IntEnum):
+    """How a mesh turns a query point into a quality (``model_type``)."""
+
+    #: Barycentric interpolation of the four vertex qualities.
+    INTERPOLATE = 1
 
 
 def _encode_geometry_attr(value: Any) -> Any:
@@ -42,10 +50,6 @@ def _decode_geometry_attr(value: Any) -> Any:
 
 class TetrahedralMesh(xr.Dataset):
     __slots__ = ()
-
-    @property
-    def models(self):
-        return self.connectivity
 
 
 @dataclass
@@ -174,7 +178,8 @@ def make_mesh(
     connectivity :
         ``(M, 4)`` integer array of tetrahedral cell vertex indices.
     cell_data :
-        Per-cell arrays such as ``model_type`` and ``models``.
+        Per-cell arrays: ``model_type`` (one :class:`ModelType` for the
+        whole mesh) and ``priority``.
     field_data :
         Per-model arrays such as ``rho``, ``vp``, ``vs``, ``qp``, ``qs``,
         ``alpha`` and ``priority``.

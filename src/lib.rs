@@ -18,15 +18,15 @@ use pyo3::prelude::*;
 mod nzcvm {
     use crate::coastline::{Coastline, Segment};
     use crate::grid::StructuredGrid;
-    use crate::mesh::{MeshModel, MeshModelError};
-    use crate::model::{ConstantModel, InterpolateModel, Model};
-    use crate::model_tree::ModelTree;
+    use crate::mesh::MeshModel;
+    use crate::model::{AnyField, Interpolated};
+    use crate::model_tree::{ModelTree, TreeModel};
     use crate::quality::Quality;
     use crate::query::Query;
     use crate::real::Real;
     use crate::surface::SurfaceModel;
 
-    use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
+    use nalgebra::{Affine3, Matrix4, Point2, Point3};
     use ndarray::{Array1, Array2, Axis, array, azip};
     use numpy::{
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
@@ -112,7 +112,7 @@ mod nzcvm {
     /// Consumed (moved into a [`ModelTree`]) when passed to [`model_tree`].
     #[pyclass]
     pub struct PyMeshModel {
-        inner: Option<MeshModel>,
+        inner: Option<TreeModel>,
     }
 
     /// Python-facing velocity model (a compiled [`ModelTree`]).
@@ -127,33 +127,26 @@ mod nzcvm {
     ///
     /// * `vertices_py`   – `(N, 3)` float array of vertex coordinates.
     /// * `faces_py`      – `(M, 4)` integer array of tetrahedral cell indices.
-    /// * `types_py`      – `(M,)` u8 array: `0` = constant, `1` = interpolate.
-    /// * `models_py`     – flat integer look-up array whose stride varies with
-    ///   model type.  For each entry in `types_py`:
-    ///   - type `0` (constant): consume **1** index — the quality index.
-    ///   - type `1` (interpolate): consume **4** indices — the four vertex
-    ///     quality indices stored in `(x, y, z, w)` order matching the
-    ///     corresponding simplex vertices.
-    ///   The total length of `models_py` must equal
-    ///   `sum(1 if t==0 else 4 for t in types_py)`.
-    /// * `qualities_py`  – `(Q, 6)` array of quality values indexed by `models_py`.
+    /// * `field_type`    – the field over the cells: `1` = interpolate.
+    ///   (Constant fields have no file format.)
+    /// * `qualities_py`  – `(N, 6)` quality of each vertex.
     /// * `priority`      – model priority (lower number = higher priority).
     /// * `transform_py`  – optional 4×4 world-to-local affine transform.
     /// * `name`          – optional human-readable name for the model.
     #[pyfunction]
-    #[pyo3(signature = (vertices_py, faces_py, types_py, models_py, qualities_py, priority, transform_py, name=None))]
+    #[pyo3(signature = (vertices_py, faces_py, field_type, qualities_py, priority, transform_py, name=None))]
     #[allow(clippy::too_many_arguments)]
     pub fn mesh_model(
         vertices_py: PyReadonlyArray2<Real>,
         faces_py: PyReadonlyArray2<usize>,
-        types_py: PyReadonlyArray1<u8>,
-        models_py: PyReadonlyArray1<usize>,
+        field_type: u8,
         qualities_py: PyReadonlyArray2<Real>,
         priority: u8,
         transform_py: Option<PyReadonlyArray2<Real>>,
         name: Option<String>,
     ) -> PyResult<PyMeshModel> {
-        let vertices = vertices_py
+        let name = name.unwrap_or_default();
+        let vertices: Vec<Point3<Real>> = vertices_py
             .as_array()
             .axis_iter(Axis(0))
             .map(|a| Point3::new(a[0], a[1], a[2]))
@@ -161,84 +154,40 @@ mod nzcvm {
         let faces = faces_py
             .as_array()
             .axis_iter(Axis(0))
-            .map(|a| Point4::new(a[0], a[1], a[2], a[3]))
-            .collect();
-
-        // Build Vec<Quality> from the (N, 6) numpy array.
+            .map(|a| {
+                let index = |k: usize| u32::try_from(a[k]);
+                Ok([index(0)?, index(1)?, index(2)?, index(3)?])
+            })
+            .collect::<Result<Vec<[u32; 4]>, std::num::TryFromIntError>>()
+            .map_err(|_| PyValueError::new_err("vertex indices must fit in 32 bits"))?;
         let qualities: Vec<Quality> = qualities_py
             .as_array()
             .axis_iter(Axis(0))
             .map(Quality::from)
             .collect();
 
-        // Quality indices are stored as u32 inside the compiled model.
-        if qualities.len() > u32::MAX as usize {
-            return Err(PyValueError::new_err(format!(
-                "Too many qualities for a single mesh model: {}",
-                qualities.len()
-            )));
-        }
-
-        let types = types_py.as_array();
-        let mut models_vec = Vec::with_capacity(types.len());
-        let model_idx = models_py.as_array();
-        let mut idx = 0;
-        for model_type in types.iter() {
-            match model_type {
-                0 => {
-                    models_vec.push(Model::from(ConstantModel {
-                        quality: model_idx[idx] as u32,
-                    }));
-                    idx += 1;
-                }
-                1 => {
-                    models_vec.push(Model::from(InterpolateModel {
-                        qualities: Point4::new(
-                            model_idx[idx] as u32,
-                            model_idx[idx + 1] as u32,
-                            model_idx[idx + 2] as u32,
-                            model_idx[idx + 3] as u32,
-                        ),
-                    }));
-                    idx += 4;
-                }
-                _ => {
-                    return Err(PyValueError::new_err(format!(
-                        "Invalid model type {}",
-                        model_type
-                    )));
-                }
+        let field = match field_type {
+            1 => AnyField::from(Interpolated::new(qualities)),
+            0 => {
+                return Err(PyValueError::new_err(format!(
+                    "Model {name:?} has a constant field, which mesh files don't support"
+                )));
             }
-        }
-        if idx != model_idx.len() {
-            return Err(PyValueError::new_err(format!(
-                "Invalid model types detected (did not read all models from model array using types given). idx = {}, models len = {}",
-                idx,
-                model_idx.len()
-            )));
-        }
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Model {name:?} has unknown field type {field_type}"
+                )));
+            }
+        };
 
         let transform = transform_py.map(|arr| {
             Affine3::from_matrix_unchecked(Matrix4::from_iterator(arr.as_array().iter().cloned()))
         });
-        let mesh_model = MeshModel::new(
-            vertices,
-            faces,
-            models_vec,
-            qualities,
-            priority,
-            transform,
-            name.clone().unwrap_or_default(),
-        );
-        match mesh_model {
-            Ok(mesh_model) => Ok(PyMeshModel {
-                inner: Some(mesh_model),
-            }),
-            Err(MeshModelError::DegenerateSimplex) => Err(PyValueError::new_err(format!(
-                "Degenerate simplex encountered in model: {}",
-                name.clone().unwrap_or_default()
-            ))),
-        }
+        let model = MeshModel::new(vertices, faces, field, transform)
+            .map_err(|e| PyValueError::new_err(format!("Model {name:?}: {e}")))?;
+        Ok(PyMeshModel {
+            inner: Some(TreeModel::new(model, priority, name)),
+        })
     }
 
     /// Combine one or more [`PyMeshModel`]s into a queryable [`PyModelTree`].
@@ -288,6 +237,7 @@ mod nzcvm {
             })?;
             let pt = Point3::new(x, y, z);
             inner
+                .model
                 .query(pt)
                 .map(|q| pythonize(py, &q).map_err(|e| e.into()))
                 .transpose()
@@ -308,7 +258,7 @@ mod nzcvm {
             let inner = self.inner.as_ref().ok_or_else(|| {
                 PyValueError::new_err("MeshModel has been consumed by model_tree()")
             })?;
-            let b = inner.aabb3();
+            let b = inner.model.aabb3();
             let min = array![b.min.x, b.min.y, b.min.z];
             let max = array![b.max.x, b.max.y, b.max.z];
             Ok((min.into_pyarray(py), max.into_pyarray(py)))

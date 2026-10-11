@@ -641,10 +641,17 @@ def _mesh_model_from_tetra(
 ) -> Any:
     """Build a PyMeshModel from a :class:`~nzcvm.models.mesh.TetrahedralMesh`."""
     connectivity = mesh_model.connectivity.values
+    name = name if name is not None else mesh_model.name
 
-    types = mesh_model.model_type.values
-
-    model_idx = mesh_model.models.values.ravel()
+    # A mesh has one field type. The per-cell column predates that.
+    model_types = mesh_model.model_type.values
+    if len(model_types) == 0:
+        raise ValueError(f"Model {name!r} has no cells")
+    if not (model_types == model_types[0]).all():
+        raise ValueError(
+            f"Model {name!r} mixes cell model types {np.unique(model_types).tolist()}. "
+            "A mesh must use one."
+        )
 
     qualities = np.c_[
         mesh_model.rho.values,
@@ -656,7 +663,6 @@ def _mesh_model_from_tetra(
     ]
 
     priority = mesh_model.priority.isel(j=0).item()
-    name = name if name is not None else mesh_model.name
 
     transform = mesh_model.attrs.get("transform")
 
@@ -668,8 +674,7 @@ def _mesh_model_from_tetra(
         return nzcvm.mesh_model(
             points,
             connectivity,
-            types,
-            model_idx,
+            int(model_types[0]),
             qualities,
             priority,
             transform,

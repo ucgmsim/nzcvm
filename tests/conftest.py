@@ -16,6 +16,7 @@ from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
 from nzcvm.config.layers.core import LayerConfig
 from nzcvm.grids.grid import Grid, GridSchema
 from nzcvm.layers.core import Layer
+from nzcvm.models.mesh import ModelType
 from nzcvm.qualities import Qualities, QualitiesSchema
 from nzcvm.query import ModelRange
 
@@ -57,14 +58,13 @@ def _mesh_model(
         dtype=np.float32,
     )
     faces = np.array([[0, 1, 2, 3]], dtype=np.uint64)
-    types = np.array([0], dtype=np.uint8)
-    idx = np.array([0], dtype=np.uint64)
-    qualities = np.array([[rho, vp, vs, qp, qs, alpha]], dtype=np.float32)
+    qualities = np.tile(
+        np.array([rho, vp, vs, qp, qs, alpha], dtype=np.float32), (4, 1)
+    )
     return _nzcvm.mesh_model(
         vertices,
         faces,
-        types,
-        idx,
+        ModelType.INTERPOLATE,
         qualities,
         np.uint8(priority),
         None,

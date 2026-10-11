@@ -546,6 +546,16 @@ handles alpha-composited queries. `Surface` interpolates values from a 2-D
 triangular surface mesh (used for the DEM and the Vs30 map). `mesh` provides
 the tetrahedral and structured mesh dataclasses and their I/O.
 
+Each mesh has one field type, its `model_type`, which turns a query point
+into a quality: `INTERPOLATE` (barycentric interpolation of the vertex
+qualities).
+
+In Rust, `TetMesh` holds the connectivity and locates the tetrahedron that
+contains a point. A `Field` (`Interpolated`, or `Constant` for in-memory
+meshes) turns the point's barycentric coordinates in that tetrahedron into a
+quality, and `MeshModel<F>` pairs one of each. `ModelTree` holds `TreeModel`s: a `MeshModel<AnyField>` with its
+priority and name.
+
 ### `nzcvm.layers`
 
 A `Layer` accepts a `Grid` (an xarray Dataset of 3D coordinates) and a

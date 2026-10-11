@@ -6,15 +6,144 @@ use bvh::bvh::{Bvh, BvhNode};
 use deepsize::{Context, DeepSizeOf};
 use serde::Serialize;
 
-use crate::mesh::{MeshModel, MeshModelView};
+use crate::mesh::MeshModel;
+use crate::model::AnyField;
 use crate::quality::Quality;
 use crate::query::{Explanation, ModelContribution, Query, QueryStats};
 use crate::real::Real;
-use crate::tree_query::{priority_ray_iterator, priority_ray_stats_iterator};
-use nalgebra::Point3;
+use crate::tree_query::{Contains, priority_ray_iterator, priority_ray_stats_iterator};
+use bvh::aabb::{Aabb, Bounded};
+use bvh::bounding_hierarchy::BHShape;
+use nalgebra::{Affine3, Point, Point3};
 
 const ALPHA_SATURATED: Real = 1.0;
 const ALPHA_EPS: Real = 1e-4;
+
+/// Half-unit extent added to the priority dimension of the 4D AABB to keep
+/// the AABB non-degenerate. The value 0.5 sits between any two consecutive
+/// integer priorities, so BVH node AABBs correctly reflect the minimum and
+/// maximum priority reachable through each subtree.
+const PRIORITY_AABB_EXTENT: Real = 0.5;
+
+/// Serialisable summary of a [`TreeModel`] for diagnostics.
+#[derive(Serialize)]
+pub struct MeshModelView {
+    pub id: usize,
+    pub name: String,
+    pub bounds: [f32; 6],
+    pub transform: Option<Affine3<Real>>,
+    pub priority: u8,
+    /// In-memory size of the model in bytes.
+    pub size: usize,
+}
+
+/// A mesh model with what the [`ModelTree`] needs to rank it and index it.
+pub struct TreeModel {
+    pub model: MeshModel<AnyField>,
+    /// Lower numbers take precedence.
+    pub priority: u8,
+    /// Human-readable name for this mesh model.
+    pub name: String,
+    /// Position in the tree, assigned by [`ModelTree::new`].
+    pub id: usize,
+    node_index: usize,
+}
+
+impl TreeModel {
+    pub fn new(model: MeshModel<AnyField>, priority: u8, name: String) -> Self {
+        Self {
+            model,
+            priority,
+            name,
+            id: 0,
+            node_index: 0,
+        }
+    }
+
+    pub fn pretty_print(&self) {
+        let name_display = if self.name.is_empty() {
+            format!("(id={})", self.id)
+        } else {
+            format!("{:?}", self.name)
+        };
+        let mesh = self.model.mesh();
+        println!(
+            "Mesh model {} with {} vertices and {} simplices, tree depth = {}, priority = {}.",
+            name_display,
+            mesh.num_vertices(),
+            mesh.num_simplices(),
+            mesh.depth(),
+            self.priority,
+        )
+    }
+
+    pub fn view(&self) -> MeshModelView {
+        let aabb = self.model.aabb3();
+        // The view is a diagnostics summary, so `bounds` stays f32 regardless
+        // of `Real`, keeping the serialised schema stable.  The casts are
+        // no-ops in the default build and load-bearing under `high_precision`.
+        #[allow(clippy::unnecessary_cast)]
+        let bounds: [f32; 6] = [
+            aabb.min.x as f32,
+            aabb.min.y as f32,
+            aabb.min.z as f32,
+            aabb.max.x as f32,
+            aabb.max.y as f32,
+            aabb.max.z as f32,
+        ];
+        MeshModelView {
+            id: self.id,
+            name: self.name.clone(),
+            bounds,
+            transform: self.model.mesh().transform(),
+            priority: self.priority,
+            size: self.deep_size_of(),
+        }
+    }
+}
+
+impl DeepSizeOf for TreeModel {
+    fn deep_size_of_children(&self, context: &mut Context) -> usize {
+        self.model.heap_size() + self.name.deep_size_of_children(context)
+    }
+}
+
+/// `Contains` yields `(priority, quality)` when a simplex of the model
+/// contains the query point, so the outer `ModelTree` traversal gets the
+/// result without a second lookup.
+impl Contains<Real, 3, (u8, Quality)> for TreeModel {
+    fn contains(&self, query_point: &Point3<Real>) -> Option<(u8, Quality)> {
+        self.model.query(*query_point).map(|q| (self.priority, q))
+    }
+}
+
+/// 4-D AABB used by the outer `ModelTree` BVH.
+///
+/// The first three dimensions are the model's geometry AABB. The fourth
+/// dimension is the model's priority: both `min[3]` and `max[3]` are set to
+/// `priority` (with a half-unit extent so the AABB is non-degenerate), which
+/// lets the priority-ray traversal use `aabb.min[3]` as the `t_min` hit
+/// distance and thereby visit models in priority order.
+impl Bounded<Real, 4> for TreeModel {
+    fn aabb(&self) -> Aabb<Real, 4> {
+        let aabb = self.model.aabb3();
+        let p = self.priority as Real;
+        let min = Point::<Real, 4>::from([aabb.min.x, aabb.min.y, aabb.min.z, p]);
+        let max =
+            Point::<Real, 4>::from([aabb.max.x, aabb.max.y, aabb.max.z, p + PRIORITY_AABB_EXTENT]);
+        Aabb::with_bounds(min, max)
+    }
+}
+
+impl BHShape<Real, 4> for TreeModel {
+    fn set_bh_node_index(&mut self, index: usize) {
+        self.node_index = index;
+    }
+
+    fn bh_node_index(&self) -> usize {
+        self.node_index
+    }
+}
 
 #[derive(Serialize)]
 pub struct ModelTreeView {
@@ -22,13 +151,13 @@ pub struct ModelTreeView {
     pub size: usize,
 }
 
-/// A collection of [`MeshModel`]s indexed by a 4-D BVH.
+/// A collection of [`TreeModel`]s indexed by a 4-D BVH.
 ///
 /// The fourth dimension encodes model priority; a ray along that axis visits
 /// models in ascending priority order (lowest number = highest priority).
 pub struct ModelTree {
     bvh_tree: Bvh<Real, 4>,
-    models: Vec<MeshModel>,
+    models: Vec<TreeModel>,
 }
 
 impl DeepSizeOf for ModelTree {
@@ -41,7 +170,7 @@ impl DeepSizeOf for ModelTree {
 }
 
 impl ModelTree {
-    pub fn new(mut models: Vec<MeshModel>) -> Self {
+    pub fn new(mut models: Vec<TreeModel>) -> Self {
         for (i, model) in models.iter_mut().enumerate() {
             model.id = i;
         }
@@ -52,7 +181,7 @@ impl ModelTree {
     pub fn aabb(&self) -> bvh::aabb::Aabb<Real, 3> {
         self.models
             .iter()
-            .map(|m| m.aabb3())
+            .map(|m| m.model.aabb3())
             .reduce(|a, b| a.join(&b))
             .expect("ModelTree must contain at least one model")
     }
@@ -171,14 +300,14 @@ impl Query for ModelTree {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use nalgebra::{Point3, Point4};
+    use nalgebra::Point3;
 
     use crate::mesh::MeshModel;
-    use crate::model::{ConstantModel, InterpolateModel, Model};
+    use crate::model::{Constant, Interpolated};
     use crate::quality::Quality;
     use crate::real::Real;
 
-    fn cube_mesh(priority: u8, val: Real, alpha: Real) -> MeshModel {
+    fn cube_mesh(priority: u8, val: Real, alpha: Real) -> TreeModel {
         let v: Vec<Point3<Real>> = vec![
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(1.0, 0.0, 0.0),
@@ -190,11 +319,11 @@ mod tests {
             Point3::new(1.0, 1.0, 1.0),
         ];
         let faces = vec![
-            Point4::new(0usize, 1, 2, 4),
-            Point4::new(3, 1, 2, 7),
-            Point4::new(5, 1, 4, 7),
-            Point4::new(6, 2, 4, 7),
-            Point4::new(1, 2, 4, 7),
+            [0, 1, 2, 4],
+            [3, 1, 2, 7],
+            [5, 1, 4, 7],
+            [6, 2, 4, 7],
+            [1, 2, 4, 7],
         ];
         let q = Quality {
             rho: val,
@@ -204,17 +333,9 @@ mod tests {
             qs: val,
             alpha,
         };
-        let qualities = vec![q; v.len()];
-        let models = faces
-            .iter()
-            .map(|f| {
-                Model::from(InterpolateModel {
-                    qualities: f.map(|i| i as u32),
-                })
-            })
-            .collect();
-        MeshModel::new(v, faces, models, qualities, priority, None, String::new())
-            .unwrap_or_else(|_| panic!("mesh construction failed"))
+        let field = Interpolated::new(vec![q; v.len()]);
+        let model = MeshModel::new(v, faces, field, None).unwrap();
+        TreeModel::new(model.into_any(), priority, String::new())
     }
 
     const PT: Point3<Real> = Point3::new(0.5, 0.5, 0.5);
@@ -372,7 +493,7 @@ mod tests {
             Point3::new(0.0, 1.0, 0.0),
             Point3::new(0.0, 0.0, 1.0),
         ];
-        let faces = vec![Point4::new(0usize, 1, 2, 3)];
+        let faces = vec![[0, 1, 2, 3]];
         let q = Quality {
             rho: 42.0,
             vp: 1.0,
@@ -381,10 +502,8 @@ mod tests {
             qs: 1.0,
             alpha: 1.0,
         };
-        let models = vec![Model::from(ConstantModel { quality: 0 })];
-        let mesh = MeshModel::new(v, faces, models, vec![q], 0, None, String::new())
-            .unwrap_or_else(|_| panic!("mesh construction failed"));
-        let tree = ModelTree::new(vec![mesh]);
+        let model = MeshModel::new(v, faces, Constant::new(vec![q]), None).unwrap();
+        let tree = ModelTree::new(vec![TreeModel::new(model.into_any(), 0, String::new())]);
         assert_relative_eq!(
             tree.query(Point3::new(0.1, 0.1, 0.1), None, 0, 255)
                 .unwrap()
