@@ -10,6 +10,7 @@ pub mod query;
 pub mod real;
 pub mod simplex;
 pub mod surface;
+pub mod tin;
 mod tree_query;
 pub mod triangle;
 use pyo3::prelude::*;
@@ -25,6 +26,7 @@ mod nzcvm {
     use crate::query::Query;
     use crate::real::Real;
     use crate::surface::SurfaceModel;
+    use crate::tin::{self, TinSurface};
 
     use nalgebra::{Affine3, Matrix4, Point2, Point3};
     use ndarray::{Array1, Array2, Axis, array, azip};
@@ -734,6 +736,80 @@ mod nzcvm {
         .map_err(PyValueError::new_err)
     }
 
+    /// One surface for [`adaptive_tin`]: the surface's grid, the `(N, 2)`
+    /// points to fit it at, the spacing to fit it at along the boundary, and
+    /// the vertical tolerance.
+    type TinSurfaceArgs<'py> = (
+        PyRef<'py, PyStructuredGrid>,
+        PyReadonlyArray2<'py, f64>,
+        f64,
+        f64,
+    );
+
+    /// Vertices and triangles returned by [`adaptive_tin`].
+    type TinArrays<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>);
+
+    /// Triangulate a polygon to fit gridded surfaces within vertical tolerances.
+    ///
+    /// See [`crate::tin::adaptive_tin`].
+    ///
+    /// Parameters
+    /// ----------
+    /// boundary :
+    ///     ``(B, 2)`` polygon vertices, without repeating the first.
+    /// surfaces :
+    ///     ``(grid, samples, boundary_spacing, tolerance)`` per surface: the
+    ///     surface's ``StructuredGrid``, ``(N, 2)`` positions inside the
+    ///     polygon where the TIN must fit it, the spacing of the points along
+    ///     the boundary where it must also fit it, and the largest vertical
+    ///     error to leave there.
+    /// max_edge :
+    ///     Optional longest edge length.
+    ///
+    /// Returns
+    /// -------
+    /// vertices, triangles :
+    ///     ``(V, 2)`` vertex positions and ``(T, 3)`` counter-clockwise vertex
+    ///     indices of the triangles inside the polygon.
+    #[pyfunction]
+    #[pyo3(signature = (boundary, surfaces, max_edge=None))]
+    pub fn adaptive_tin<'py>(
+        py: Python<'py>,
+        boundary: PyReadonlyArray2<'py, f64>,
+        surfaces: Vec<TinSurfaceArgs<'py>>,
+        max_edge: Option<f64>,
+    ) -> PyResult<TinArrays<'py>> {
+        let points = |a: ndarray::ArrayView2<f64>| -> Vec<spade::Point2<f64>> {
+            a.rows()
+                .into_iter()
+                .map(|r| spade::Point2::new(r[0], r[1]))
+                .collect()
+        };
+        let boundary = points(boundary.as_array());
+        let surfaces: Vec<TinSurface> = surfaces
+            .iter()
+            .map(|(grid, samples, spacing, tolerance)| {
+                TinSurface::new(
+                    &grid.inner,
+                    &points(samples.as_array()),
+                    *spacing,
+                    *tolerance,
+                )
+            })
+            .collect();
+        let tin = py
+            .detach(|| tin::adaptive_tin(&boundary, &surfaces, max_edge))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let vertices = Array2::from_shape_fn((tin.vertices.len(), 2), |(i, k)| {
+            let p = tin.vertices[i];
+            if k == 0 { p.x } else { p.y }
+        });
+        let triangles = Array2::from_shape_fn((tin.triangles.len(), 3), |(i, k)| {
+            tin.triangles[i][k] as i64
+        });
+        Ok((vertices.into_pyarray(py), triangles.into_pyarray(py)))
+    }
+
     /// Interpolated values and outside-grid mask returned by
     /// [`PyStructuredGrid::query_many`].
     type QueryManyResult<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>);
@@ -871,6 +947,7 @@ mod nzcvm {
         m.add_function(wrap_pyfunction!(blend_many, m)?)?;
         m.add_class::<PyStructuredGrid>()?;
         m.add_function(wrap_pyfunction!(structured_grid, m)?)?;
+        m.add_function(wrap_pyfunction!(adaptive_tin, m)?)?;
 
         Ok(())
     }

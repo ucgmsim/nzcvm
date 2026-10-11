@@ -1,7 +1,8 @@
-"""Tests for the depth-profile basin meshes ``nzcvm basin main`` writes.
+"""Tests for the basin meshes ``nzcvm basin main`` writes.
 
-The gmsh triangulation is too slow for a unit test, so these build the
-volumetric mesh from a hand-made triangulation of a square.
+The volumetric tests build on a hand-made triangulation of a square, so
+they don't depend on the triangulation; ``surface_samples`` and
+``triangulate_polygon`` have tests of their own.
 """
 
 from __future__ import annotations
@@ -23,8 +24,16 @@ from nzcvm.models.mesh import (
     mesh_encoding,
 )
 from nzcvm.models.model import MeshModel
+from nzcvm.models.surface import SurfaceGrid
 from nzcvm.scripts import construct_mesh
-from nzcvm.scripts.construct_mesh import PAD_DEPTH, Triangulation, profile_mesh
+from nzcvm.scripts.construct_mesh import (
+    PAD_DEPTH,
+    SAMPLES_PER_CELL,
+    Triangulation,
+    profile_mesh,
+    surface_samples,
+    triangulate_polygon,
+)
 
 SIDE = 1000.0
 # Elevation of the four corners, as depth (positive down): the topography
@@ -46,28 +55,9 @@ PROFILE = pd.DataFrame(
 
 
 def _square() -> Triangulation:
-    """Triangulate a square, numbering the corners 1-4 (gmsh style)."""
-    vertices = np.zeros(
-        4,
-        dtype=[
-            ("vertex", np.int64),
-            ("x", np.float64),
-            ("y", np.float64),
-            ("boundary", np.int64),
-        ],
-    )
-    vertices["vertex"] = np.arange(1, 5)
-    vertices["x"] = [0.0, SIDE, 0.0, SIDE]
-    vertices["y"] = [0.0, 0.0, SIDE, SIDE]
-    triangles = np.zeros(
-        2,
-        dtype=[("vertex", np.int64), ("i", np.int64), ("j", np.int64), ("k", np.int64)],
-    )
-    triangles["vertex"] = [1, 2]
-    triangles["i"] = [1, 2]
-    triangles["j"] = [2, 4]
-    triangles["k"] = [3, 3]
-    return Triangulation(vertices, triangles)
+    """Triangulate a square with its diagonal from corner 1 to corner 2."""
+    vertices = np.array([[0.0, 0.0], [SIDE, 0.0], [0.0, SIDE], [SIDE, SIDE]])
+    return Triangulation(vertices, np.array([[0, 1, 2], [1, 3, 2]]))
 
 
 def _topography(x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -242,3 +232,81 @@ def test_zero_thickness_layers_are_dropped() -> None:
 def test_decreasing_layer_tops_are_rejected() -> None:
     with pytest.raises(ValueError, match="increase"):
         _mesh(model=PROFILE.assign(z=[0.0, 300.0, 100.0]))
+
+
+# ---------------------------------------------------------------------------
+# Triangulation
+# ---------------------------------------------------------------------------
+
+
+def _grid(f, n: int = 21) -> SurfaceGrid:
+    """A surface over a grid slightly larger than the square."""
+    axis = np.linspace(-0.1 * SIDE, 1.1 * SIDE, n)
+    x, y = np.meshgrid(axis, axis)
+    return SurfaceGrid(x, y, f(x, y))
+
+
+SQUARE = shapely.box(0.0, 0.0, SIDE, SIDE)
+
+
+def _bump(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    return 300.0 * np.exp(-((x - 400.0) ** 2 + (y - 600.0) ** 2) / 1e5)
+
+
+def _interpolate(
+    triangulation: Triangulation, grid: SurfaceGrid, points: np.ndarray
+) -> np.ndarray:
+    """The triangulation's linear interpolant of `grid` at `points`."""
+    corners = triangulation.vertices[triangulation.triangles]  # (T, 3, 2)
+    corner_values = grid(corners[..., 0].ravel(), corners[..., 1].ravel())[0]
+    corner_values = corner_values.reshape(-1, 3)
+    # Barycentric coordinates of every point in every triangle.
+    a, b, c = corners[:, 0], corners[:, 1], corners[:, 2]
+    basis = np.stack((b - a, c - a), axis=2)  # (T, 2, 2)
+    offset = points[:, None, :] - a[None]  # (N, T, 2)
+    lb, lc = np.einsum("tij,ntj->nti", np.linalg.inv(basis), offset).transpose(2, 0, 1)
+    weights = np.stack((1 - lb - lc, lb, lc), axis=2)  # (N, T, 3)
+    inside = (weights >= -1e-9).all(axis=2)
+    triangle = inside.argmax(axis=1)
+    assert inside.any(axis=1).all()
+    rows = np.arange(len(points))
+    return (weights[rows, triangle] * corner_values[triangle]).sum(axis=1)
+
+
+def test_samples_refine_the_grid_inside_the_outline() -> None:
+    grid = _grid(_bump)
+    points, spacing = surface_samples(grid, SQUARE, per_cell=2)
+    assert shapely.contains_xy(SQUARE, points[:, 0], points[:, 1]).all()
+    # The lattice is twice as fine as the 60 m grid, and covers the square.
+    assert spacing == pytest.approx(30.0)
+    assert np.diff(np.unique(points[:, 0])).max() == pytest.approx(30.0)
+    assert len(points) == len(np.unique(points[:, 0])) * len(np.unique(points[:, 1]))
+
+
+def test_plane_needs_only_the_outline() -> None:
+    plane = _grid(lambda x, y: 0.3 * x - 0.2 * y + 7.0)
+    triangulation = triangulate_polygon(SQUARE, [(plane, 1.0)])
+    assert len(triangulation.triangles) == 2
+
+
+@pytest.mark.parametrize("tolerance", [1.0, 10.0])
+def test_triangulation_fits_samples_within_tolerance(tolerance: float) -> None:
+    grid = _grid(_bump)
+    triangulation = triangulate_polygon(SQUARE, [(grid, tolerance)])
+    points, spacing = surface_samples(grid, SQUARE, SAMPLES_PER_CELL)
+    # The outline too, at the lattice spacing.
+    outline = shapely.segmentize(SQUARE.exterior, spacing)
+    points = np.r_[points, np.asarray(outline.coords)[:-1]]
+    values, _ = grid(points[:, 0], points[:, 1])
+    error = np.abs(_interpolate(triangulation, grid, points) - values)
+    assert error.max() <= tolerance + 1e-6
+    # A looser tolerance needs fewer triangles than the samples.
+    assert len(triangulation.triangles) < len(points)
+
+
+def test_max_edge_caps_triangle_size() -> None:
+    flat = _grid(lambda x, y: np.zeros_like(x))
+    triangulation = triangulate_polygon(SQUARE, [(flat, 1.0)], max_edge=300.0)
+    corners = triangulation.vertices[triangulation.triangles]
+    edges = np.linalg.norm(corners - np.roll(corners, 1, axis=1), axis=2)
+    assert edges.max() <= 300.0 + 1e-6

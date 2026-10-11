@@ -58,13 +58,12 @@ optional extra, and say which one when it's missing:
 | Extra    | Installs                         | Needed for           |
 |----------|----------------------------------|----------------------|
 | `vis`    | pyvista                          | `nzcvm view`         |
-| `mesh`   | gmsh                             | `nzcvm basin`        |
 | `raster` | rioxarray (rasterio, GDAL)       | `nzcvm convert-tiff` |
 | `bench`  | geopandas, joblib, platformdirs  | `nzcvm tree-stats`   |
 
 ```sh
 pip install 'nzcvm[vis]'     # also installs pyvista
-uv sync --extra mesh         # in a checkout
+uv sync --extra raster       # in a checkout
 uv sync --all-extras         # everything
 ```
 
@@ -116,6 +115,16 @@ Useful `generate` options:
 | `--progress`     | tqdm progress bar (not compatible with `--distributed`)         |
 | `--monitor`      | Log CPU/memory usage while running                              |
 | `--log-level`    | `DEBUG` / `INFO` / `WARNING` (default `WARNING`)                |
+
+`nzcvm basin main` triangulates the basin outline with an error-bounded
+triangulated irregular network. Greedy insertion picks vertices from the
+surface samples until linear interpolation of each surface is within
+`--tolerance` metres (default 5) at a lattice twice as fine as the surface's
+grid and along the outline, so planar regions, however steep, get no
+vertices. It then extrudes one prism column per triangle between the top and
+bottom surfaces, split into three depth-profile tetrahedra. The triangulation
+keeps the outline's own vertices, so on small basins `--simplification`
+(metres) bounds the size as much as the tolerance does.
 
 ---
 

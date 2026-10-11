@@ -3,7 +3,7 @@ set dotenv-load
 # Default resolution
 res := "500"
 smoothing := "10000.0"
-construct := "uv run --extra mesh nzcvm basin main"
+construct := "uv run nzcvm basin main"
 coastline := "resources/coastline.wkb.gz"
 
 banks:
