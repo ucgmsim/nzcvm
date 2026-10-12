@@ -474,19 +474,21 @@ from nzcvm.models.model import ModelTree
 tree = ModelTree.load_models(
     [Path("models/ep2020.zarr"), Path("models/Wellington.zarr")]
 )
-quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0)
+quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0, depth=520.0)
 print(quality.vp, quality.vs)  # None if the point is outside every mesh
 ```
 
 `load_models` takes an iterable of mesh paths, anything `xarray` can open
 (the meshes distributed in `models/` are Zarr). Coordinates are in the model's
-projected CRS with `z` positive downwards.
+projected CRS with `z` positive downwards, and `depth` gives the point's
+depth below the topography. Basin meshes store depth and read it, while the
+tomography reads `z`. A grid computes both for every point.
 
 `query_many` is the vectorised form and returns a `Qualities` dataset.
 `explain` shows which models contributed to the blend:
 
 ```python
->>> tree.explain(1_749_150.0, 5_428_150.0, 100.0)
+>>> tree.explain(1_749_150.0, 5_428_150.0, 100.0, 120.0)
 (ρ=1810.00, Vp=1800.00, Vs=580.00, Qp=58.00, Qs=29.00, ɑ=1.00)
 ├── Model 0 (priority = 38)
 │   └── Quality: (ρ=1810.00, Vp=1800.00, Vs=580.00, ...)
