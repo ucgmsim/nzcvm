@@ -740,23 +740,10 @@ mod nzcvm {
             y: PyReadonlyArray1<f64>,
             clamp: bool,
         ) -> PyResult<QueryManyResult<'py>> {
-            let x = x.as_array();
-            let y = y.as_array();
-            if x.len() != y.len() {
-                return Err(PyValueError::new_err(format!(
-                    "x and y must have the same length; got x={}, y={}",
-                    x.len(),
-                    y.len(),
-                )));
-            }
-            let mut result = Array1::<f64>::zeros(x.len());
-            let mut outside = Array1::<bool>::from_elem(x.len(), false);
-            py.detach(|| {
-                azip!((r in &mut result, o in &mut outside, &px in &x, &py in &y) {
-                    (*r, *o) = self.inner.query(px, py, clamp);
-                });
-            });
-            Ok((result.into_pyarray(py), outside.into_pyarray(py)))
+            let results = map_points(py, &x, &y, |px, py| self.inner.query(px, py, clamp))?;
+            let values = results.mapv(|(value, _)| value);
+            let outside = results.mapv(|(_, outside)| outside);
+            Ok((values.into_pyarray(py), outside.into_pyarray(py)))
         }
 
         /// Interpolate barycentrically at many points, over the two triangles
@@ -771,23 +758,34 @@ mod nzcvm {
             x: PyReadonlyArray1<f64>,
             y: PyReadonlyArray1<f64>,
         ) -> PyResult<Bound<'py, PyArray1<f64>>> {
-            let x = x.as_array();
-            let y = y.as_array();
-            if x.len() != y.len() {
-                return Err(PyValueError::new_err(format!(
-                    "x and y must have the same length; got x={}, y={}",
-                    x.len(),
-                    y.len(),
-                )));
-            }
-            let mut result = Array1::<f64>::zeros(x.len());
-            py.detach(|| {
-                azip!((r in &mut result, &px in &x, &py in &y) {
-                    *r = self.inner.query_triangulated(px, py);
-                });
-            });
-            Ok(result.into_pyarray(py))
+            map_points(py, &x, &y, |px, py| self.inner.query_triangulated(px, py))
+                .map(|values| values.into_pyarray(py))
         }
+    }
+
+    /// Apply `f` to each point `(x[i], y[i])` with the GIL released.
+    ///
+    /// Returns an error if `x` and `y` differ in length.
+    fn map_points<T: Clone + Default + Send>(
+        py: Python<'_>,
+        x: &PyReadonlyArray1<f64>,
+        y: &PyReadonlyArray1<f64>,
+        f: impl Fn(f64, f64) -> T + Sync,
+    ) -> PyResult<Array1<T>> {
+        let x = x.as_array();
+        let y = y.as_array();
+        if x.len() != y.len() {
+            return Err(PyValueError::new_err(format!(
+                "x and y must have the same length; got x={}, y={}",
+                x.len(),
+                y.len(),
+            )));
+        }
+        let mut result = Array1::<T>::default(x.len());
+        py.detach(|| {
+            azip!((r in &mut result, &px in &x, &py in &y) *r = f(px, py));
+        });
+        Ok(result)
     }
 
     /// Python-facing coastline for signed-distance queries.

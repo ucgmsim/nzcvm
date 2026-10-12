@@ -62,9 +62,9 @@ class Surface:
 
     @classmethod
     def from_dataset(cls, mesh: StructuredMesh) -> Self:
-        x = mesh.x.values.astype(np.float64)
-        y = mesh.y.values.astype(np.float64)
-        z = mesh.z.values.astype(np.float64)
+        x = np.asarray(mesh.x.values, dtype=np.float64)
+        y = np.asarray(mesh.y.values, dtype=np.float64)
+        z = np.asarray(mesh.z.values, dtype=np.float64)
         inner = structured_grid(x, y, z)
 
         bounds = np.array(
@@ -127,8 +127,8 @@ class Surface:
             point falls outside the surface, unless *extrapolate* fills it.
         """
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
-        x_flat = x.ravel().astype(np.float64)
-        y_flat = y.ravel().astype(np.float64)
+        x_flat = np.asarray(x, dtype=np.float64).ravel()
+        y_flat = np.asarray(y, dtype=np.float64).ravel()
 
         z = self.inner.query_triangulated_many(x_flat, y_flat)
         logger.debug("Query complete.")
