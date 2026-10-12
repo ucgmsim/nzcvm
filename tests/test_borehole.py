@@ -28,7 +28,8 @@ from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.grid import Grid
 from nzcvm.layers.dummy import constant
 from nzcvm.layers.pipeline import execute_model_pipeline
-from nzcvm.models.mesh import StructuredMeshSchema
+from nzcvm.models.surface import SurfaceGrid
+from nzcvm.scripts.surface_cli import resample_upright
 from nzcvm.velocity_model import VelocityModel
 
 _NZTM = CRS.from_epsg(2193)
@@ -66,14 +67,7 @@ def synthetic_surface(tmp_path_factory: pytest.TempPathFactory) -> Path:
     z = -synthetic.elevation(mesh_lon, mesh_lat)
 
     path = tmp_path_factory.mktemp("surfaces") / "dem.zarr"
-    StructuredMeshSchema.new(
-        x=x.astype(np.float32),
-        y=y.astype(np.float32),
-        z=z.astype(np.float32),
-        i=np.arange(32),
-        j=np.arange(32),
-        name="synthetic",
-    ).to_zarr(path, mode="w")
+    resample_upright("synthetic", SurfaceGrid(x, y, z)).to_zarr(path, mode="w")
     return path
 
 

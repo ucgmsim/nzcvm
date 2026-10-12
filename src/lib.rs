@@ -743,31 +743,10 @@ mod nzcvm {
             let results = map_points(py, &x, &y, |px, py| self.inner.query(px, py, clamp))?;
             Ok(split_results(py, results))
         }
-
-        /// Interpolate barycentrically at many points, over the two triangles
-        /// of each cell either side of its ``[j, k]``–``[j + 1, k + 1]``
-        /// diagonal. See [`StructuredGrid::query_triangulated`].
-        ///
-        /// Returns the ``(N,)`` interpolated values and an ``(N,)`` boolean
-        /// mask of the points outside the grid, which are clamped onto its
-        /// edge when ``clamp`` is true and NaN otherwise.
-        #[pyo3(signature = (x, y, clamp = true))]
-        pub fn query_triangulated_many<'py>(
-            &self,
-            py: Python<'py>,
-            x: PyReadonlyArray1<f64>,
-            y: PyReadonlyArray1<f64>,
-            clamp: bool,
-        ) -> PyResult<QueryManyResult<'py>> {
-            let results = map_points(py, &x, &y, |px, py| {
-                self.inner.query_triangulated(px, py, clamp)
-            })?;
-            Ok(split_results(py, results))
-        }
     }
 
-    /// Split per-point `(value, outside)` results into the two arrays
-    /// [`PyStructuredGrid::query_many`] returns.
+    /// Split per-point `(value, outside)` results into the two arrays the
+    /// batched queries return.
     fn split_results<'py>(py: Python<'py>, results: Array1<(f64, bool)>) -> QueryManyResult<'py> {
         let values = results.mapv(|(value, _)| value);
         let outside = results.mapv(|(_, outside)| outside);

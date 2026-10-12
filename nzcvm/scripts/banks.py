@@ -5,12 +5,10 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
 import typer
 import xarray as xr
 
 from nzcvm import ely_taper
-from nzcvm.models.mesh import StructuredMeshSchema
 from nzcvm.models.surface import Surface, read_surface_file
 
 app = typer.Typer(
@@ -31,23 +29,6 @@ VP_FULL = 4000.0
 RHO_FULL = 2393.0
 
 
-def _load_bpv_surface(basement_path: Path) -> Surface:
-    """Build the BPV basement surface from the WGS84 lat/lon/elevation HDF5 file."""
-    grid = read_surface_file(basement_path)
-    ni, nj = grid.x.shape
-    bpv_dset = xr.Dataset(
-        {
-            "x": (("i", "j"), grid.x),
-            "y": (("i", "j"), grid.y),
-            "z": (("i", "j"), grid.values),
-        },
-        coords={"i": np.arange(ni), "j": np.arange(nj)},
-        attrs={"name": "BPV"},
-    )
-    bpv_dset = StructuredMeshSchema.from_dataset(bpv_dset)
-    return Surface.from_dataset(bpv_dset)
-
-
 @app.command()
 def main(
     mesh: Annotated[
@@ -63,7 +44,7 @@ def main(
             help="DEM surface (zarr) used as the Vs30-taper reference depth.",
             exists=True,
         ),
-    ] = Path("resources/cant_dem.zarr"),
+    ] = Path("resources/dem.zarr"),
     basement: Annotated[
         Path,
         typer.Argument(
@@ -118,10 +99,14 @@ def main(
     """Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."""
     dset = xr.open_dataset(mesh)
     surface = Surface.load(dem)
-    bpv_surface = _load_bpv_surface(basement)
+    # The basement is a latitude/longitude grid, so it interpolates
+    # bilinearly on its projected nodes, as construct_mesh reads it.
+    bpv_surface = read_surface_file(basement)
 
     dem_surface = xr.apply_ufunc(surface.transform, dset.x, dset.y)
-    bpv_dem = xr.apply_ufunc(bpv_surface.transform, dset.x, dset.y)
+    bpv_dem = xr.apply_ufunc(
+        lambda x, y: bpv_surface(x, y, clamp=False)[0], dset.x, dset.y
+    )
 
     dem_depth = (dset.z - dem_surface).clip(min=0)
     bpv_depth = (dset.z - bpv_dem).clip(min=0)

@@ -24,7 +24,14 @@ from nzcvm.models.mesh import (
     make_mesh,
     mesh_encoding,
 )
-from nzcvm.models.surface import SurfaceGrid, read_surface_file
+from nzcvm.models.surface import (
+    LatticeWindow,
+    Surface,
+    SurfaceGrid,
+    median_spacing,
+    read_lattice_window,
+    read_surface_window,
+)
 from nzcvm.nzcvm import adaptive_tin  # ty: ignore[unresolved-import]
 
 TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
@@ -42,7 +49,11 @@ app = typer.Typer(help="Construct a volumetric tetrahedral mesh for a basin mode
 
 
 def get_surface_bounds(surface_path: Path) -> shapely.Polygon:
-    """Return the WGS84 coordinate bounds (min_lat, max_lat, min_lon, max_lon) of a surface."""
+    """Return the NZTM bounding box of a Zarr lattice or HDF5 surface."""
+    if surface_path.suffix == ".zarr":
+        x, y = Surface.load(surface_path).corners.T
+        return shapely.box(xmin=x.min(), xmax=x.max(), ymin=y.min(), ymax=y.max())
+
     with h5py.File(surface_path, "r") as f:
         lat = f["latitude"][:]
         lon = f["longitude"][:]
@@ -390,6 +401,72 @@ def prism_tetra(triangles: np.ndarray) -> np.ndarray:
     )
 
 
+def terrain_cover(window: LatticeWindow, triangulation: Triangulation) -> np.ndarray:
+    """The depth of the highest terrain in *window* near each vertex.
+
+    "Near" is within the longest edge touching the vertex. Every point of a
+    triangle lies that close to each of its corners, so a top surface at or
+    above this cover at every vertex interpolates to at or above the terrain
+    everywhere in the triangle.
+
+    Parameters
+    ----------
+    window :
+        The full-resolution terrain, as depth (+z down).
+    triangulation :
+        The mesh's triangulation.
+
+    Returns
+    -------
+    numpy.ndarray
+        Depth of the highest terrain near each vertex, NaN where the window
+        has none.
+    """
+    vertices, triangles = triangulation.vertices, triangulation.triangles
+    edges = np.concatenate(
+        [triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]]
+    )
+    lengths = np.linalg.norm(vertices[edges[:, 0]] - vertices[edges[:, 1]], axis=1)
+    radius = np.zeros(len(vertices))
+    np.maximum.at(radius, edges[:, 0], lengths)
+    np.maximum.at(radius, edges[:, 1], lengths)
+    # Between nodes the terrain interpolates, so allow a cell either side.
+    reach = radius + 2 * window.spacing
+    fi, fj = window.fractional_index(vertices[:, 0], vertices[:, 1])
+
+    # Level k holds the shallowest depth in each block of 2^k x 2^k nodes. A
+    # vertex reads the 3 x 3 blocks around its own at the first level whose
+    # blocks are at least its reach across, which covers everything within
+    # its reach.
+    level = np.where(np.isnan(window.values), np.inf, window.values)
+    cover = np.full(len(vertices), np.inf)
+    pending = np.ones(len(vertices), dtype=bool)
+    block = 1
+    while pending.any():
+        ready = pending & (block * window.spacing >= reach)
+        if level.shape == (1, 1):
+            ready = pending
+        if ready.any():
+            bi = np.clip(np.floor(fi[ready] / block).astype(int), 0, level.shape[0] - 1)
+            bj = np.clip(np.floor(fj[ready] / block).astype(int), 0, level.shape[1] - 1)
+            nearby = np.full(ready.sum(), np.inf)
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    ni = np.clip(bi + di, 0, level.shape[0] - 1)
+                    nj = np.clip(bj + dj, 0, level.shape[1] - 1)
+                    nearby = np.minimum(nearby, level[ni, nj])
+            cover[ready] = nearby
+            pending &= ~ready
+        m, n = level.shape
+        padded = np.full((m + m % 2, n + n % 2), np.inf)
+        padded[:m, :n] = level
+        level = padded.reshape(padded.shape[0] // 2, 2, padded.shape[1] // 2, 2).min(
+            axis=(1, 3)
+        )
+        block *= 2
+    return np.where(np.isinf(cover), np.nan, cover)
+
+
 def profile_mesh(
     name: str,
     geometry: shapely.Geometry,
@@ -399,7 +476,7 @@ def profile_mesh(
     bottom_surface: np.ndarray,
     model: pd.DataFrame,
     culling_volume: float,
-    pad_top: bool,
+    padded_top: np.ndarray | None,
     priority: int,
 ) -> TetrahedralMesh:
     """Fill the space between two surfaces with one layer of depth-profile tetrahedra.
@@ -424,13 +501,11 @@ def profile_mesh(
 
     model_bottom = topography + (model["z"].iloc[-1] + model["thickness"].iloc[-1])
     bottom_surface = np.maximum(np.minimum(bottom_surface, model_bottom), top_surface)
-    if pad_top:
-        # Raise the top where the basin has thickness so topography slightly
-        # above the top surface still lands inside the mesh.  The first
-        # profile layer extends upwards to cover it.
-        top_surface = np.where(
-            bottom_surface > top_surface, top_surface - PAD_DEPTH, top_surface
-        )
+    if padded_top is not None:
+        # Raise the top where the basin has thickness so topography above
+        # the top surface still lands inside the mesh.  The first profile
+        # layer extends upwards to cover it.
+        top_surface = np.where(bottom_surface > top_surface, padded_top, top_surface)
     columns = triangulation.vertices
     vertices = interleave_top_and_bottom(
         np.c_[columns, top_surface], np.c_[columns, bottom_surface]
@@ -474,7 +549,7 @@ def slice_with_model(
     bottom_surface: np.ndarray,
     model: pd.DataFrame,
     culling_volume: float,
-    pad_top: bool,
+    padded_top: np.ndarray | None,
 ) -> list[Layer]:
     layers = []
     tetra = prism_tetra(triangulation.triangles)
@@ -494,9 +569,9 @@ def slice_with_model(
         )
 
         top_of_layer = top_surface
-        if pad_top and not emitted_layer:
+        if padded_top is not None and not emitted_layer:
             has_thickness = bottom_of_layer > top_surface
-            top_of_layer = np.where(has_thickness, top_surface - PAD_DEPTH, top_surface)
+            top_of_layer = np.where(has_thickness, padded_top, top_surface)
 
         mesh_top = np.c_[triangulation.vertices, top_of_layer]
         mesh_bottom = np.c_[triangulation.vertices, bottom_of_layer]
@@ -583,30 +658,30 @@ def main(
     topography: Annotated[
         Path,
         typer.Argument(
-            help="Topography surface file (HDF5).",
+            help="Topography surface: an HDF5 elevation file or a Zarr lattice surface.",
             exists=True,
             file_okay=True,
-            dir_okay=False,
+            dir_okay=True,
             readable=True,
         ),
     ],
     top_surface: Annotated[
         Path,
         typer.Argument(
-            help="Top surface file (HDF5).",
+            help="Top surface: an HDF5 elevation file or a Zarr lattice surface.",
             exists=True,
             file_okay=True,
-            dir_okay=False,
+            dir_okay=True,
             readable=True,
         ),
     ],
     bottom_surface: Annotated[
         Path,
         typer.Argument(
-            help="Bottom surface file (HDF5).",
+            help="Bottom surface: an HDF5 elevation file or a Zarr lattice surface.",
             exists=True,
             file_okay=True,
-            dir_okay=False,
+            dir_okay=True,
             readable=True,
         ),
     ],
@@ -690,7 +765,10 @@ def main(
     pad_top: Annotated[
         bool,
         typer.Option(
-            help="If true, pad the top layer (useful to prevent topography peek through)."
+            help="If true, pad the top layer (useful to prevent topography peek "
+            "through). A Zarr topography meshes at the basement's spacing, and "
+            "the pad also rises over its full-resolution highest point near "
+            "each mesh vertex."
         ),
     ] = True,
     layered: Annotated[
@@ -754,9 +832,13 @@ def main(
         corners_lon.max(),
     )
 
-    topo_grid = read_surface_file(topography, bbox=buffered_bbox)
-    top_grid = read_surface_file(top_surface, bbox=buffered_bbox)
-    bot_grid = read_surface_file(bottom_surface, bbox=buffered_bbox)
+    # The basement resolves the basin no finer than its own node spacing, so
+    # a Zarr topography or top surface averages to that spacing too.
+    bot_grid = read_surface_window(bottom_surface, buffered_bbox)
+    spacing = median_spacing(bot_grid)
+    print(f"Meshing surfaces at the basement's spacing of {spacing:.0f} m")
+    topo_grid = read_surface_window(topography, buffered_bbox, spacing)
+    top_grid = read_surface_window(top_surface, buffered_bbox, spacing)
     surfaces = [(bot_grid, tolerance)]
     if top_surface != bottom_surface:
         surfaces.append((top_grid, tolerance))
@@ -778,6 +860,16 @@ def main(
     mesh_topography = interpolate_surface(
         topo_grid, triangulation.vertices, label="topography"
     )
+    padded_top = None
+    if pad_top:
+        padded_top = mesh_top - PAD_DEPTH
+        if topography.suffix == ".zarr":
+            # The basin meshes averaged topography, and the full surface
+            # rises above it in places. Lift the top over it everywhere.
+            cover = terrain_cover(
+                read_lattice_window(topography, buffered_bbox), triangulation
+            )
+            padded_top = np.fmin(padded_top, cover)
 
     name = output.stem
     if layered:
@@ -789,7 +881,7 @@ def main(
             mesh_bottom,
             model,
             culling_volume,
-            pad_top=pad_top,
+            padded_top=padded_top,
         )
         mesh = construct_volumetric_mesh(name, poly, layers, priority)
     else:
@@ -803,7 +895,7 @@ def main(
             mesh_bottom,
             model,
             culling_volume,
-            pad_top=pad_top,
+            padded_top=padded_top,
             priority=priority,
         )
 

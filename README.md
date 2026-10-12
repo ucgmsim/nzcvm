@@ -97,7 +97,7 @@ uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
 | `nzcvm view`         | Interactive 3D PyVista viewer for model output               |
 | `nzcvm basin`        | Construct a tetrahedral mesh for a basin model                |
 | `nzcvm tomography`   | Convert a CSV-like tomography model to a tetrahedral mesh     |
-| `nzcvm surface`      | Convert an HDF5 topography surface to a VTK unstructured grid |
+| `nzcvm surface`      | Convert an HDF5 surface onto an upright NZTM lattice          |
 | `nzcvm convert-tiff` | Convert a GeoTIFF raster to a surface                         |
 | `nzcvm tree-stats`   | Benchmark BVH query performance                               |
 | `nzcvm synthetic`    | Write synthetic DEM, Vs30, basin, and tomography inputs       |
@@ -551,9 +551,12 @@ Four subpackages, each with a narrow responsibility.
 
 Geospatial Rust wrappers and mesh I/O. `MeshModel` wraps one tetrahedral
 mesh. `ModelTree` combines many meshes into a priority-ordered BVH tree and
-handles alpha-composited queries. `Surface` interpolates values from a 2-D
-triangular surface mesh (used for the DEM and the Vs30 map). `mesh` provides
-the tetrahedral and structured mesh dataclasses and their I/O.
+handles alpha-composited queries. `Surface` interpolates values on a regular
+lattice (used for the DEM and the Vs30 map). A structured mesh stores only the
+lattice values `z` and an affine placement: node `[i, j]` sits at
+`origin + i * step_i + j * step_j`, so an upright or a rotated raster maps a
+query point to its cell directly. `mesh` provides the tetrahedral and
+structured mesh dataclasses and their I/O.
 
 Each mesh has one field type, its `model_type`, which turns a query point
 into a quality: `INTERPOLATE` (barycentric interpolation of the vertex

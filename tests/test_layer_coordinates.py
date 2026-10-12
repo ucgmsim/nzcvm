@@ -49,12 +49,13 @@ from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.grid import Grid
 from nzcvm.layers.core import layer_from_config
 from nzcvm.layers.pipeline import build_pipeline, execute_model_pipeline
-from nzcvm.models.mesh import StructuredMeshSchema
+from nzcvm.models.surface import SurfaceGrid
 from nzcvm.scripts.convert_tomography import (
     MODEL_COLUMNS,
     ModelType,
     data_frame_to_mesh,
 )
+from nzcvm.scripts.surface_cli import resample_upright
 from tests.conftest import Terminal
 
 _NZTM = CRS.from_epsg(2193)
@@ -82,14 +83,8 @@ def _surface(path: Path, values: np.ndarray, samples: int) -> Path:
     lon, lat = synthetic.DOMAIN.sample(samples, samples)
     mesh_lon, mesh_lat = np.meshgrid(lon, lat, indexing="ij")
     x, y = _TO_NZTM.transform(mesh_lon, mesh_lat)
-    StructuredMeshSchema.new(
-        x=x.astype(np.float32),
-        y=y.astype(np.float32),
-        z=values.astype(np.float32),
-        i=np.arange(samples),
-        j=np.arange(samples),
-        name=path.stem,
-    ).to_zarr(path, mode="w")
+    surface = resample_upright(path.stem, SurfaceGrid(x, y, values))
+    surface.to_zarr(path, mode="w")
     return path
 
 

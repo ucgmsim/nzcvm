@@ -1,8 +1,8 @@
 """Surface interpolation for topography-based depth transforms.
 
-A :class:`Surface` wraps a structured surface mesh and provides point-query
-interpolation, used to convert depth-below-surface coordinates into
-absolute elevations.
+A :class:`Surface` wraps a surface sampled on a regular lattice and provides
+point-query interpolation, used to convert depth-below-surface coordinates
+into absolute elevations.
 
 A :class:`SurfaceGrid` holds values on a regular latitude/longitude grid
 projected into NZTM, interpolated bilinearly. :func:`read_surface_file` reads
@@ -11,19 +11,21 @@ one from a modeller-style HDF5 surface file, which holds 1-D ``latitude`` and
 """
 
 import logging
+import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Self
 
 import h5py
 import numpy as np
 import pyproj
-import xarray as xr
+import zarr
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.tree import Tree
 
-from nzcvm import registry
-from nzcvm.models.mesh import StructuredMesh, StructuredMeshSchema
+from nzcvm.models.mesh import StructuredMesh
 from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
     StructuredGrid,
     structured_grid,
@@ -35,55 +37,106 @@ TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
 logger = logging.getLogger(__name__)
 
 
+#: Tolerance on the fractional cell coordinates when deciding a point is
+#: outside a :class:`Surface`.
+OUTSIDE_TOLERANCE = 1e-9
+
+
 @dataclass
 class Surface:
-    """A surface interpolator over a structured mesh.
+    """A surface interpolator over a regular lattice of nodes.
 
     Given a set of (x, y) query points, returns the interpolated elevation
     (z) value at each location.  Used by grid builders to convert
     depth-below-surface coordinates to absolute elevations.
 
-    The surface splits each mesh cell into two triangles along the diagonal
-    from node ``[i, j]`` to node ``[i + 1, j + 1]``. A point's elevation
-    interpolates barycentrically over the triangle containing it. The mesh's
-    structure locates the cell. The surface stores only the node coordinates
-    and values: no triangle list and no search tree.
+    The lattice places node ``[i, j]`` at ``origin + i * step_i + j *
+    step_j``. A query maps the point back to fractional ``(i, j)``, which
+    names its cell directly. The surface splits each cell into two triangles
+    along the diagonal from node ``[i, j]`` to node ``[i + 1, j + 1]``, and
+    a point's elevation interpolates barycentrically over the triangle
+    containing it. An affine map keeps barycentric coordinates, so the
+    weights come straight from the fractional index.
+
+    A surface from :meth:`load` reads its values from the Zarr store as
+    queries need them, a chunk at a time, so a large surface costs memory
+    only for the chunks a query touches.
     """
 
-    inner: StructuredGrid
-    bounds: np.ndarray
-    n_points: int
+    #: ``(m, n)`` node values: a NumPy array, or a Zarr array read lazily.
+    values: np.ndarray | zarr.Array
+    origin: np.ndarray
+    step_i: np.ndarray
+    step_j: np.ndarray
 
     @classmethod
     def from_dataset(cls, mesh: StructuredMesh) -> Self:
-        x = np.asarray(mesh.x.values, dtype=np.float64)
-        y = np.asarray(mesh.y.values, dtype=np.float64)
-        z = np.asarray(mesh.z.values, dtype=np.float64)
-        inner = structured_grid(x, y, z)
-
-        bounds = np.array(
-            [x.min(), y.min(), float(z.min()), x.max(), y.max(), float(z.max())]
-        )
-
-        return cls(inner, bounds=bounds, n_points=x.size)
+        """Build a surface holding *mesh*'s values in memory."""
+        return cls._placed(np.asarray(mesh.z.values, dtype=np.float32), mesh.attrs)
 
     @classmethod
     def load(cls, path: Path) -> Self:
-        """Load a surface mesh from *surface_path* and return a :class:`Surface`.
+        """Open the surface at *path*, reading its values lazily.
 
         Parameters
         ----------
         path :
-            Path to the surface mesh file.
+            Path to the surface's Zarr store.
 
         Returns
         -------
         Surface
-            The loaded surface, ready to interpolate.
+            The surface, ready to interpolate.
         """
-        with xr.open_dataset(path) as dset:
-            mesh = StructuredMeshSchema.from_dataset(dset)
-            return cls.from_dataset(mesh)
+        group = zarr.open_group(path, mode="r")
+        values = zarr.open_array(store=path, path="z", mode="r")
+        return cls._placed(values, group.attrs)
+
+    @classmethod
+    def _placed(cls, values: np.ndarray | zarr.Array, attrs: Mapping) -> Self:
+        origin, step_i, step_j = (
+            np.asarray(attrs[key], dtype=np.float64)
+            for key in ("origin", "step_i", "step_j")
+        )
+        return cls(values, origin, step_i, step_j)
+
+    @property
+    def n_points(self) -> int:
+        """Number of nodes in the lattice."""
+        return int(np.prod(self.values.shape))
+
+    @property
+    def corners(self) -> np.ndarray:
+        """``(4, 2)`` positions of the lattice's four corner nodes."""
+        ni, nj = self.values.shape
+        corner_index = np.array([[0, 0], [ni - 1, 0], [0, nj - 1], [ni - 1, nj - 1]])
+        return self.origin + corner_index @ np.stack([self.step_i, self.step_j])
+
+    @cached_property
+    def bounds(self) -> np.ndarray:
+        """``[xmin, ymin, zmin, xmax, ymax, zmax]`` of the surface.
+
+        The z range reads every value, so a lazy surface works it out only
+        when asked.
+        """
+        corners = self.corners
+        values = np.asarray(self.values[:])
+        return np.array(
+            [
+                corners[:, 0].min(),
+                corners[:, 1].min(),
+                float(np.nanmin(values)),
+                corners[:, 0].max(),
+                corners[:, 1].max(),
+                float(np.nanmax(values)),
+            ]
+        )
+
+    def _gather(self, i: np.ndarray, j: np.ndarray) -> np.ndarray:
+        """The values at nodes ``(i[k], j[k])``."""
+        if isinstance(self.values, np.ndarray):
+            return self.values[i, j]
+        return np.asarray(self.values.vindex[i, j])
 
     def transform(
         self, x: np.ndarray, y: np.ndarray, extrapolate: bool = False
@@ -110,23 +163,45 @@ class Surface:
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
         x_flat = np.asarray(x, dtype=np.float64).ravel()
         y_flat = np.asarray(y, dtype=np.float64).ravel()
+        if x_flat.size == 0:
+            return np.empty(x.shape, dtype=x.dtype)
 
-        z, _ = self.inner.query_triangulated_many(x_flat, y_flat, extrapolate)
+        inverse = np.linalg.inv(np.column_stack([self.step_i, self.step_j]))
+        fi, fj = inverse @ np.stack([x_flat - self.origin[0], y_flat - self.origin[1]])
+        ni, nj = self.values.shape
+        i = np.clip(np.floor(fi), 0, ni - 2).astype(np.int64)
+        j = np.clip(np.floor(fj), 0, nj - 2).astype(np.int64)
+        t, s = fi - i, fj - j
+        outside = (
+            (t < -OUTSIDE_TOLERANCE)
+            | (t > 1 + OUTSIDE_TOLERANCE)
+            | (s < -OUTSIDE_TOLERANCE)
+            | (s > 1 + OUTSIDE_TOLERANCE)
+        )
+        # Clamped onto the edge of its cell, a point takes the line between
+        # the edge's two nodes, which both triangles agree on.
+        t, s = np.clip(t, 0.0, 1.0), np.clip(s, 0.0, 1.0)
+
+        # In (t, s), the triangle [i, j], [i + 1, j], [i + 1, j + 1] is
+        # t >= s and the triangle [i, j], [i + 1, j + 1], [i, j + 1] is
+        # t < s. The weights are the point's barycentric coordinates in it.
+        upper = t >= s
+        side_i = np.where(upper, i + 1, i)
+        side_j = np.where(upper, j, j + 1)
+        corner, side, diagonal = (
+            self._gather(
+                np.concatenate([i, side_i, i + 1]), np.concatenate([j, side_j, j + 1])
+            )
+            .reshape(3, -1)
+            .astype(np.float64)
+        )
+        w_side = np.where(upper, t - s, s - t)
+        w_diagonal = np.where(upper, s, t)
+        z = (1.0 - w_side - w_diagonal) * corner + w_side * side + w_diagonal * diagonal
+        if not extrapolate:
+            z[outside] = np.nan
         logger.debug("Query complete.")
         return z.reshape(x.shape).astype(x.dtype)
-
-    def __getstate__(self):
-        # When standard pickle hits this object, bypass pickling the Rust object
-        state = self.__dict__.copy()
-
-        state["inner"] = registry.pickle_pass(self.inner)
-        return state
-
-    def __setstate__(self, state):
-        # When unpickling, swap the key back for the live object reference
-        self.__dict__.update(state)
-        key = state["inner"]
-        self.inner = registry.REGISTRY[key]
 
     def __rich_console__(
         self, _console: Console, _options: ConsoleOptions
@@ -255,3 +330,182 @@ def read_surface_file(
     lon_grid, lat_grid = np.meshgrid(longitude, latitude)
     x, y = TRANSFORMER.transform(lon_grid, lat_grid)
     return SurfaceGrid(x, y, values)
+
+
+def median_spacing(grid: SurfaceGrid) -> float:
+    """The median distance between neighbouring nodes of *grid*, in metres."""
+    x = np.asarray(grid.x, dtype=np.float64)
+    y = np.asarray(grid.y, dtype=np.float64)
+    steps = np.concatenate(
+        [
+            np.hypot(np.diff(x, axis=0), np.diff(y, axis=0)).ravel(),
+            np.hypot(np.diff(x, axis=1), np.diff(y, axis=1)).ravel(),
+        ]
+    )
+    return float(np.median(steps))
+
+
+@dataclass
+class LatticeWindow:
+    """A rectangular window of a lattice surface, held in memory.
+
+    Node ``[i, j]`` of the window is at ``origin + i * step_i + j *
+    step_j``, like the surface it came from.
+    """
+
+    #: ``(m, n)`` float32 node values, as depth (+z down).
+    values: np.ndarray
+    origin: np.ndarray
+    step_i: np.ndarray
+    step_j: np.ndarray
+
+    @property
+    def spacing(self) -> float:
+        """The shorter of the two node steps, in metres."""
+        return float(min(np.linalg.norm(self.step_i), np.linalg.norm(self.step_j)))
+
+    def fractional_index(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """``(2, N)`` fractional ``(i, j)`` of the points ``(x, y)``."""
+        inverse = np.linalg.inv(np.column_stack([self.step_i, self.step_j]))
+        return inverse @ np.stack([x - self.origin[0], y - self.origin[1]])
+
+    def coarsened(self, factor: int) -> Self:
+        """Average blocks of *factor* x *factor* nodes into one node each.
+
+        A block at the edge that runs past the window averages the nodes it
+        has. The coarse node is at the centre of its block.
+        """
+        if factor <= 1:
+            return self
+        m, n = self.values.shape
+        padded = np.full(
+            (-(-m // factor) * factor, -(-n // factor) * factor), np.nan, np.float32
+        )
+        padded[:m, :n] = self.values
+        blocks = padded.reshape(
+            padded.shape[0] // factor, factor, padded.shape[1] // factor, factor
+        )
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            values = np.nanmean(blocks, axis=(1, 3)).astype(np.float32)
+        centre = (factor - 1) / 2
+        return type(self)(
+            values,
+            self.origin + centre * (self.step_i + self.step_j),
+            self.step_i * factor,
+            self.step_j * factor,
+        )
+
+    def grid(self) -> SurfaceGrid:
+        """The window as a :class:`SurfaceGrid` over its projected nodes."""
+        i, j = np.meshgrid(
+            np.arange(self.values.shape[0]),
+            np.arange(self.values.shape[1]),
+            indexing="ij",
+        )
+        x = self.origin[0] + i * self.step_i[0] + j * self.step_j[0]
+        y = self.origin[1] + i * self.step_i[1] + j * self.step_j[1]
+        return SurfaceGrid(x, y, self.values.astype(np.float64))
+
+
+def read_lattice_window(
+    surface_path: Path, bbox: tuple[float, float, float, float] | None = None
+) -> LatticeWindow:
+    """Read the nodes of a Zarr lattice surface covering *bbox*.
+
+    It reads only the chunks under the box.
+
+    Parameters
+    ----------
+    surface_path :
+        Zarr lattice surface, stored as depth (+z down).
+    bbox :
+        ``(min_lat, max_lat, min_lon, max_lon)``. If given, read only the
+        nodes covering it.
+
+    Returns
+    -------
+    LatticeWindow
+        The nodes in the window.
+    """
+    surface = Surface.load(surface_path)
+    ni, nj = surface.values.shape
+    i_window = j_window = slice(None)
+    if bbox is not None:
+        min_lat, max_lat, min_lon, max_lon = bbox
+        # A latitude/longitude box curves in NZTM, so project its whole
+        # boundary rather than its corners.
+        edge = np.linspace(0.0, 1.0, 64)
+        lon = np.concatenate(
+            [
+                min_lon + (max_lon - min_lon) * edge,
+                np.full(64, max_lon),
+                max_lon - (max_lon - min_lon) * edge,
+                np.full(64, min_lon),
+            ]
+        )
+        lat = np.concatenate(
+            [
+                np.full(64, min_lat),
+                min_lat + (max_lat - min_lat) * edge,
+                np.full(64, max_lat),
+                max_lat - (max_lat - min_lat) * edge,
+            ]
+        )
+        x, y = TRANSFORMER.transform(lon, lat)
+        whole = LatticeWindow(
+            np.empty((0, 0), np.float32), surface.origin, surface.step_i, surface.step_j
+        )
+        fi, fj = whole.fractional_index(np.asarray(x), np.asarray(y))
+        i_window = slice(
+            int(np.clip(np.floor(fi.min()) - 1, 0, ni)),
+            int(np.clip(np.ceil(fi.max()) + 2, 0, ni)),
+        )
+        j_window = slice(
+            int(np.clip(np.floor(fj.min()) - 1, 0, nj)),
+            int(np.clip(np.ceil(fj.max()) + 2, 0, nj)),
+        )
+    i0 = i_window.start or 0
+    j0 = j_window.start or 0
+    return LatticeWindow(
+        np.asarray(surface.values[i_window, j_window], dtype=np.float32),
+        surface.origin + i0 * surface.step_i + j0 * surface.step_j,
+        surface.step_i,
+        surface.step_j,
+    )
+
+
+def read_surface_window(
+    surface_path: Path,
+    bbox: tuple[float, float, float, float] | None = None,
+    spacing: float | None = None,
+) -> SurfaceGrid:
+    """Read a surface, as depth (+z down), around *bbox* onto an NZTM grid.
+
+    A Zarr store contains a lattice surface already stored as depth. This
+    reads only the chunks under the box and averages them in blocks to about
+    *spacing*. It reads anything else as an HDF5 elevation file with
+    :func:`read_surface_file`, which negates it.
+
+    Parameters
+    ----------
+    surface_path :
+        Zarr lattice surface or HDF5 elevation file.
+    bbox :
+        ``(min_lat, max_lat, min_lon, max_lon)``. If given, read only the
+        nodes covering it.
+    spacing :
+        Node spacing, in metres, to average a lattice surface to. The
+        nearest whole number of nodes makes a block. Defaults to the
+        surface's own spacing. It has no effect on an HDF5 surface.
+
+    Returns
+    -------
+    SurfaceGrid
+        The depths at projected nodes.
+    """
+    if surface_path.suffix != ".zarr":
+        return read_surface_file(surface_path, bbox=bbox)
+    window = read_lattice_window(surface_path, bbox)
+    factor = 1 if spacing is None else max(1, round(spacing / window.spacing))
+    return window.coarsened(factor).grid()

@@ -190,16 +190,26 @@ class StructuredMesh(xr.Dataset):
 
 @dataclass
 class StructuredMeshSchema(AsDataset):
-    """A structured-grid surface mesh."""
+    """A surface sampled on a regular lattice of nodes.
 
-    x: Data[tuple[I, J], np.float32]
-    y: Data[tuple[I, J], np.float32]
+    Node ``[i, j]`` sits at ``origin + i * step_i + j * step_j`` in the
+    projected CRS, so ``z`` alone holds the surface. An upright raster has
+    its steps along the axes. A rotated or sheared one doesn't. Build one
+    with :func:`regular_mesh`.
+    """
+
     z: Data[tuple[I, J], np.float32]
 
     i: Coord[I, np.uint64]
     j: Coord[J, np.uint64]
 
     name: Attr[str]
+    #: Position of node ``[0, 0]``.
+    origin: Attr[list[float]]
+    #: Displacement from node ``[i, j]`` to node ``[i + 1, j]``.
+    step_i: Attr[list[float]]
+    #: Displacement from node ``[i, j]`` to node ``[i, j + 1]``.
+    step_j: Attr[list[float]]
 
     __dataoptions__ = DataOptions(StructuredMesh)
 
@@ -209,11 +219,47 @@ class StructuredMeshSchema(AsDataset):
         return cls.new(**dataset.data_vars, **dataset.coords, **dataset.attrs)  # ty: ignore[invalid-argument-type]
 
 
-DEFAULT_STRUCTURED_ENCODING_SETTINGS = {
-    "x": {"compressors": MEDIUM_COMPRESSOR},
-    "y": {"compressors": MEDIUM_COMPRESSOR},
-    "z": {"compressors": MEDIUM_COMPRESSOR},
-}
+def regular_mesh(
+    name: str,
+    z: Any,
+    origin: tuple[float, float],
+    step_i: tuple[float, float],
+    step_j: tuple[float, float],
+) -> StructuredMesh:
+    """Build a :class:`StructuredMesh` from its values and lattice placement.
+
+    Parameters
+    ----------
+    name :
+        Name of the surface.
+    z :
+        ``(m, n)`` values, as a NumPy or Dask array.
+    origin, step_i, step_j :
+        Position of node ``[0, 0]`` and the displacements along ``i`` and
+        ``j``, in the projected CRS.
+
+    Returns
+    -------
+    StructuredMesh
+        The surface.
+    """
+    ni, nj = z.shape
+    return StructuredMeshSchema.new(
+        z=z,
+        i=np.arange(ni),
+        j=np.arange(nj),
+        name=name,
+        origin=[float(v) for v in origin],
+        step_i=[float(v) for v in step_i],
+        step_j=[float(v) for v in step_j],
+    )
+
+
+#: Nodes per chunk along each axis of a stored surface. A query reads the
+#: chunks around its points, and small chunks mean it reads little.
+SURFACE_CHUNK_SIZE = 512
+
+DEFAULT_STRUCTURED_ENCODING_SETTINGS = {"z": {"compressors": MEDIUM_COMPRESSOR}}
 
 
 def make_mesh(
