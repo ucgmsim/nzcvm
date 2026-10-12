@@ -16,7 +16,7 @@ run-name: >-
 #   models-vX.Y.Z.zip     Built once per release, and linked from the
 #   sites-vX.Y.Z.zip      release description with their SHA-256.
 #
-# Needs a RCLONE_CONFIG secret holding an rclone config with a `dropbox`
+# Needs a RCLONE_CONFIG secret holding an rclone config with a `remote`
 # remote that can write to and share from the folder below.
 
 on:
@@ -39,7 +39,7 @@ permissions:
   contents: write
 
 env:
-  DROPBOX_DIR: "dropbox:/QuakeCoRE/Public/VM Data"
+  DROPBOX_DIR: "remote:/QuakeCoRE/Public/VM Data"
   DATA_REPO: https://github.com/ucgmsim/nzcvm_data.git
   NZCVM_DATA_ROOT: ${{ github.workspace }}/nzcvm_data
   # Only the LFS files the Justfile recipes read: the basin surfaces, and the
