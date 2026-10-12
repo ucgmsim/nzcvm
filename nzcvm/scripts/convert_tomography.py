@@ -213,9 +213,17 @@ def data_frame_to_mesh(
     model_type = np.full(num_cells, CellModel.INTERPOLATE, dtype=np.uint8)
     priority = np.full(num_cells, np.iinfo(np.uint8).max, dtype=np.uint8)
 
+    # The vertices are in the model's local frame. Its bounds go in world
+    # coordinates, mapped back through the inverse of the world-to-local map.
+    local = np.c_[points, np.ones(len(points))]
+    to_local = np.asarray(tomography_model.affine_inverse, dtype=np.float64)
+    world = local @ np.linalg.inv(to_local).T
+    aabb = [*world[:, :3].min(axis=0), *world[:, :3].max(axis=0)]
+
     return make_mesh(
         name=name,
         vertical=Vertical.ELEVATION,
+        aabb=aabb,
         points=points,
         connectivity=connectivity,
         cell_data={

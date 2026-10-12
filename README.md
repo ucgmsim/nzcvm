@@ -126,6 +126,20 @@ bottom surfaces, split into three depth-profile tetrahedra. The triangulation
 keeps the outline's own vertices, so on small basins `--simplification`
 (metres) bounds the size as much as the tolerance does.
 
+A basin of several stacked layers meshes in one run. List its interfaces
+from the top down, then give each layer an `--output`, a `--priority` and a
+`--model`: a 1-D model file, or `rho=...,vp=...,vs=...,qp=...,qs=...` for
+uniform qualities.
+
+```sh
+nzcvm basin main outline.geojson dem.zarr dem.zarr pliocene.h5 basement.h5 \
+    --output upper.zarr --priority 11 --model upper.fd_modfile \
+    --output lower.zarr --priority 12 --model rho=2120,vp=2600,vs=1100,qp=110,qs=55
+```
+
+The layers share one triangulation, fitted to every interface, so each pair
+of neighbouring layers meets exactly. `--pad-top` pads the top layer only.
+
 ---
 
 ## Configuration
