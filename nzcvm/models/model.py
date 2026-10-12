@@ -388,8 +388,9 @@ class ModelTree:
         Returns
         -------
         tuple[numpy.ndarray, numpy.ndarray]
-            A pair ``(min_xyz, max_xyz)`` of shape-``(3,)`` float32 arrays
-            in the model's coordinate system.
+            A pair ``(min_xyz, max_xyz)`` of shape-``(3,)`` float32 arrays.
+            ``z`` holds negated elevation. A depth-queried mesh contributes
+            the elevation range it can occupy.
         """
         return self.inner.aabb()
 

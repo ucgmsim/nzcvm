@@ -213,10 +213,16 @@ impl ModelTree {
         Self { bvh_tree, models }
     }
 
+    /// The models' extent in `(x, y, z)`, with `z` negated elevation for
+    /// every model: a depth model contributes the elevation range it can
+    /// occupy, as in the tree's own bounds.
     pub fn aabb(&self) -> bvh::aabb::Aabb<Real, 3> {
         self.models
             .iter()
-            .map(|m| m.model.aabb3())
+            .map(|m| {
+                let aabb = Bounded::<Real, 4>::aabb(m);
+                Aabb::with_bounds(aabb.min.xyz(), aabb.max.xyz())
+            })
             .reduce(|a, b| a.join(&b))
             .expect("ModelTree must contain at least one model")
     }

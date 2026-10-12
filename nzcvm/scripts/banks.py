@@ -77,7 +77,11 @@ def main(
         typer.Option(help="Density (kg/m^3) fill value outside the GTL mask.", min=0.0),
     ] = RHO_FULL,
 ) -> None:
-    """Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."""
+    """Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh.
+
+    The BPV top of each column is its shallowest vertex, so build the mesh
+    with ``--no-pad-top``. A padded top would sit ``PAD_DEPTH`` above it.
+    """
     dset = xr.open_dataset(mesh)
     # The mesh is depth-queried: its z is depth below the topography.
     dem_depth = dset.z.clip(min=0)

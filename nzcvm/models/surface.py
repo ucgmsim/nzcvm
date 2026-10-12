@@ -228,10 +228,9 @@ class Surface:
         """
         tree = Tree("Surface Interpolation")
         tree.add("Kind: Bilinear")
-        tree.add(
-            f"Bounds: [X: {self.bounds[0]:.0f}-{self.bounds[3]:.0f}, Y: {self.bounds[1]:.0f}-{self.bounds[4]:.0f}]"
-        )
-        tree.add(f"Value Range: {self.bounds[2]:.0f}-{self.bounds[5]:.0f}")
+        # The corners alone, since the value range would read every value.
+        (x_min, y_min), (x_max, y_max) = self.corners.min(0), self.corners.max(0)
+        tree.add(f"Bounds: [X: {x_min:.0f}-{x_max:.0f}, Y: {y_min:.0f}-{y_max:.0f}]")
         tree.add(f"Number of points in surface: {self.n_points:,}")
         yield tree
 

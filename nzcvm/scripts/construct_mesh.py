@@ -713,7 +713,8 @@ def basin_depth_surfaces(
     topography: Path,
     surfaces: Sequence[Path],
     bbox: tuple[float, float, float, float],
-) -> list[SurfaceGrid | None]:
+    spacing: float | None = None,
+) -> tuple[list[SurfaceGrid | None], float]:
     """Each of *surfaces* as depth below *topography*, at its own nodes.
 
     The last surface is the basement. The topography averages to the
@@ -728,18 +729,25 @@ def basin_depth_surfaces(
         Surfaces from the top of the basin down to its basement.
     bbox :
         ``(min_lat, max_lat, min_lon, max_lon)`` to read.
+    spacing :
+        Spacing, in metres, to average the topography to instead of the
+        basement's. A stack passes its own, and its layers all convert
+        against the same topography.
 
     Returns
     -------
-    list of SurfaceGrid or None
+    depths : list of SurfaceGrid or None
         Each surface's depth, or None for a surface that's the
         topography: depth 0.
+    spacing : float
+        The spacing the topography averaged to.
     """
     basement = read_surface_window(surfaces[-1], bbox)
-    spacing = median_spacing(basement)
+    if spacing is None:
+        spacing = median_spacing(basement)
     print(f"Meshing surfaces at the basement's spacing of {spacing:.0f} m")
     topo_grid = read_surface_window(topography, bbox, spacing)
-    return [
+    depths = [
         None
         if surface == topography
         else depth_below(
@@ -750,22 +758,37 @@ def basin_depth_surfaces(
         )
         for surface in surfaces
     ]
+    return depths, spacing
 
 
 def save_triangulation(
-    path: Path, triangulation: Triangulation, region: shapely.Geometry
+    path: Path, triangulation: Triangulation, region: shapely.Geometry, spacing: float
 ) -> None:
-    """Save *triangulation* with the *region* it covers, for :func:`load_triangulation`."""
+    """Save *triangulation* for :func:`load_triangulation`.
+
+    It goes with the *region* it covers and the *spacing* the stack's
+    topography averaged to.
+    """
     np.savez(
         path,
         vertices=triangulation.vertices,
         triangles=triangulation.triangles,
         region=np.array(shapely.to_wkb(region)),
+        spacing=np.array(spacing),
     )
 
 
-def load_triangulation(path: Path, poly: shapely.Geometry) -> Triangulation:
+def load_triangulation(
+    path: Path, poly: shapely.Geometry
+) -> tuple[Triangulation, float]:
     """Load a stack's triangulation, checking it covers this basin's region.
+
+    Returns
+    -------
+    triangulation : Triangulation
+        The stack's triangulation.
+    spacing : float
+        The spacing, in metres, the stack's topography averaged to.
 
     Raises
     ------
@@ -775,13 +798,14 @@ def load_triangulation(path: Path, poly: shapely.Geometry) -> Triangulation:
     with np.load(path) as stored:
         vertices, triangles = stored["vertices"], stored["triangles"]
         region = shapely.from_wkb(stored["region"].item())
+        spacing = float(stored["spacing"])
     if not shapely.equals_exact(region, poly, tolerance=1e-6):
         raise typer.BadParameter(
             f"{path} was triangulated over a different region: build the stack's "
             "layers with the outline, simplification, smoothing and coastline "
             "they were triangulated with."
         )
-    return Triangulation(vertices, triangles)
+    return Triangulation(vertices, triangles), spacing
 
 
 @app.command()
@@ -826,15 +850,12 @@ def triangulate(
     """
     _, poly = basin_polygon(bounds, simplification, smoothing, coastline)
     bbox = surface_bbox(surfaces)
-    grids = [
-        grid
-        for grid in basin_depth_surfaces(topography, surfaces, bbox)
-        if grid is not None
-    ]
+    depths, spacing = basin_depth_surfaces(topography, surfaces, bbox)
+    grids = [grid for grid in depths if grid is not None]
     stack = triangulate_polygon(
         poly, [(grid, tolerance) for grid in grids], max_edge_for(smoothing, coastline)
     )
-    save_triangulation(output, stack, poly)
+    save_triangulation(output, stack, poly, spacing)
     print(
         f"Saved a triangulation of {len(stack.triangles)} triangles on "
         f"{len(stack.vertices)} vertices to {output}"
@@ -1024,14 +1045,19 @@ def main(
 
     internal_poly, poly = basin_polygon(bounds, simplification, smoothing, coastline)
     bbox = surface_bbox([top_surface, bottom_surface])
-    top_depth, bot_depth = basin_depth_surfaces(
-        topography, [top_surface, bottom_surface], bbox
+    stack, stack_spacing = None, None
+    if triangulation is not None:
+        # Every layer of the stack converts against the topography its
+        # triangulation used. Their shared interfaces then meet.
+        stack, stack_spacing = load_triangulation(triangulation, poly)
+        print(f"Reusing the stack's triangulation from {triangulation}")
+    (top_depth, bot_depth), _ = basin_depth_surfaces(
+        topography, [top_surface, bottom_surface], bbox, stack_spacing
     )
     if bot_depth is None:
         raise typer.BadParameter("The bottom surface can't be the topography.")
-    if triangulation is not None:
-        basin_triangulation = load_triangulation(triangulation, poly)
-        print(f"Reusing the stack's triangulation from {triangulation}")
+    if stack is not None:
+        basin_triangulation = stack
     else:
         surfaces = [(bot_depth, tolerance)]
         if top_depth is not None and top_surface != bottom_surface:
