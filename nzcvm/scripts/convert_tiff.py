@@ -31,7 +31,7 @@ def convert_tiff(
 ) -> StructuredMesh:
     """Turn a north-up raster into a surface on an upright lattice.
 
-    The result stays as lazy as *tiff_model*, so a chunked raster streams
+    The result stays as lazy as *tiff_model*. A chunked raster streams
     through to the output without loading whole.
 
     Parameters

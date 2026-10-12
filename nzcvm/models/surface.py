@@ -59,8 +59,8 @@ class Surface:
     weights come straight from the fractional index.
 
     A surface from :meth:`load` reads its values from the Zarr store as
-    queries need them, a chunk at a time, so a large surface costs memory
-    only for the chunks a query touches.
+    queries need them, a chunk at a time. A large surface costs memory only
+    for the chunks a query touches.
     """
 
     #: ``(m, n)`` node values: a NumPy array, or a Zarr array read lazily.
@@ -116,8 +116,8 @@ class Surface:
     def bounds(self) -> np.ndarray:
         """``[xmin, ymin, zmin, xmax, ymax, zmax]`` of the surface.
 
-        The z range reads every value, so a lazy surface works it out only
-        when asked.
+        The z range reads every value. A lazy surface works it out only when
+        asked.
         """
         corners = self.corners
         values = np.asarray(self.values[:])
@@ -184,7 +184,7 @@ class Surface:
 
         # In (t, s), the triangle [i, j], [i + 1, j], [i + 1, j + 1] is
         # t >= s and the triangle [i, j], [i + 1, j + 1], [i, j + 1] is
-        # t < s. The weights are the point's barycentric coordinates in it.
+        # t < s. Its barycentric coordinates at (t, s) weight the corners.
         upper = t >= s
         side_i = np.where(upper, i + 1, i)
         side_j = np.where(upper, j, j + 1)

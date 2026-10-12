@@ -113,7 +113,7 @@ def run_benchmark(model_paths: list[Path], n_samples: int, output_path: Path):
     with Progress() as progress:
         task = progress.add_task("[green]Processing queries...", total=n_samples)
         for i in range(n_samples):
-            # The samples have no topography, so the query takes z as depth too.
+            # The samples have no topography. The query takes z as depth too.
             stats = mesh_model.query_stats(xs[i], ys[i], zs[i], zs[i])
             results.append(stats)
             times.append(stats.elapsed / 1000)

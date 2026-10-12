@@ -106,7 +106,7 @@ def _mesh_dataset(x: float, y: float, z_values: list[float], qp_qs: bool) -> xr.
 
 # The mesh is depth-queried, so its z is depth below the DEM. With the
 # preceding fixtures the DEM is at elevation 100 and the BPV basement at
-# elevation 50, so the basement lies 50 m below the DEM.
+# elevation 50. The basement lies 50 m below the DEM.
 # dem_depth = z.clip(min=0).
 # bpv_depth = (z - 50).clip(min=0).
 # masked point (z=200): dem_depth=200 (<1000), bpv_depth=150 (<350)      -> True

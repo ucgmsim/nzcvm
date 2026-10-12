@@ -34,7 +34,7 @@ class Vertical(StrEnum):
 
     #: Negated elevation, fixed in space: tomography.
     ELEVATION = "elevation"
-    #: Depth below the topography, so the mesh follows the terrain: basins.
+    #: Depth below the topography, following the terrain: basins.
     DEPTH = "depth"
 
 
