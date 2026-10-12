@@ -26,8 +26,8 @@ def resample_upright(
 
     Projecting a latitude/longitude grid into NZTM curves it, so it can't
     sit on a regular grid as it stands. This lays an axis-aligned grid over the
-    grid's bounding box and interpolates the grid bilinearly at each node,
-    leaving NaN at nodes outside it.
+    grid's bounding box and interpolates the grid bilinearly at each node.
+    Nodes outside it take the nearest edge value.
 
     Parameters
     ----------
@@ -56,7 +56,9 @@ def resample_upright(
         int(np.ceil((y.max() - origin[1]) / spacing)) + 1
     )
     grid_x, grid_y = np.meshgrid(node_x, node_y)
-    values, _ = grid(grid_x.ravel(), grid_y.ravel(), clamp=False)
+    # Nodes past the source's curved edge take the nearest edge value, as
+    # the source grid would extrapolate them, rather than NaN.
+    values, _ = grid(grid_x.ravel(), grid_y.ravel(), clamp=True)
     return surface_mesh(
         name, values.reshape(grid_x.shape).astype(np.float32), node_x, node_y
     )

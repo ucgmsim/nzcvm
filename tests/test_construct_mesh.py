@@ -377,7 +377,42 @@ def _columns(mesh: xr.Dataset, reduce) -> pd.Series:
 
 
 def test_stacked_layers_share_their_interface(tmp_path: Path) -> None:
-    outline, dem, middle, basement = _stack_inputs(tmp_path)
+    _assert_stack_meets(tmp_path, *_stack_inputs(tmp_path))
+
+
+def test_stacked_layers_meet_over_bases_at_different_spacings(
+    tmp_path: Path,
+) -> None:
+    """Every layer averages a Zarr DEM to the stack's spacing, not its own base's.
+
+    The basement here has half the horizon's resolution, so each layer's own
+    basement would average the DEM differently and convert the shared horizon
+    to different depths.
+    """
+    import h5py
+    from typer.testing import CliRunner
+
+    from nzcvm.scripts.surface_cli import app as surface_app
+
+    outline, dem_h5, middle, basement = _stack_inputs(tmp_path)
+    coarse = tmp_path / "coarse_basement.h5"
+    with h5py.File(basement) as source, h5py.File(coarse, "w") as f:
+        f["longitude"] = source["longitude"][::2]
+        f["latitude"] = source["latitude"][::2]
+        f["elevation"] = source["elevation"][::2, ::2]
+    fine = construct_mesh.median_spacing(construct_mesh.read_surface_window(middle))
+    dem = tmp_path / "dem.zarr"
+    result = CliRunner().invoke(
+        surface_app, [str(dem_h5), str(dem), "--spacing", str(fine / 4)]
+    )
+    assert result.exit_code == 0, result.output
+    _assert_stack_meets(tmp_path, outline, dem, middle, coarse)
+
+
+def _assert_stack_meets(
+    tmp_path: Path, outline: Path, dem: Path, middle: Path, basement: Path
+) -> None:
+    """Build the two layers of a stack over one triangulation and check they meet."""
     stack = tmp_path / "stack.npz"
     _build("triangulate", stack, outline, dem, middle, basement)
     constants = [
