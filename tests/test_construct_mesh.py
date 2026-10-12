@@ -444,6 +444,7 @@ def _assert_stack_meets(
         dem,
         middle,
         basement,
+        *("--topography", dem),
         *("--output", upper, "--output", lower),
         *("--priority", "1", "--priority", "2"),
         *("--model", uniform, "--model", uniform),
@@ -466,6 +467,7 @@ def test_each_layer_needs_its_own_options(tmp_path: Path) -> None:
         [
             "main",
             *map(str, (outline, dem, dem, middle, basement)),
+            *("--topography", str(dem)),
             *("--output", str(tmp_path / "only.zarr")),
             *("--priority", "1"),
             *("--model", "rho=2000,vp=2000,vs=800,qp=80,qs=40"),
@@ -522,3 +524,39 @@ def test_layer_bottoms_only_split_a_uniform_model(tmp_path: Path) -> None:
         "rho=1810,vp=1800,vs=2000,qp=38,qs=19", layer_bottoms=[50.0, 100.0]
     )
     assert layers["bottom_depth"].tolist() == [50.0, 100.0]
+
+
+def test_depths_come_from_the_reference_topography(tmp_path: Path) -> None:
+    """A query topography 100 m higher moves the bounds, not the depths."""
+    from typer.testing import CliRunner
+
+    from nzcvm.scripts.surface_cli import app as surface_app
+
+    outline, dem, _, basement = _stack_inputs(tmp_path)
+    flat = tmp_path / "dem.zarr"
+    result = CliRunner().invoke(surface_app, [str(dem), str(flat)])
+    assert result.exit_code == 0, result.output
+    raised = tmp_path / "raised.zarr"
+    with xr.open_zarr(flat) as surface:
+        # A surface stores depth, the negation of elevation. Higher ground
+        # stores 100 m less.
+        (surface - 100.0).assign_attrs(surface.attrs).to_zarr(raised)
+
+    meshes = {}
+    for name, topography in (("same", flat), ("raised", raised)):
+        meshes[name] = tmp_path / f"{name}.zarr"
+        _build(
+            "main",
+            outline,
+            dem,
+            dem,
+            basement,
+            *("--topography", topography),
+            *("--output", meshes[name]),
+            *("--priority", "1"),
+            *("--model", "rho=2000,vp=2000,vs=800,qp=80,qs=40"),
+        )
+    same, raised_mesh = (xr.open_zarr(meshes[name]) for name in ("same", "raised"))
+    np.testing.assert_array_equal(same.z.values, raised_mesh.z.values)
+    shift = np.subtract(raised_mesh.attrs["aabb"], same.attrs["aabb"])
+    np.testing.assert_allclose(shift[[2, 5]], -100.0, atol=1.0)

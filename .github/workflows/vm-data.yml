@@ -42,10 +42,12 @@ env:
   DROPBOX_DIR: "dropbox:/QuakeCoRE/Public/VM Data"
   DATA_REPO: https://github.com/ucgmsim/nzcvm_data.git
   NZCVM_DATA_ROOT: ${{ github.workspace }}/nzcvm_data
-  # Only the files the Justfile recipes read. Pulling the whole LFS store
-  # spends the org's LFS bandwidth on data nothing here uses. It's part of
-  # the cache key, so it can't contain a comma: actions/cache rejects one.
-  LFS_INCLUDE: "regional/**"
+  # Only the LFS files the Justfile recipes read: the basin surfaces, and the
+  # DEMs they were modelled against (CantDEM sits under regional/). Pulling
+  # the whole LFS store spends the org's LFS bandwidth on data nothing here
+  # uses. A JSON list, since the cache key can't contain the commas that
+  # `git lfs pull --include` takes.
+  LFS_INCLUDE: '["regional/**", "surface/NZ_DEM_HD.h5"]'
 
 jobs:
   publish:
@@ -69,14 +71,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: nzcvm_data
-          key: nzcvm-data-${{ steps.data.outputs.sha }}-${{ env.LFS_INCLUDE }}
+          key: >-
+            nzcvm-data-${{ steps.data.outputs.sha }}-${{
+            join(fromJSON(env.LFS_INCLUDE), '+') }}
 
       - name: Clone nzcvm_data
         if: steps.data-cache.outputs.cache-hit != 'true'
         run: |
           GIT_LFS_SKIP_SMUDGE=1 git clone "$DATA_REPO" nzcvm_data
           git -C nzcvm_data checkout "${{ steps.data.outputs.sha }}"
-          git -C nzcvm_data lfs pull --include "$LFS_INCLUDE"
+          git -C nzcvm_data lfs pull \
+            --include "${{ join(fromJSON(env.LFS_INCLUDE), ',') }}"
           rm -rf nzcvm_data/.git
 
       - name: Set up rclone
