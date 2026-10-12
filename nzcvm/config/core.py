@@ -61,8 +61,8 @@ class ConfigObject(
 
     # Declared as ``type[BaseConfig]`` rather than a nested class so that
     # subclasses can override it with their own ``class Config(...)``
-    # without ty flagging an invalid attribute override. The annotation is
-    # hidden at runtime because mashumaro would treat it as a field.
+    # without ty flagging an invalid attribute override. Only type checkers
+    # see the annotation: mashumaro would treat it as a field.
     if TYPE_CHECKING:
         Config: type[BaseConfig]
     else:
