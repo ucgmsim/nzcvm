@@ -12,8 +12,10 @@
 //! barycentrically, as a triangle mesh over the nodes would. It finds the
 //! cell the same way as the bilinear query, so it needs no search tree.
 
-use nalgebra::{Matrix2, Vector2};
+use nalgebra::{Matrix2, Point2, Vector2};
 use ndarray::Array2;
+
+use crate::barycentric::{interpolate, triangle_coordinates};
 
 /// Tolerance on the local cell coordinates when deciding a point is outside.
 const OUTSIDE_TOLERANCE: f64 = 1e-9;
@@ -27,9 +29,11 @@ pub struct StructuredGrid {
     x: Array2<f64>,
     y: Array2<f64>,
     values: Array2<f64>,
-    /// Origin and inverse basis of an affine map from coordinates to
-    /// fractional `(j, k)` index, used to guess the cell containing a point.
-    origin: Vector2<f64>,
+    /// Affine map from coordinates to fractional `(j, k)` index, used to
+    /// guess the cell containing a point: `index_centre + inverse_basis *
+    /// (p - centre)`.
+    centre: Vector2<f64>,
+    index_centre: Vector2<f64>,
     inverse_basis: Matrix2<f64>,
 }
 
@@ -37,7 +41,7 @@ impl StructuredGrid {
     /// Create a grid from `(m, n)` arrays of node coordinates and values.
     ///
     /// Returns an error if the shapes differ, the grid has fewer than two
-    /// rows or columns, or its corner nodes don't span a 2D area.
+    /// rows or columns, or its nodes don't span a 2D area.
     pub fn new(x: Array2<f64>, y: Array2<f64>, values: Array2<f64>) -> Result<Self, String> {
         let (m, n) = x.dim();
         if y.dim() != (m, n) || values.dim() != (m, n) {
@@ -53,18 +57,29 @@ impl StructuredGrid {
                 "grid must have at least two rows and columns; got {m}x{n}"
             ));
         }
-        let node = |j: usize, k: usize| Vector2::new(x[[j, k]], y[[j, k]]);
-        let origin = node(0, 0);
-        let row_step = (node(m - 1, 0) - origin) / (m - 1) as f64;
-        let col_step = (node(0, n - 1) - origin) / (n - 1) as f64;
-        let inverse_basis = Matrix2::from_columns(&[row_step, col_step])
-            .try_inverse()
-            .ok_or("grid corner nodes are collinear")?;
+        // Fit the index guess to every node by least squares, so curved or
+        // unevenly spaced rows and columns pull it no further than they must.
+        let count = (m * n) as f64;
+        let centre = Vector2::new(x.sum() / count, y.sum() / count);
+        let index_centre = Vector2::new((m - 1) as f64 / 2.0, (n - 1) as f64 / 2.0);
+        let mut position_moments = Matrix2::zeros();
+        let mut index_moments = Matrix2::zeros();
+        for ((j, k), &node_x) in x.indexed_iter() {
+            let position = Vector2::new(node_x, y[[j, k]]) - centre;
+            let index = Vector2::new(j as f64, k as f64) - index_centre;
+            position_moments += position * position.transpose();
+            index_moments += index * position.transpose();
+        }
+        let inverse_basis = index_moments
+            * position_moments
+                .try_inverse()
+                .ok_or("grid nodes are collinear")?;
         Ok(Self {
             x,
             y,
             values,
-            origin,
+            centre,
+            index_centre,
             inverse_basis,
         })
     }
@@ -107,7 +122,7 @@ impl StructuredGrid {
     /// in that cell.
     fn locate(&self, p: Vector2<f64>) -> (usize, usize, f64, f64) {
         let (m, n) = self.x.dim();
-        let guess = self.inverse_basis * (p - self.origin);
+        let guess = self.index_centre + self.inverse_basis * (p - self.centre);
         let to_cell = |v: f64, len: usize| (v.floor().max(0.0) as usize).min(len - 2);
         let mut j = to_cell(guess.x, m);
         let mut k = to_cell(guess.y, n);
@@ -153,49 +168,42 @@ impl StructuredGrid {
     ///
     /// A cell's edges are straight in both the bilinear and the triangulated
     /// view, so the cell [`Self::locate`] finds is the one whose triangles
-    /// contain the point. Of the two, the point takes the triangle it is
-    /// furthest inside, which is the one containing it. It returns NaN when
-    /// neither triangle contains it to within [`TRIANGLE_TOLERANCE`].
+    /// contain the point, and the side of the diagonal it lies on picks the
+    /// triangle. It returns NaN when that triangle doesn't contain it to
+    /// within [`TRIANGLE_TOLERANCE`].
     pub fn query_triangulated(&self, px: f64, py: f64) -> f64 {
         let p = Vector2::new(px, py);
         let (j, k, _, _) = self.locate(p);
         let corner = self.node(j, k);
-        let diagonal = self.node(j + 1, k + 1);
-        let mut best = (f64::NEG_INFINITY, f64::NAN);
-        for (side_j, side_k) in [(j + 1, k), (j, k + 1)] {
-            let side = self.node(side_j, side_k);
-            let Some([w_corner, w_side, w_diagonal]) =
-                barycentric_weights(corner, side, diagonal, p)
-            else {
-                continue;
-            };
-            let worst = w_corner.min(w_side).min(w_diagonal);
-            if worst > best.0 {
-                let value = w_corner * self.values[[j, k]]
-                    + w_side * self.values[[side_j, side_k]]
-                    + w_diagonal * self.values[[j + 1, k + 1]];
-                best = (worst, value);
-            }
-        }
-        if best.0 >= -TRIANGLE_TOLERANCE {
-            best.1
+        let diagonal = self.node(j + 1, k + 1) - corner;
+        let row_side = self.node(j + 1, k) - corner;
+        let (side_j, side_k) = if diagonal.perp(&(p - corner)) * diagonal.perp(&row_side) >= 0.0 {
+            (j + 1, k)
         } else {
-            f64::NAN
+            (j, k + 1)
+        };
+        let point = |v: Vector2<f64>| Point2::from(v);
+        let weights = triangle_coordinates(
+            [
+                point(corner),
+                point(self.node(side_j, side_k)),
+                point(corner + diagonal),
+            ],
+            point(p),
+        );
+        // NaN weights, from a flat triangle, fail this test too.
+        if !weights.iter().all(|&weight| weight >= -TRIANGLE_TOLERANCE) {
+            return f64::NAN;
         }
+        interpolate(
+            [
+                self.values[[j, k]],
+                self.values[[side_j, side_k]],
+                self.values[[j + 1, k + 1]],
+            ],
+            weights,
+        )
     }
-}
-
-/// Barycentric weights of `p` in the triangle `(a, b, c)`, or `None` if the
-/// triangle has no area.
-fn barycentric_weights(
-    a: Vector2<f64>,
-    b: Vector2<f64>,
-    c: Vector2<f64>,
-    p: Vector2<f64>,
-) -> Option<[f64; 3]> {
-    let basis = Matrix2::from_columns(&[b - a, c - a]).try_inverse()?;
-    let w = basis * (p - a);
-    Some([1.0 - w.x - w.y, w.x, w.y])
 }
 
 /// The neighbouring cell index in the direction of local coordinate `v`,
