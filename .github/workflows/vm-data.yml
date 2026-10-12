@@ -51,18 +51,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - name: Add swap
-        # Building the site database holds the nationwide DEM and Vs30
-        # surfaces in memory, which peaks near 13 GB against the runner's
-        # 16 GB. Swap keeps a small overshoot from killing a multi-hour job.
-        run: |
-          sudo swapoff -a
-          sudo fallocate -l 16G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
-
       - name: Checkout nzcvm
         uses: actions/checkout@v4
         with:
