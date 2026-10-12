@@ -842,86 +842,112 @@ class BasinOutline:
     smoothing: float
 
 
-def build_layer(
-    output: Path,
-    outline: BasinOutline,
-    triangulation: Triangulation,
-    top: np.ndarray,
-    bottom: np.ndarray,
-    model: pd.DataFrame,
-    priority: int,
-    topography_range: tuple[float, float],
-    culling_volume: float,
-    pad_top: bool,
-    layered: bool,
-) -> None:
-    """Mesh one layer of a basin between two interfaces and save it to *output*.
+@dataclass
+class Basin:
+    """What every layer of a basin shares."""
 
-    Parameters
-    ----------
-    output :
-        Zarr store to write.
-    outline :
-        The basin's outline.
-    triangulation :
-        The triangulation every layer of the basin shares.
-    top, bottom :
-        Depth of the layer's top and bottom at each triangulation vertex.
-    model :
-        The layer's 1-D model.
-    priority :
-        The mesh's priority (lower = higher priority).
-    topography_range :
-        ``(min, max)`` depth (negated elevation) of the topography under the
-        basin.
-    culling_volume :
-        Tetrahedron volume at or below which to drop a tetrahedron.
-    pad_top :
-        Raise the top by :data:`PAD_DEPTH` where the layer has thickness.
-    layered :
-        Slice the layer at the model's layers instead of filling it with
-        depth-profile tetrahedra.
-    """
+    outline: BasinOutline
+    #: Fitted to every interface, so neighbouring layers meet exactly.
+    triangulation: Triangulation
+    #: ``(min, max)`` depth (negated elevation) of the topography under the
+    #: basin.
+    topography_range: tuple[float, float]
+
+
+@dataclass
+class BasinLayer:
+    """One layer of a basin, between two interfaces."""
+
+    #: Depth of the layer's top at each triangulation vertex.
+    top: np.ndarray
+    #: Depth of the layer's bottom at each triangulation vertex.
+    bottom: np.ndarray
+    #: The layer's 1-D model.
+    model: pd.DataFrame
+    #: The mesh's priority (lower = higher priority).
+    priority: int
+    #: Zarr store to write.
+    output: Path
+    #: Raise the top by :data:`PAD_DEPTH` where the layer has thickness.
+    pad_top: bool
+
+
+@dataclass
+class MeshOptions:
+    """How to mesh every layer of a basin."""
+
+    #: Tetrahedron volume at or below which to drop a tetrahedron.
+    culling_volume: float
+    #: Slice each layer at its model's layers instead of filling it with
+    #: depth-profile tetrahedra.
+    layered: bool
+
+
+def mesh_layer(
+    basin: Basin, layer: BasinLayer, options: MeshOptions
+) -> TetrahedralMesh:
+    """Fill *layer* with tetrahedra over the basin's triangulation."""
     # The constraints edit both arrays in place, and the neighbouring layers
     # share them.
-    top, bottom = enforce_mesh_constraints(top.copy(), bottom.copy())
-    name = output.stem
-    if layered:
+    top, bottom = enforce_mesh_constraints(layer.top.copy(), layer.bottom.copy())
+    name = layer.output.stem
+    if options.layered:
         print(f"Slicing {name} into a volumetric mesh")
-        layers = slice_with_model(
-            triangulation, top, bottom, model, culling_volume, pad_top=pad_top
-        )
-        mesh = construct_volumetric_mesh(
-            name, outline.region, layers, priority, topography_range
-        )
-    else:
-        print(f"Filling {name} with depth-profile tetrahedra")
-        mesh = profile_mesh(
-            name,
-            outline.region,
-            triangulation,
+        slices = slice_with_model(
+            basin.triangulation,
             top,
             bottom,
-            model,
-            culling_volume,
-            pad_top=pad_top,
-            priority=priority,
-            topography_range=topography_range,
+            layer.model,
+            options.culling_volume,
+            pad_top=layer.pad_top,
         )
-
-    if outline.smoothing > 0:
-        print("Applying smoothing boundary")
-        distances = shapely.distance(outline.inner, shapely.points(mesh.x, mesh.y))
-        mesh["alpha"].loc[:] = np.interp(
-            distances,
-            np.array([0.0, outline.smoothing], dtype=np.float32),
-            np.array([1.0, 0.0], dtype=np.float32),
+        return construct_volumetric_mesh(
+            name, basin.outline.region, slices, layer.priority, basin.topography_range
         )
+    print(f"Filling {name} with depth-profile tetrahedra")
+    return profile_mesh(
+        name,
+        basin.outline.region,
+        basin.triangulation,
+        top,
+        bottom,
+        layer.model,
+        options.culling_volume,
+        pad_top=layer.pad_top,
+        priority=layer.priority,
+        topography_range=basin.topography_range,
+    )
 
+
+def fade_smoothing_band(mesh: TetrahedralMesh, outline: BasinOutline) -> None:
+    """Fade *mesh*'s alpha from 1 at the inner outline to 0 across the band."""
+    if outline.smoothing <= 0:
+        return
+    print("Applying smoothing boundary")
+    distances = shapely.distance(outline.inner, shapely.points(mesh.x, mesh.y))
+    mesh["alpha"].loc[:] = np.interp(
+        distances,
+        np.array([0.0, outline.smoothing], dtype=np.float32),
+        np.array([1.0, 0.0], dtype=np.float32),
+    )
+
+
+def save_mesh(mesh: TetrahedralMesh, output: Path) -> None:
+    """Write *mesh* to the Zarr store *output*."""
     print(mesh)
     mesh.to_zarr(output, mode="w", encoding=mesh_encoding(mesh))
     nbytes = sum(f.stat().st_size for f in output.rglob("*") if f.is_file())
-    print(f"Saved {name} with size {nbytes / (1024**2):.1f} MB")
+    print(f"Saved {output.stem} with size {nbytes / (1024**2):.1f} MB")
+
+
+def build_layer(basin: Basin, layer: BasinLayer, options: MeshOptions) -> None:
+    """Mesh *layer* and save it.
+
+    The mesh lives only in this call, so it's freed before the next layer.
+    """
+    mesh = mesh_layer(basin, layer, options)
+    fade_smoothing_band(mesh, basin.outline)
+    save_mesh(mesh, layer.output)
 
 
 @app.command()
@@ -1069,7 +1095,6 @@ def main(
     models = [read_model(spec, bottoms) for spec in model]
 
     inner, region = basin_polygon(bounds, simplification, smoothing, coastline)
-    outline = BasinOutline(inner, region, smoothing)
     depths = basin_depth_surfaces(topography, surfaces, surface_bbox(surfaces))
     if depths[-1] is None:
         raise typer.BadParameter("The bottom surface can't be the topography.")
@@ -1088,23 +1113,24 @@ def main(
         for depth, surface in zip(depths, surfaces, strict=True)
     ]
     del depths
-    # The full-resolution topography under the basin bounds the elevation
-    # its meshes can occupy, which the model tree prunes on.
-    topography_range = surface_range(topography, polygon_bbox(region))
+    basin = Basin(
+        BasinOutline(inner, region, smoothing),
+        triangulation,
+        # The full-resolution topography under the basin bounds the
+        # elevation its meshes can occupy, which the model tree prunes on.
+        surface_range(topography, polygon_bbox(region)),
+    )
+    options = MeshOptions(culling_volume, layered)
 
-    for index, ((top, bottom), layer_output, layer_priority, layer_model) in enumerate(
-        zip(itertools.pairwise(interfaces), output, priority, models, strict=True)
+    for index, ((top, bottom), layer_model, layer_priority, layer_output) in enumerate(
+        zip(itertools.pairwise(interfaces), models, priority, output, strict=True)
     ):
-        build_layer(
-            layer_output,
-            outline,
-            triangulation,
+        layer = BasinLayer(
             top,
             bottom,
             layer_model,
             layer_priority,
-            topography_range,
-            culling_volume,
+            layer_output,
             pad_top=pad_top and index == 0,
-            layered=layered,
         )
+        build_layer(basin, layer, options)
