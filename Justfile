@@ -180,6 +180,12 @@ models: ep2020 basins
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py
     zip -r models.zip models
 
+# Profiles and Vs30/Z1.0/Z2.5 at every station in stations.csv, from the
+# models in models/. Extra arguments go to the script, e.g. `--limit 100`.
+sites *args:
+    uv run scripts/site_database.py stations.csv examples/site_database.toml sites {{ args }}
+    zip -r sites.zip sites
+
 vs30:
     @test -f resources/vs30.zarr || {{ surface }} ${VS30_TIFF} 1 resources/vs30.zarr --downsample 3 
 

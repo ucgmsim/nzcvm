@@ -1,0 +1,208 @@
+---
+name: Publish VM data
+run-name: >-
+  Publish models and site database for
+  ${{ github.event.release.tag_name || github.ref_name }}
+
+# Builds every basin and tomography model from ucgmsim/nzcvm_data, tests
+# them, builds the site database from them, and uploads both to the public
+# Dropbox folder:
+#
+#   resources.zip         Vs30, DEM and coastline. Fixed; uploaded by hand.
+#   stations.csv          Station list for the site database. Uploaded by hand.
+#   models-master.zip     Rebuilt on every push to master.
+#   sites-master.zip
+#   models-vX.Y.Z.zip     Built once per release, and linked from the
+#   sites-vX.Y.Z.zip      release description with their SHA-256.
+#
+# Needs a RCLONE_CONFIG secret holding an rclone config with a `dropbox`
+# remote that can write to and share from the folder below.
+
+on:
+  push:
+    branches: [master]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# A newer master push supersedes the running master build. Releases each get
+# their own group and are never cancelled.
+concurrency:
+  group: >-
+    vm-data-${{ github.event_name == 'release'
+    && github.event.release.tag_name || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  # Editing the release description.
+  contents: write
+
+env:
+  DROPBOX_DIR: "dropbox:/QuakeCoRE/Public/VM Data"
+  DATA_REPO: https://github.com/ucgmsim/nzcvm_data.git
+  NZCVM_DATA_ROOT: ${{ github.workspace }}/nzcvm_data
+  # Only the files the Justfile recipes read. Pulling the whole LFS store
+  # spends the org's LFS bandwidth on data nothing here uses.
+  LFS_INCLUDE: "regional/**,surface/NZ_DEM_HD.h5"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Free disk space
+        # The runner image ships about 30 GB of toolchains nothing here uses,
+        # and the site database CSV alone runs to several GB.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h .
+
+      - name: Add swap
+        # Building the site database holds the nationwide DEM and Vs30
+        # surfaces in memory, which peaks near 13 GB against the runner's
+        # 16 GB. Swap keeps a small overshoot from killing a multi-hour job.
+        run: |
+          sudo swapoff -a
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - name: Checkout nzcvm
+        uses: actions/checkout@v4
+        with:
+          # setuptools-scm derives the version from the tags.
+          fetch-depth: 0
+
+      - name: Resolve nzcvm_data revision
+        id: data
+        run: |
+          sha=$(git ls-remote "$DATA_REPO" HEAD | cut -f1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Cache nzcvm_data
+        id: data-cache
+        uses: actions/cache@v4
+        with:
+          path: nzcvm_data
+          # The workflow hash invalidates the cache when LFS_INCLUDE changes.
+          key: >-
+            nzcvm-data-${{ steps.data.outputs.sha }}-${{
+            hashFiles('.github/workflows/vm-data.yml') }}
+
+      - name: Clone nzcvm_data
+        if: steps.data-cache.outputs.cache-hit != 'true'
+        run: |
+          GIT_LFS_SKIP_SMUDGE=1 git clone "$DATA_REPO" nzcvm_data
+          git -C nzcvm_data checkout "${{ steps.data.outputs.sha }}"
+          git -C nzcvm_data lfs pull --include "$LFS_INCLUDE"
+          rm -rf nzcvm_data/.git
+
+      - name: Set up rclone
+        uses: AnimMouse/setup-rclone@v1
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONFIG }}
+
+      - name: Download resources and stations
+        run: |
+          rclone copy "$DROPBOX_DIR/resources.zip" .
+          rclone copy "$DROPBOX_DIR/stations.csv" .
+          unzip -q resources.zip
+          cp nzcvm_data/tomography/EP2020/ep2020.csv ep2020.csv
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up just
+        uses: extractions/setup-just@v2
+
+      - name: Build and test models
+        # Also zips models/ into models.zip.
+        run: just models
+
+      - name: Build site database
+        # Also zips sites/ into sites.zip.
+        run: just sites --n-threads "$(nproc)"
+
+      - name: Name the build
+        id: name
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "suffix=v${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "suffix=master" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload to Dropbox
+        id: upload
+        env:
+          SUFFIX: ${{ steps.name.outputs.suffix }}
+        run: |
+          {
+            echo "resources_link=$(rclone link "$DROPBOX_DIR/resources.zip")"
+            echo "resources_sha=$(sha256sum resources.zip | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+          for kind in models sites; do
+            name="$kind-$SUFFIX.zip"
+            sha=$(sha256sum "$kind.zip" | cut -d' ' -f1)
+            echo "$sha  $name" > "$name.sha256"
+            rclone copyto "$kind.zip" "$DROPBOX_DIR/$name"
+            rclone copyto "$name.sha256" "$DROPBOX_DIR/$name.sha256"
+            {
+              echo "${kind}_name=$name"
+              echo "${kind}_sha=$sha"
+              echo "${kind}_link=$(rclone link "$DROPBOX_DIR/$name")"
+            } >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Write the download table
+        env:
+          RESOURCES_LINK: ${{ steps.upload.outputs.resources_link }}
+          RESOURCES_SHA: ${{ steps.upload.outputs.resources_sha }}
+          MODELS_NAME: ${{ steps.upload.outputs.models_name }}
+          MODELS_LINK: ${{ steps.upload.outputs.models_link }}
+          MODELS_SHA: ${{ steps.upload.outputs.models_sha }}
+          SITES_NAME: ${{ steps.upload.outputs.sites_name }}
+          SITES_LINK: ${{ steps.upload.outputs.sites_link }}
+          SITES_SHA: ${{ steps.upload.outputs.sites_sha }}
+          DATA_SHA: ${{ steps.data.outputs.sha }}
+          MODELS_ABOUT: Basin and tomography models
+          SITES_ABOUT: >-
+            Site database: profiles, and Vs30, Z1.0 and Z2.5 per station
+          RESOURCES_ABOUT: Vs30, DEM and coastline that the models build from
+        run: |
+          DATA_URL="https://github.com/ucgmsim/nzcvm_data/tree/$DATA_SHA"
+          row() { printf '| [%s](%s) | %s | `%s` |\n' "$@"; }
+          {
+            echo "<!-- vm-data -->"
+            echo "## Model data"
+            echo
+            echo "| File | Contents | SHA-256 |"
+            echo "| --- | --- | --- |"
+            row "$MODELS_NAME" "$MODELS_LINK" "$MODELS_ABOUT" "$MODELS_SHA"
+            row "$SITES_NAME" "$SITES_LINK" "$SITES_ABOUT" "$SITES_SHA"
+            row resources.zip "$RESOURCES_LINK" "$RESOURCES_ABOUT" \
+              "$RESOURCES_SHA"
+            echo
+            echo "Built from [nzcvm_data@${DATA_SHA:0:7}]($DATA_URL)."
+            echo "<!-- /vm-data -->"
+          } > downloads.md
+          cat downloads.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Add the links to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # Drop any table from an earlier run of this release, so a re-run
+          # replaces it rather than adding a second.
+          gh release view "$TAG" --json body --jq .body \
+            | sed '/<!-- vm-data -->/,/<!-- \/vm-data -->/d' > body.md
+          printf '\n' >> body.md
+          cat downloads.md >> body.md
+          gh release edit "$TAG" --notes-file body.md
