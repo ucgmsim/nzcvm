@@ -1,25 +1,18 @@
 #!/usr/bin/env python3
 """Assign Banks Peninsula basin qualities using weathering from Ely."""
 
-import os
 from pathlib import Path
 from typing import Annotated
 
-import h5py
+import numpy as np
+import pandas as pd
 import typer
 import xarray as xr
 
 from nzcvm import ely_taper
-from nzcvm.models.surface import median_spacing, read_surface_file, read_surface_window
-from nzcvm.scripts import construct_mesh
 
 app = typer.Typer(
     help="Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."
-)
-
-DEFAULT_BASEMENT = (
-    Path(os.environ.get("NZCVM_DATA_ROOT", "."))
-    / "regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5"
 )
 
 ELY_TAPER_DEPTH = 350.0
@@ -40,20 +33,6 @@ def main(
             exists=True,
         ),
     ] = Path("models/BanksPeninsula.zarr"),
-    dem: Annotated[
-        Path,
-        typer.Argument(
-            help="DEM surface (zarr) that the BPV basement depth is measured from.",
-            exists=True,
-        ),
-    ] = Path("resources/dem.zarr"),
-    basement: Annotated[
-        Path,
-        typer.Argument(
-            help="BPV basement surface (HDF5, WGS84 lat/lon + elevation).",
-            exists=True,
-        ),
-    ] = DEFAULT_BASEMENT,
     output: Annotated[
         Path, typer.Argument(help="Output path for the tapered mesh (zarr).")
     ] = Path("models/BanksPeninsula_GTL.zarr"),
@@ -103,19 +82,15 @@ def main(
     # The mesh is depth-queried: its z is depth below the topography.
     dem_depth = dset.z.clip(min=0)
 
-    # The basement is an elevation grid on latitude/longitude nodes. As
-    # construct_mesh does, read it bilinearly and convert it to depth below
-    # the topography at its own nodes, against the DEM averaged to its spacing.
-    bpv_grid = read_surface_file(basement)
-    with h5py.File(basement) as f:
-        latitude, longitude = f["latitude"][:], f["longitude"][:]
-    bbox = (latitude.min(), latitude.max(), longitude.min(), longitude.max())
-    dem_grid = read_surface_window(dem, bbox, median_spacing(bpv_grid))
-    bpv_top = construct_mesh.depth_below(bpv_grid, dem_grid)
-    bpv_top_depth = xr.apply_ufunc(
-        lambda x, y: bpv_top(x, y, clamp=False)[0], dset.x, dset.y
+    # construct_mesh layers this mesh without padding. The shallowest vertex
+    # of each (x, y) column is the BPV top it meshed.
+    column_top = (
+        pd.Series(dset.z.values)
+        .groupby([dset.x.values, dset.y.values])
+        .transform("min")
+        .to_numpy()
     )
-    bpv_depth = (dset.z - bpv_top_depth).clip(min=0)
+    bpv_depth = (dset.z - column_top).clip(min=0)
 
     # Apparent surface Vs30 (m/s) at each point, the taper's near-surface endpoint.
     vs_bpv_top = (vs0 + (vs_depth - vs0) * (dem_depth / vs30_taper_depth)) * 1000.0
@@ -131,12 +106,16 @@ def main(
     # True within 1000m of the DEM and within 350m of the BPV basement.
     gtl_mask = (dem_depth < vs30_taper_depth) & (bpv_depth < ely_taper_depth)
 
-    dset["vs"] = xr.where(gtl_mask, gtl_qualities.vs, vs_full)
-    dset["vp"] = xr.where(gtl_mask, gtl_qualities.vp, vp_full)
-    dset["rho"] = xr.where(gtl_mask, gtl_qualities.rho, rho_full)
+    # Keep the mesh's float32 qualities.
+    def masked(inside: xr.DataArray, outside) -> xr.DataArray:
+        return xr.where(gtl_mask, inside, outside).astype(np.float32)
+
+    dset["vs"] = masked(gtl_qualities.vs, vs_full)
+    dset["vp"] = masked(gtl_qualities.vp, vp_full)
+    dset["rho"] = masked(gtl_qualities.rho, rho_full)
     if "qp" in dset.data_vars:
-        dset["qp"] = xr.where(gtl_mask, gtl_qualities.qp, dset["qp"])
-        dset["qs"] = xr.where(gtl_mask, gtl_qualities.qs, dset["qs"])
+        dset["qp"] = masked(gtl_qualities.qp, dset["qp"])
+        dset["qs"] = masked(gtl_qualities.qs, dset["qs"])
 
     dset.to_zarr(output, mode="w")
     print(f"Saved tapered Banks Peninsula Volcanics model to {output}")

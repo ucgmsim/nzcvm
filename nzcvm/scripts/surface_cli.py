@@ -1,4 +1,4 @@
-"""Convert an HDF5 surface file into a surface on an upright NZTM lattice."""
+"""Convert an HDF5 surface file into an upright surface on an NZTM grid."""
 
 from pathlib import Path
 from typing import Annotated
@@ -14,16 +14,18 @@ from nzcvm.models.mesh import (
 )
 from nzcvm.models.surface import SurfaceGrid, median_spacing, read_surface_file
 
-app = typer.Typer(help="Convert an HDF5 surface into a surface on an upright lattice.")
+app = typer.Typer(
+    help="Convert an HDF5 surface into an upright surface on an NZTM grid."
+)
 
 
 def resample_upright(
     name: str, grid: SurfaceGrid, spacing: float | None = None
 ) -> StructuredMesh:
-    """Sample *grid* on an upright lattice covering its footprint.
+    """Sample *grid* on an upright NZTM grid covering its footprint.
 
     Projecting a latitude/longitude grid into NZTM curves it, so it can't
-    sit on a lattice as it stands. This lays an axis-aligned lattice over the
+    sit on a regular grid as it stands. This lays an axis-aligned grid over the
     grid's bounding box and interpolates the grid bilinearly at each node,
     leaving NaN at nodes outside it.
 
@@ -78,7 +80,7 @@ def convert(
     spacing: Annotated[
         float | None,
         typer.Option(
-            help="Lattice spacing in metres. Defaults to the source's median spacing.",
+            help="Grid spacing in metres. Defaults to the source's median spacing.",
             min=0.0,
         ),
     ] = None,

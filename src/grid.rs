@@ -106,11 +106,14 @@ impl StructuredGrid {
         (t, s)
     }
 
-    /// The cell `(j, k)` containing `p`, or the edge cell nearest it when
-    /// `p` lies outside the grid, and the local coordinates `(t, s)` of `p`
-    /// in that cell.
-    fn locate(&self, p: Vector2<f64>) -> (usize, usize, f64, f64) {
+    /// Interpolate the grid bilinearly at the point `(px, py)`.
+    ///
+    /// Returns the interpolated value and whether the point lies outside
+    /// the grid. An outside point is clamped onto the edge cell when `clamp`
+    /// is true, and takes NaN otherwise.
+    pub fn query(&self, px: f64, py: f64, clamp: bool) -> (f64, bool) {
         let (m, n) = self.x.dim();
+        let p = Vector2::new(px, py);
         let guess = self.index_centre + self.inverse_basis * (p - self.centre);
         let to_cell = |v: f64, len: usize| (v.floor().max(0.0) as usize).min(len - 2);
         let mut j = to_cell(guess.x, m);
@@ -127,40 +130,20 @@ impl StructuredGrid {
             (j, k) = (next_j, next_k);
             (t, s) = self.local_coordinates(j, k, p);
         }
-        (j, k, t, s)
-    }
 
-    /// Interpolate the grid bilinearly at the point `(px, py)`.
-    ///
-    /// Returns the interpolated value and whether the point lies outside
-    /// the grid. An outside point is clamped onto the edge cell when `clamp`
-    /// is true, and takes NaN otherwise.
-    pub fn query(&self, px: f64, py: f64, clamp: bool) -> (f64, bool) {
-        let (j, k, t, s) = self.locate(Vector2::new(px, py));
-        let outside = is_outside(t, s);
+        let inside = |v: f64| (-OUTSIDE_TOLERANCE..=1.0 + OUTSIDE_TOLERANCE).contains(&v);
+        let outside = !inside(t) || !inside(s);
         if outside && !clamp {
             return (f64::NAN, true);
         }
-        (
-            self.bilinear(j, k, t.clamp(0.0, 1.0), s.clamp(0.0, 1.0)),
-            outside,
-        )
-    }
-
-    /// The bilinear interpolant of cell `(j, k)` at local coordinates
-    /// `(t, s)`.
-    fn bilinear(&self, j: usize, k: usize, t: f64, s: f64) -> f64 {
-        (1.0 - t) * (1.0 - s) * self.values[[j, k]]
+        let t = t.clamp(0.0, 1.0);
+        let s = s.clamp(0.0, 1.0);
+        let value = (1.0 - t) * (1.0 - s) * self.values[[j, k]]
             + (1.0 - t) * s * self.values[[j, k + 1]]
             + t * (1.0 - s) * self.values[[j + 1, k]]
-            + t * s * self.values[[j + 1, k + 1]]
+            + t * s * self.values[[j + 1, k + 1]];
+        (value, outside)
     }
-}
-
-/// Whether local cell coordinates `(t, s)` put a point outside its cell.
-fn is_outside(t: f64, s: f64) -> bool {
-    let inside = |v: f64| (-OUTSIDE_TOLERANCE..=1.0 + OUTSIDE_TOLERANCE).contains(&v);
-    !inside(t) || !inside(s)
 }
 
 /// The neighbouring cell index in the direction of local coordinate `v`,

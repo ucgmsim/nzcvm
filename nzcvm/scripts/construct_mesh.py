@@ -1,7 +1,6 @@
 """Construct a tetrahedral volumetric mesh for a basin model from an error-bounded triangulation."""
 
 import gzip
-import itertools
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ from nzcvm.models.surface import (
     SurfaceGrid,
     median_spacing,
     read_surface_window,
+    surface_range,
 )
 from nzcvm.nzcvm import adaptive_tin  # ty: ignore[unresolved-import]
 
@@ -49,7 +49,7 @@ app = typer.Typer(help="Construct a volumetric tetrahedral mesh for a basin mode
 
 
 def get_surface_bounds(surface_path: Path) -> shapely.Polygon:
-    """Return the NZTM bounding box of a Zarr lattice or HDF5 surface."""
+    """Return the NZTM bounding box of a Zarr or HDF5 surface."""
     if surface_path.suffix == ".zarr":
         x, y = Surface.load(surface_path).corners.T
         return shapely.box(xmin=x.min(), xmax=x.max(), ymin=y.min(), ymax=y.max())
@@ -99,7 +99,11 @@ class Layer:
 
 
 def construct_volumetric_mesh(
-    name: str, geometry: shapely.Geometry, layers: list[Layer], priority: int
+    name: str,
+    geometry: shapely.Geometry,
+    layers: list[Layer],
+    priority: int,
+    topography_range: tuple[float, float],
 ) -> TetrahedralMesh:
 
     mesh_vertices = np.concatenate([layer.vertices for layer in layers])
@@ -170,6 +174,7 @@ def construct_volumetric_mesh(
         },
         geometry=geometry,
         field_data={"rho": rho, "vp": vp, "vs": vs, "qp": qp, "qs": qs, "alpha": alpha},
+        topography_range=topography_range,
     )
     return mesh
 
@@ -459,13 +464,13 @@ def profile_mesh(
     name: str,
     geometry: shapely.Geometry,
     triangulation: Triangulation,
-    topography: np.ndarray,
     top_surface: np.ndarray,
     bottom_surface: np.ndarray,
     model: pd.DataFrame,
     culling_volume: float,
-    padded_top: np.ndarray | None,
+    pad_top: bool,
     priority: int,
+    topography_range: tuple[float, float],
 ) -> TetrahedralMesh:
     """Fill the space between two surfaces with one layer of depth-profile tetrahedra.
 
@@ -487,18 +492,20 @@ def profile_mesh(
     if np.any(np.diff(tops[1:]) <= 0):
         raise ValueError("1-D model layer tops must increase with depth")
 
-    model_bottom = topography + (model["z"].iloc[-1] + model["thickness"].iloc[-1])
+    model_bottom = model["z"].iloc[-1] + model["thickness"].iloc[-1]
     bottom_surface = np.maximum(np.minimum(bottom_surface, model_bottom), top_surface)
-    if padded_top is not None:
-        # Raise the top where the basin has thickness so topography above
-        # the top surface still lands inside the mesh.  The first profile
-        # layer extends upwards to cover it.
-        top_surface = np.where(bottom_surface > top_surface, padded_top, top_surface)
+    if pad_top:
+        # Raise the top where the basin has thickness so topography slightly
+        # above the top surface still lands inside the mesh.  The first
+        # profile layer extends upwards to cover it.
+        top_surface = np.where(
+            bottom_surface > top_surface, top_surface - PAD_DEPTH, top_surface
+        )
     columns = triangulation.vertices
     vertices = interleave_top_and_bottom(
         np.c_[columns, top_surface], np.c_[columns, bottom_surface]
     )
-    vertices, tetra, kept, zero_volume = cull_mesh(
+    vertices, tetra, _, zero_volume = cull_mesh(
         vertices, prism_tetra(triangulation.triangles), culling_volume
     )
     print(
@@ -506,7 +513,8 @@ def profile_mesh(
         f"leaving {len(tetra)} tetrahedra on {len(vertices)} vertices"
     )
 
-    depth = vertices[:, 2] - np.repeat(topography, 2)[kept]
+    # The mesh is in depth below the topography, so a vertex's z is its depth.
+    depth = vertices[:, 2]
     # The layer each vertex lies in, matching the Rust `DepthProfile::at`: a
     # depth on a boundary belongs to the deeper layer.
     vertex_layer = np.searchsorted(tops[1:], depth, side="right")
@@ -528,17 +536,17 @@ def profile_mesh(
         | {"alpha": np.ones(len(vertices), dtype=np.float32)},
         depth_profile={"depth": depth.astype(np.float32), "profile_top": tops}
         | {f"profile_{f}": profile[f] for f in fields},
+        topography_range=topography_range,
     )
 
 
 def slice_with_model(
     triangulation: Triangulation,
-    topography: np.ndarray,
     top_surface: np.ndarray,
     bottom_surface: np.ndarray,
     model: pd.DataFrame,
     culling_volume: float,
-    padded_top: np.ndarray | None,
+    pad_top: bool,
 ) -> list[Layer]:
     layers = []
     tetra = prism_tetra(triangulation.triangles)
@@ -549,7 +557,7 @@ def slice_with_model(
         if np.all(top_surface >= bottom_surface):
             print("Stopping because the basin is filled to the basement everywhere")
             break
-        bottom_depth = topography + (row["z"] + row["thickness"])
+        bottom_depth = row["z"] + row["thickness"]
         if np.all(bottom_depth < top_surface):
             print("Skipping layer because bottom depth does not cut the top surface")
             continue
@@ -558,9 +566,9 @@ def slice_with_model(
         )
 
         top_of_layer = top_surface
-        if padded_top is not None and not emitted_layer:
+        if pad_top and not emitted_layer:
             has_thickness = bottom_of_layer > top_surface
-            top_of_layer = np.where(has_thickness, padded_top, top_surface)
+            top_of_layer = np.where(has_thickness, top_surface - PAD_DEPTH, top_surface)
 
         mesh_top = np.c_[triangulation.vertices, top_of_layer]
         mesh_bottom = np.c_[triangulation.vertices, bottom_of_layer]
@@ -677,16 +685,21 @@ def max_edge_for(smoothing: float, coastline: Path | None) -> float | None:
     return SMOOTHING_MAX_EDGE if smoothing > 0 and coastline else None
 
 
+def polygon_bbox(poly: shapely.Geometry) -> tuple[float, float, float, float]:
+    """``(min_lat, max_lat, min_lon, max_lon)`` covering NZTM *poly*."""
+    min_lon, min_lat, max_lon, max_lat = INV_TRANSFORMER.transform_bounds(
+        *shapely.bounds(poly), densify_pts=21
+    )
+    return (min_lat, max_lat, min_lon, max_lon)
+
+
 def surface_bbox(surfaces: Sequence[Path]) -> tuple[float, float, float, float]:
     """``(min_lat, max_lat, min_lon, max_lon)`` covering where all *surfaces* overlap.
 
     The box takes in a 10 km margin past the overlap.
     """
     overlap = shapely.intersection_all([get_surface_bounds(s) for s in surfaces])
-    (min_x, min_y, max_x, max_y) = shapely.bounds(shapely.buffer(overlap, 10000.0))
-    corners = np.array(list(itertools.product((min_x, max_x), (min_y, max_y)))).T
-    corners_lon, corners_lat = INV_TRANSFORMER.transform(corners[0], corners[1])
-    return (corners_lat.min(), corners_lat.max(), corners_lon.min(), corners_lon.max())
+    return polygon_bbox(shapely.buffer(overlap, 10000.0))
 
 
 def basin_depth_surfaces(
@@ -732,6 +745,18 @@ def basin_depth_surfaces(
     ]
 
 
+def save_triangulation(
+    path: Path, triangulation: Triangulation, region: shapely.Geometry
+) -> None:
+    """Save *triangulation* with the *region* it covers, for :func:`load_triangulation`."""
+    np.savez(
+        path,
+        vertices=triangulation.vertices,
+        triangles=triangulation.triangles,
+        region=np.array(shapely.to_wkb(region)),
+    )
+
+
 def load_triangulation(path: Path, poly: shapely.Geometry) -> Triangulation:
     """Load a stack's triangulation, checking it covers this basin's region.
 
@@ -767,7 +792,7 @@ def triangulate(
         list[Path],
         typer.Argument(
             help="Every interface of the stack, from the top down to the "
-            "basement: HDF5 elevation files or Zarr lattice surfaces.",
+            "basement: HDF5 elevation files or Zarr surfaces.",
             exists=True,
         ),
     ],
@@ -802,12 +827,7 @@ def triangulate(
     stack = triangulate_polygon(
         poly, [(grid, tolerance) for grid in grids], max_edge_for(smoothing, coastline)
     )
-    np.savez(
-        output,
-        vertices=stack.vertices,
-        triangles=stack.triangles,
-        region=np.array(shapely.to_wkb(poly)),
-    )
+    save_triangulation(output, stack, poly)
     print(
         f"Saved a triangulation of {len(stack.triangles)} triangles on "
         f"{len(stack.vertices)} vertices to {output}"
@@ -829,7 +849,7 @@ def main(
     topography: Annotated[
         Path,
         typer.Argument(
-            help="Topography surface: an HDF5 elevation file or a Zarr lattice surface.",
+            help="Topography surface: an HDF5 elevation file or a Zarr surface.",
             exists=True,
             file_okay=True,
             dir_okay=True,
@@ -839,7 +859,7 @@ def main(
     top_surface: Annotated[
         Path,
         typer.Argument(
-            help="Top surface: an HDF5 elevation file or a Zarr lattice surface.",
+            help="Top surface: an HDF5 elevation file or a Zarr surface.",
             exists=True,
             file_okay=True,
             dir_okay=True,
@@ -849,7 +869,7 @@ def main(
     bottom_surface: Annotated[
         Path,
         typer.Argument(
-            help="Bottom surface: an HDF5 elevation file or a Zarr lattice surface.",
+            help="Bottom surface: an HDF5 elevation file or a Zarr surface.",
             exists=True,
             file_okay=True,
             dir_okay=True,
@@ -1023,36 +1043,35 @@ def main(
         )
     )
     mesh_top, mesh_bottom = enforce_mesh_constraints(mesh_top, mesh_bottom)
-    # Depth starts at the topography itself.
-    mesh_topography = np.zeros_like(mesh_top)
-    padded_top = mesh_top - PAD_DEPTH if pad_top else None
+    # The full-resolution topography under the basin bounds the elevation
+    # the mesh can occupy, which the model tree prunes on.
+    topography_range = surface_range(topography, polygon_bbox(poly))
 
     name = output.stem
     if layered:
         print("Slicing model into volumetric mesh")
         layers = slice_with_model(
             basin_triangulation,
-            mesh_topography,
             mesh_top,
             mesh_bottom,
             model,
             culling_volume,
-            padded_top=padded_top,
+            pad_top=pad_top,
         )
-        mesh = construct_volumetric_mesh(name, poly, layers, priority)
+        mesh = construct_volumetric_mesh(name, poly, layers, priority, topography_range)
     else:
         print("Filling basin with depth-profile tetrahedra")
         mesh = profile_mesh(
             name,
             poly,
             basin_triangulation,
-            mesh_topography,
             mesh_top,
             mesh_bottom,
             model,
             culling_volume,
-            padded_top=padded_top,
+            pad_top=pad_top,
             priority=priority,
+            topography_range=topography_range,
         )
 
     if smoothing > 0:

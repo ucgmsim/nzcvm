@@ -1,6 +1,6 @@
 """Surface interpolation for topography-based depth transforms.
 
-A :class:`Surface` wraps a surface sampled on a regular lattice and provides
+A :class:`Surface` wraps a surface sampled on a regular grid and provides
 point-query interpolation, used to convert depth-below-surface coordinates
 into absolute elevations.
 
@@ -67,7 +67,12 @@ class Surface:
     @classmethod
     def from_dataset(cls, mesh: xr.Dataset) -> Self:
         """Build a surface over *mesh* (see :class:`~nzcvm.models.mesh.StructuredMeshSchema`)."""
-        return cls(mesh.z.sortby(["y", "x"]), _frame_matrix(mesh.attrs["frame"]))
+        z = mesh.z
+        # A plain reversed slice, unlike sortby, keeps lazy reads basic.
+        for axis in ("y", "x"):
+            if not z.indexes[axis].is_monotonic_increasing:
+                z = z.isel({axis: slice(None, None, -1)})
+        return cls(z, _frame_matrix(mesh.attrs["frame"]))
 
     @classmethod
     def load(cls, path: Path) -> Self:
@@ -358,29 +363,67 @@ def _bbox_frame_range(
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     """The x and y ranges, in *surface*'s frame, covering a lat/lon *bbox*."""
     min_lat, max_lat, min_lon, max_lon = bbox
-    # A latitude/longitude box curves in NZTM, so project its whole
-    # boundary rather than its corners.
-    edge = np.linspace(0.0, 1.0, 64)
-    lon = np.concatenate(
-        [
-            min_lon + (max_lon - min_lon) * edge,
-            np.full(64, max_lon),
-            max_lon - (max_lon - min_lon) * edge,
-            np.full(64, min_lon),
-        ]
-    )
-    lat = np.concatenate(
-        [
-            np.full(64, min_lat),
-            min_lat + (max_lat - min_lat) * edge,
-            np.full(64, max_lat),
-            max_lat - (max_lat - min_lat) * edge,
-        ]
+    # Densified, since a latitude/longitude box curves in NZTM.
+    x0, y0, x1, y1 = TRANSFORMER.transform_bounds(
+        min_lon, min_lat, max_lon, max_lat, densify_pts=21
     )
     frame_x, frame_y = surface.to_frame(
-        *map(np.asarray, TRANSFORMER.transform(lon, lat))
+        np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1])
     )
     return (frame_x.min(), frame_x.max()), (frame_y.min(), frame_y.max())
+
+
+def _node_spacing(z: xr.DataArray) -> float:
+    """The smaller of an upright surface's two node spacings."""
+    return float(min(np.diff(z.x.values[:2])[0], np.diff(z.y.values[:2])[0]))
+
+
+def _window(
+    surface: Surface, bbox: tuple[float, float, float, float] | None, factor: int = 1
+) -> xr.DataArray:
+    """The lazy window of *surface* covering *bbox*, on whole blocks of *factor*."""
+    z = surface.values
+    if bbox is None:
+        return z
+    (x_lo, x_hi), (y_lo, y_hi) = _bbox_frame_range(surface, bbox)
+    margin = factor * _node_spacing(z)
+
+    def window(axis: str, low: float, high: float) -> slice:
+        # Start and stop on multiples of the block size, so blocks line
+        # up with those of every other window.
+        index = z.indexes[axis]
+        start = max(int(index.searchsorted(low - margin)) - 1, 0)
+        stop = min(int(index.searchsorted(high + margin)) + 1, len(index))
+        return slice(
+            start // factor * factor, min(-(-stop // factor) * factor, len(index))
+        )
+
+    return z.isel(x=window("x", x_lo, x_hi), y=window("y", y_lo, y_hi))
+
+
+def surface_range(
+    surface_path: Path, bbox: tuple[float, float, float, float]
+) -> tuple[float, float]:
+    """The least and greatest depth of a surface around *bbox*, at full resolution.
+
+    Parameters
+    ----------
+    surface_path :
+        Zarr surface or HDF5 elevation file.
+    bbox :
+        ``(min_lat, max_lat, min_lon, max_lon)`` to read.
+
+    Returns
+    -------
+    tuple of float
+        ``(min, max)`` depth over the nodes covering *bbox*.
+    """
+    if surface_path.suffix != ".zarr":
+        z = np.asarray(read_surface_file(surface_path, bbox=bbox).values)
+    else:
+        # Lazily indexed, so this reads only the window.
+        z = _window(Surface.load(surface_path), bbox).values
+    return float(np.nanmin(z)), float(np.nanmax(z))
 
 
 def read_surface_window(
@@ -390,10 +433,10 @@ def read_surface_window(
 ) -> SurfaceGrid:
     """Read a surface, as depth (+z down), around *bbox* onto an NZTM grid.
 
-    A Zarr store contains a surface already stored as depth. This averages
-    the whole surface in blocks to about *spacing*, so blocks line up
-    whichever window reads them, then selects the window covering the box.
-    Dask computes only the blocks in the window. It reads anything else
+    A Zarr store contains a surface already stored as depth. This reads the
+    window covering the box, started and stopped on whole blocks so blocks
+    line up whichever window reads them, and averages it in blocks to about
+    *spacing*. It reads anything else
     as an HDF5 elevation file with :func:`read_surface_file`, which negates
     it.
 
@@ -416,18 +459,14 @@ def read_surface_window(
     """
     if surface_path.suffix != ".zarr":
         return read_surface_file(surface_path, bbox=bbox)
-    surface = Surface.from_dataset(xr.open_zarr(surface_path))
-    z = surface.values
-    node_spacing = float(min(np.diff(z.x.values[:2])[0], np.diff(z.y.values[:2])[0]))
+    surface = Surface.load(surface_path)
+    node_spacing = _node_spacing(surface.values)
     factor = 1 if spacing is None else max(1, round(spacing / node_spacing))
+    z = _window(surface, bbox, factor)
+    # Lazily indexed, so this reads only the window.
+    z = z.load()
     if factor > 1:
         z = z.coarsen(x=factor, y=factor, boundary="trim").mean()
-    if bbox is not None:
-        (x_lo, x_hi), (y_lo, y_hi) = _bbox_frame_range(surface, bbox)
-        margin = factor * node_spacing
-        z = z.sel(
-            x=slice(x_lo - margin, x_hi + margin), y=slice(y_lo - margin, y_hi + margin)
-        )
     frame_x, frame_y = np.meshgrid(z.x.values, z.y.values)
     nztm_x, nztm_y = surface.from_frame(frame_x.ravel(), frame_y.ravel())
     return SurfaceGrid(

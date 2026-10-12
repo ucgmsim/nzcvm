@@ -3,11 +3,10 @@ set dotenv-load
 # Default resolution
 res := "500"
 smoothing := "10000.0"
-# Basins mesh the DEM averaged to their basement's spacing, and their tops
-# rise over the full-resolution DEM where it pokes above that.
+# Basins mesh in depth below the DEM, averaged to their basement's spacing.
 construct := "uv run nzcvm basin main"
 coastline := "resources/coastline.wkb.gz"
-# Topography for every basin: the Copernicus DEM on an upright NZTM lattice,
+# Topography for every basin: the Copernicus DEM on an upright NZTM grid,
 # built by `just copernicus_dem dem`.
 dem := "resources/dem.zarr"
 
