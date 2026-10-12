@@ -170,17 +170,27 @@ mod nzcvm {
         /// vertical :
         ///     ``"elevation"`` if the vertices' third coordinate is negated
         ///     elevation, or ``"depth"`` if it is depth below the topography.
+        /// elevation_range :
+        ///     For a depth mesh, the ``(min, max)`` negated elevation it can
+        ///     occupy, which the tree prunes on. Required for depth meshes.
         #[new]
+        #[pyo3(signature = (vertices, faces, priority, vertical, elevation_range=None))]
         fn new(
             vertices: PyReadonlyArray2<Real>,
             faces: PyReadonlyArray2<usize>,
             priority: u8,
             vertical: &str,
+            elevation_range: Option<(Real, Real)>,
         ) -> PyResult<Self> {
-            let vertical = match vertical {
-                "elevation" => Vertical::Elevation,
-                "depth" => Vertical::Depth,
-                other => {
+            let vertical = match (vertical, elevation_range) {
+                ("elevation", _) => Vertical::Elevation,
+                ("depth", Some((min_z, max_z))) => Vertical::Depth { min_z, max_z },
+                ("depth", None) => {
+                    return Err(PyValueError::new_err(
+                        "a depth mesh needs the elevation range it can occupy",
+                    ));
+                }
+                (other, _) => {
                     return Err(PyValueError::new_err(format!(
                         "vertical must be 'elevation' or 'depth', got {other:?}"
                     )));

@@ -373,6 +373,59 @@ def _bbox_frame_range(
     return (frame_x.min(), frame_x.max()), (frame_y.min(), frame_y.max())
 
 
+def _node_spacing(z: xr.DataArray) -> float:
+    """The smaller of an upright surface's two node spacings."""
+    return float(min(np.diff(z.x.values[:2])[0], np.diff(z.y.values[:2])[0]))
+
+
+def _window(
+    surface: Surface, bbox: tuple[float, float, float, float] | None, factor: int = 1
+) -> xr.DataArray:
+    """The lazy window of *surface* covering *bbox*, on whole blocks of *factor*."""
+    z = surface.values
+    if bbox is None:
+        return z
+    (x_lo, x_hi), (y_lo, y_hi) = _bbox_frame_range(surface, bbox)
+    margin = factor * _node_spacing(z)
+
+    def window(axis: str, low: float, high: float) -> slice:
+        # Start and stop on multiples of the block size, so blocks line
+        # up with those of every other window.
+        index = z.indexes[axis]
+        start = max(int(index.searchsorted(low - margin)) - 1, 0)
+        stop = min(int(index.searchsorted(high + margin)) + 1, len(index))
+        return slice(
+            start // factor * factor, min(-(-stop // factor) * factor, len(index))
+        )
+
+    return z.isel(x=window("x", x_lo, x_hi), y=window("y", y_lo, y_hi))
+
+
+def surface_range(
+    surface_path: Path, bbox: tuple[float, float, float, float]
+) -> tuple[float, float]:
+    """The least and greatest depth of a surface around *bbox*, at full resolution.
+
+    Parameters
+    ----------
+    surface_path :
+        Zarr surface or HDF5 elevation file.
+    bbox :
+        ``(min_lat, max_lat, min_lon, max_lon)`` to read.
+
+    Returns
+    -------
+    tuple of float
+        ``(min, max)`` depth over the nodes covering *bbox*.
+    """
+    if surface_path.suffix != ".zarr":
+        z = np.asarray(read_surface_file(surface_path, bbox=bbox).values)
+    else:
+        # Lazily indexed, so this reads only the window.
+        z = _window(Surface.load(surface_path), bbox).values
+    return float(np.nanmin(z)), float(np.nanmax(z))
+
+
 def read_surface_window(
     surface_path: Path,
     bbox: tuple[float, float, float, float] | None = None,
@@ -407,24 +460,9 @@ def read_surface_window(
     if surface_path.suffix != ".zarr":
         return read_surface_file(surface_path, bbox=bbox)
     surface = Surface.load(surface_path)
-    z = surface.values
-    node_spacing = float(min(np.diff(z.x.values[:2])[0], np.diff(z.y.values[:2])[0]))
+    node_spacing = _node_spacing(surface.values)
     factor = 1 if spacing is None else max(1, round(spacing / node_spacing))
-    if bbox is not None:
-        (x_lo, x_hi), (y_lo, y_hi) = _bbox_frame_range(surface, bbox)
-        margin = factor * node_spacing
-
-        def window(axis: str, low: float, high: float) -> slice:
-            # Start and stop on multiples of the block size, so blocks line
-            # up with those of every other window.
-            index = z.indexes[axis]
-            start = max(int(index.searchsorted(low - margin)) - 1, 0)
-            stop = min(int(index.searchsorted(high + margin)) + 1, len(index))
-            return slice(
-                start // factor * factor, min(-(-stop // factor) * factor, len(index))
-            )
-
-        z = z.isel(x=window("x", x_lo, x_hi), y=window("y", y_lo, y_hi))
+    z = _window(surface, bbox, factor)
     # Lazily indexed, so this reads only the window.
     z = z.load()
     if factor > 1:

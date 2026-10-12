@@ -26,13 +26,17 @@ const ALPHA_EPS: Real = 1e-4;
 const PRIORITY_AABB_EXTENT: Real = 0.5;
 
 /// The vertical coordinate a mesh model's vertices use, both positive down.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum Vertical {
     /// Negated elevation, so the model stays put as the topography changes:
     /// tomography.
     Elevation,
     /// Depth below the topography, so the model follows it: basins.
-    Depth,
+    ///
+    /// `min_z` and `max_z` bound the negated elevation the model can occupy
+    /// over the topography it was built on. The tree prunes on them, so
+    /// every model's bounds share the elevation axis.
+    Depth { min_z: Real, max_z: Real },
 }
 
 /// Serialisable summary of a [`TreeModel`] for diagnostics.
@@ -131,10 +135,10 @@ impl Contains<Real, 4, (u8, Quality)> for TreeModel {
     fn contains(&self, query_point: &Point4<Real>) -> Option<(u8, Quality)> {
         let vertical = match self.vertical {
             Vertical::Elevation => query_point.z,
-            Vertical::Depth => query_point.w,
+            Vertical::Depth { .. } => query_point.w,
         };
-        // The tree prunes on the horizontal alone, so reject a point outside
-        // the model's vertical extent here, before searching its mesh.
+        // The tree prunes on elevation. Reject a point outside the model's
+        // own vertical extent here too, before searching its mesh.
         let aabb = self.model.aabb3();
         if vertical < aabb.min.z || vertical > aabb.max.z {
             return None;
@@ -144,25 +148,29 @@ impl Contains<Real, 4, (u8, Quality)> for TreeModel {
     }
 }
 
-/// 3-D AABB used by the outer `ModelTree` BVH: `(x, y, priority)`.
+/// 4-D AABB used by the outer `ModelTree` BVH: `(x, y, z, priority)`.
 ///
-/// The tree prunes on the horizontal extent alone, since models differ in
-/// which vertical coordinate they use; each model's own mesh tests the
-/// vertical. The last dimension is the model's priority: both ends are set
-/// to `priority` (with a half-unit extent so the AABB is non-degenerate),
-/// which lets the priority-ray traversal use `aabb.min[2]` as the `t_min`
-/// hit distance and thereby visit models in priority order.
-impl Bounded<Real, 3> for TreeModel {
-    fn aabb(&self) -> Aabb<Real, 3> {
+/// The vertical axis is negated elevation for every model: a depth model
+/// uses the elevation range it can occupy, so the tree tests a query's `z`
+/// against both kinds alike. The last dimension is the model's priority:
+/// both ends are set to `priority` (with a half-unit extent so the AABB is
+/// non-degenerate), which lets the priority-ray traversal use `aabb.min[3]`
+/// as the `t_min` hit distance and thereby visit models in priority order.
+impl Bounded<Real, 4> for TreeModel {
+    fn aabb(&self) -> Aabb<Real, 4> {
         let aabb = self.model.aabb3();
         let p = self.priority as Real;
-        let min = Point::<Real, 3>::from([aabb.min.x, aabb.min.y, p]);
-        let max = Point::<Real, 3>::from([aabb.max.x, aabb.max.y, p + PRIORITY_AABB_EXTENT]);
+        let (min_z, max_z) = match self.vertical {
+            Vertical::Elevation => (aabb.min.z, aabb.max.z),
+            Vertical::Depth { min_z, max_z } => (min_z, max_z),
+        };
+        let min = Point::<Real, 4>::from([aabb.min.x, aabb.min.y, min_z, p]);
+        let max = Point::<Real, 4>::from([aabb.max.x, aabb.max.y, max_z, p + PRIORITY_AABB_EXTENT]);
         Aabb::with_bounds(min, max)
     }
 }
 
-impl BHShape<Real, 3> for TreeModel {
+impl BHShape<Real, 4> for TreeModel {
     fn set_bh_node_index(&mut self, index: usize) {
         self.node_index = index;
     }
@@ -178,20 +186,20 @@ pub struct ModelTreeView {
     pub size: usize,
 }
 
-/// A collection of [`TreeModel`]s indexed by a BVH over `(x, y, priority)`.
+/// A collection of [`TreeModel`]s indexed by a BVH over `(x, y, z, priority)`.
 ///
 /// A ray along the priority axis visits models in ascending priority order
 /// (lowest number = highest priority).
 pub struct ModelTree {
-    bvh_tree: Bvh<Real, 3>,
+    bvh_tree: Bvh<Real, 4>,
     models: Vec<TreeModel>,
 }
 
 impl DeepSizeOf for ModelTree {
     fn deep_size_of_children(&self, context: &mut Context) -> usize {
-        // The outer BVH is 3-dimensional (x, y, priority), so the node size
-        // must use `BvhNode<Real, 3>`.
-        self.bvh_tree.nodes.capacity() * size_of::<BvhNode<Real, 3>>()
+        // The outer BVH is 4-dimensional (x, y, z, priority), so the node
+        // size must use `BvhNode<Real, 4>` to account for the extra extent.
+        self.bvh_tree.nodes.capacity() * size_of::<BvhNode<Real, 4>>()
             + self.models.deep_size_of_children(context)
     }
 }
@@ -554,8 +562,12 @@ mod tests {
     /// model the query's z, a depth model its depth.
     #[test]
     fn test_models_read_their_own_vertical_coordinate() {
+        let depth = Vertical::Depth {
+            min_z: -100.0,
+            max_z: 100.0,
+        };
         let tree = ModelTree::new(vec![
-            vertical_cube_mesh(0, 5.0, 1.0, Vertical::Depth),
+            vertical_cube_mesh(0, 5.0, 1.0, depth),
             vertical_cube_mesh(1, 9.0, 1.0, Vertical::Elevation),
         ]);
         // Inside both: the depth model has the higher priority.

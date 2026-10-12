@@ -30,6 +30,7 @@ from nzcvm.models.surface import (
     SurfaceGrid,
     median_spacing,
     read_surface_window,
+    surface_range,
 )
 from nzcvm.nzcvm import adaptive_tin  # ty: ignore[unresolved-import]
 
@@ -98,7 +99,11 @@ class Layer:
 
 
 def construct_volumetric_mesh(
-    name: str, geometry: shapely.Geometry, layers: list[Layer], priority: int
+    name: str,
+    geometry: shapely.Geometry,
+    layers: list[Layer],
+    priority: int,
+    topography_range: tuple[float, float],
 ) -> TetrahedralMesh:
 
     mesh_vertices = np.concatenate([layer.vertices for layer in layers])
@@ -169,6 +174,7 @@ def construct_volumetric_mesh(
         },
         geometry=geometry,
         field_data={"rho": rho, "vp": vp, "vs": vs, "qp": qp, "qs": qs, "alpha": alpha},
+        topography_range=topography_range,
     )
     return mesh
 
@@ -434,6 +440,7 @@ def profile_mesh(
     culling_volume: float,
     pad_top: bool,
     priority: int,
+    topography_range: tuple[float, float],
 ) -> TetrahedralMesh:
     """Fill the space between two surfaces with one layer of depth-profile tetrahedra.
 
@@ -499,6 +506,7 @@ def profile_mesh(
         | {"alpha": np.ones(len(vertices), dtype=np.float32)},
         depth_profile={"depth": depth.astype(np.float32), "profile_top": tops}
         | {f"profile_{f}": profile[f] for f in fields},
+        topography_range=topography_range,
     )
 
 
@@ -647,17 +655,21 @@ def max_edge_for(smoothing: float, coastline: Path | None) -> float | None:
     return SMOOTHING_MAX_EDGE if smoothing > 0 and coastline else None
 
 
+def polygon_bbox(poly: shapely.Geometry) -> tuple[float, float, float, float]:
+    """``(min_lat, max_lat, min_lon, max_lon)`` covering NZTM *poly*."""
+    min_lon, min_lat, max_lon, max_lat = INV_TRANSFORMER.transform_bounds(
+        *shapely.bounds(poly), densify_pts=21
+    )
+    return (min_lat, max_lat, min_lon, max_lon)
+
+
 def surface_bbox(surfaces: Sequence[Path]) -> tuple[float, float, float, float]:
     """``(min_lat, max_lat, min_lon, max_lon)`` covering where all *surfaces* overlap.
 
     The box takes in a 10 km margin past the overlap.
     """
     overlap = shapely.intersection_all([get_surface_bounds(s) for s in surfaces])
-    min_x, min_y, max_x, max_y = shapely.bounds(shapely.buffer(overlap, 10000.0))
-    min_lon, min_lat, max_lon, max_lat = INV_TRANSFORMER.transform_bounds(
-        min_x, min_y, max_x, max_y, densify_pts=21
-    )
-    return (min_lat, max_lat, min_lon, max_lon)
+    return polygon_bbox(shapely.buffer(overlap, 10000.0))
 
 
 def basin_depth_surfaces(
@@ -983,6 +995,9 @@ def main(
         )
     )
     mesh_top, mesh_bottom = enforce_mesh_constraints(mesh_top, mesh_bottom)
+    # The full-resolution topography under the basin bounds the elevation
+    # the mesh can occupy, which the model tree prunes on.
+    topography_range = surface_range(topography, polygon_bbox(poly))
 
     name = output.stem
     if layered:
@@ -995,7 +1010,7 @@ def main(
             culling_volume,
             pad_top=pad_top,
         )
-        mesh = construct_volumetric_mesh(name, poly, layers, priority)
+        mesh = construct_volumetric_mesh(name, poly, layers, priority, topography_range)
     else:
         print("Filling basin with depth-profile tetrahedra")
         mesh = profile_mesh(
@@ -1008,6 +1023,7 @@ def main(
             culling_volume,
             pad_top=pad_top,
             priority=priority,
+            topography_range=topography_range,
         )
 
     if smoothing > 0:
