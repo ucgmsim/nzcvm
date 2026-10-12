@@ -14,12 +14,36 @@ from nzcvm.scripts._extras import missing_extra
 app = typer.Typer()
 
 
+def _valid_span(valid: xr.DataArray) -> slice:
+    """The span from the first to the last True entry of 1-D *valid*."""
+    index = np.flatnonzero(valid.values)
+    return slice(index[0], index[-1] + 1)
+
+
 def convert_tiff(
     name: str, tiff_model: xr.DataArray, downsample: int
 ) -> StructuredMesh:
-    clipped = tiff_model.dropna("x", how="all").dropna("y", how="all")
+    # Crop to the bounding box of the data. Dropping every all-NaN row or
+    # column instead would leave gaps in the coordinates wherever no-data
+    # rows sit inside the raster, and the grid would no longer be uniform.
+    valid = tiff_model.notnull()
+    clipped = tiff_model.isel(
+        x=_valid_span(valid.any("y")), y=_valid_span(valid.any("x"))
+    )
     if downsample > 1:
-        clipped = clipped.coarsen(x=downsample, y=downsample, boundary="pad").mean()
+        coarse = clipped.coarsen(x=downsample, y=downsample, boundary="pad").mean()
+        # The padded last block averages fewer coordinates, which would put
+        # its node off the grid. Lay every coarse node out at the uniform
+        # step from the first, which is always a full block.
+        clipped = coarse.assign_coords(
+            {
+                dim: coarse[dim][0].item()
+                + downsample
+                * (clipped[dim][1] - clipped[dim][0]).item()
+                * np.arange(coarse.sizes[dim])
+                for dim in ("x", "y")
+            }
+        )
 
     xi = clipped.x.astype(np.float32).values
     yi = clipped.y.astype(np.float32).values
