@@ -25,7 +25,7 @@ from typing import Annotated, Literal, Self
 
 from mashumaro.types import Discriminator
 
-from nzcvm.config.core import ConfigObject
+from nzcvm.config.core import ConfigObject, ConfigObjectConfig
 from nzcvm.config.validation import PositiveFloat, validate_positive
 
 #: ``PositiveFloat`` validation doesn't reach through ``| None``, so an
@@ -53,7 +53,7 @@ class Solver(StrEnum):
 class Decay(ConfigObject):
     """How quickly grid levels stop following the topography with depth."""
 
-    class Config(ConfigObject.Config):
+    class Config(ConfigObjectConfig):
         discriminator = Discriminator(field="type", include_subtypes=True)
 
     def resolve(self, default_length: float) -> Self:
