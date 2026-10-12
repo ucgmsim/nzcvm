@@ -7,7 +7,13 @@ name = "nzcvm"
 authors = [{ name = "ucgmsim" }]
 description = "New Zealand Community Velocity Model"
 readme = "README.md"
-requires-python = ">=3.13"
+# Python 3.15 is blocked by h5py (used directly, and through hdf5plugin
+# and h5netcdf). h5py has no cp315 wheels on PyPI yet (they are expected with h5py 3.17,
+# see https://github.com/h5py/h5py/issues/2972), and building it from the
+# sdist needs a system HDF5.
+# Lift the cap once h5py ships cp315 wheels. cibuildwheel then builds
+# cp315 wheels for us with no further changes.
+requires-python = ">=3.13,<3.15"
 # No PyPy: the extension is built against the CPython API without abi3, so
 # every wheel is CPython- and version-specific.
 classifiers = [

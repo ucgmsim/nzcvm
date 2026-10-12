@@ -45,7 +45,7 @@ jobs:
           rustup target add aarch64-apple-darwin
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.1.0
+        uses: pypa/cibuildwheel@v4.3.1
         env:
           # The extension is not abi3, so cibuildwheel builds one wheel per
           # interpreter. The set of interpreters comes from
