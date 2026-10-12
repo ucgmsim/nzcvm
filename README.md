@@ -97,7 +97,7 @@ uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
 | `nzcvm view`         | Interactive 3D PyVista viewer for model output               |
 | `nzcvm basin`        | Construct a tetrahedral mesh for a basin model                |
 | `nzcvm tomography`   | Convert a CSV-like tomography model to a tetrahedral mesh     |
-| `nzcvm surface`      | Convert an HDF5 topography surface to a VTK unstructured grid |
+| `nzcvm surface`      | Convert an HDF5 surface onto an upright NZTM lattice          |
 | `nzcvm convert-tiff` | Convert a GeoTIFF raster to a surface                         |
 | `nzcvm tree-stats`   | Benchmark BVH query performance                               |
 | `nzcvm synthetic`    | Write synthetic DEM, Vs30, basin, and tomography inputs       |
@@ -474,19 +474,21 @@ from nzcvm.models.model import ModelTree
 tree = ModelTree.load_models(
     [Path("models/ep2020.zarr"), Path("models/Wellington.zarr")]
 )
-quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0)
+quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0, depth=520.0)
 print(quality.vp, quality.vs)  # None if the point is outside every mesh
 ```
 
 `load_models` takes an iterable of mesh paths, anything `xarray` can open
 (the meshes distributed in `models/` are Zarr). Coordinates are in the model's
-projected CRS with `z` positive downwards.
+projected CRS with `z` positive downwards, and `depth` gives the point's
+depth below the topography. Basin meshes store depth and read it, while the
+tomography reads `z`. A grid computes both for every point.
 
 `query_many` is the vectorised form and returns a `Qualities` dataset.
 `explain` shows which models contributed to the blend:
 
 ```python
->>> tree.explain(1_749_150.0, 5_428_150.0, 100.0)
+>>> tree.explain(1_749_150.0, 5_428_150.0, 100.0, 120.0)
 (ρ=1810.00, Vp=1800.00, Vs=580.00, Qp=58.00, Qs=29.00, ɑ=1.00)
 ├── Model 0 (priority = 38)
 │   └── Quality: (ρ=1810.00, Vp=1800.00, Vs=580.00, ...)
@@ -551,9 +553,12 @@ Four subpackages, each with a narrow responsibility.
 
 Geospatial Rust wrappers and mesh I/O. `MeshModel` wraps one tetrahedral
 mesh. `ModelTree` combines many meshes into a priority-ordered BVH tree and
-handles alpha-composited queries. `Surface` interpolates values from a 2-D
-triangular surface mesh (used for the DEM and the Vs30 map). `mesh` provides
-the tetrahedral and structured mesh dataclasses and their I/O.
+handles alpha-composited queries. `Surface` interpolates values on a regular
+lattice (used for the DEM and the Vs30 map). A structured mesh stores only the
+lattice values `z` and an affine placement: node `[i, j]` sits at
+`origin + i * step_i + j * step_j`, so an upright or a rotated raster maps a
+query point to its cell directly. `mesh` provides the tetrahedral and
+structured mesh dataclasses and their I/O.
 
 Each mesh has one field type, its `model_type`, which turns a query point
 into a quality: `INTERPOLATE` (barycentric interpolation of the vertex

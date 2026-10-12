@@ -5,13 +5,13 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
+import h5py
 import typer
 import xarray as xr
 
 from nzcvm import ely_taper
-from nzcvm.models.mesh import StructuredMeshSchema
-from nzcvm.models.surface import Surface, read_surface_file
+from nzcvm.models.surface import median_spacing, read_surface_file, read_surface_window
+from nzcvm.scripts import construct_mesh
 
 app = typer.Typer(
     help="Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."
@@ -31,23 +31,6 @@ VP_FULL = 4000.0
 RHO_FULL = 2393.0
 
 
-def _load_bpv_surface(basement_path: Path) -> Surface:
-    """Build the BPV basement surface from the WGS84 lat/lon/elevation HDF5 file."""
-    grid = read_surface_file(basement_path)
-    ni, nj = grid.x.shape
-    bpv_dset = xr.Dataset(
-        {
-            "x": (("i", "j"), grid.x),
-            "y": (("i", "j"), grid.y),
-            "z": (("i", "j"), grid.values),
-        },
-        coords={"i": np.arange(ni), "j": np.arange(nj)},
-        attrs={"name": "BPV"},
-    )
-    bpv_dset = StructuredMeshSchema.from_dataset(bpv_dset)
-    return Surface.from_dataset(bpv_dset)
-
-
 @app.command()
 def main(
     mesh: Annotated[
@@ -60,10 +43,10 @@ def main(
     dem: Annotated[
         Path,
         typer.Argument(
-            help="DEM surface (zarr) used as the Vs30-taper reference depth.",
+            help="DEM surface (zarr) that the BPV basement depth is measured from.",
             exists=True,
         ),
-    ] = Path("resources/cant_dem.zarr"),
+    ] = Path("resources/dem.zarr"),
     basement: Annotated[
         Path,
         typer.Argument(
@@ -117,14 +100,22 @@ def main(
 ) -> None:
     """Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."""
     dset = xr.open_dataset(mesh)
-    surface = Surface.load(dem)
-    bpv_surface = _load_bpv_surface(basement)
+    # The mesh is depth-queried: its z is depth below the topography.
+    dem_depth = dset.z.clip(min=0)
 
-    dem_surface = xr.apply_ufunc(surface.transform, dset.x, dset.y)
-    bpv_dem = xr.apply_ufunc(bpv_surface.transform, dset.x, dset.y)
-
-    dem_depth = (dset.z - dem_surface).clip(min=0)
-    bpv_depth = (dset.z - bpv_dem).clip(min=0)
+    # The basement is an elevation grid on latitude/longitude nodes. As
+    # construct_mesh does, read it bilinearly and convert it to depth below
+    # the topography at its own nodes, against the DEM averaged to its spacing.
+    bpv_grid = read_surface_file(basement)
+    with h5py.File(basement) as f:
+        latitude, longitude = f["latitude"][:], f["longitude"][:]
+    bbox = (latitude.min(), latitude.max(), longitude.min(), longitude.max())
+    dem_grid = read_surface_window(dem, bbox, median_spacing(bpv_grid))
+    bpv_top = construct_mesh.depth_below(bpv_grid, dem_grid)
+    bpv_top_depth = xr.apply_ufunc(
+        lambda x, y: bpv_top(x, y, clamp=False)[0], dset.x, dset.y
+    )
+    bpv_depth = (dset.z - bpv_top_depth).clip(min=0)
 
     # Apparent surface Vs30 (m/s) at each point, the taper's near-surface endpoint.
     vs_bpv_top = (vs0 + (vs_depth - vs0) * (dem_depth / vs30_taper_depth)) * 1000.0

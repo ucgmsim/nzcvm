@@ -20,13 +20,13 @@ mod nzcvm {
     use crate::grid::StructuredGrid;
     use crate::mesh::MeshModel;
     use crate::model::{AnyField, DepthProfile, Interpolated, Profiled};
-    use crate::model_tree::{ModelTree, TreeModel};
+    use crate::model_tree::{ModelTree, TreeModel, Vertical};
     use crate::quality::Quality;
     use crate::query::Query;
     use crate::real::Real;
     use crate::tin::{self, TinSurface};
 
-    use nalgebra::{Affine3, Matrix4, Point2, Point3};
+    use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
     use ndarray::{Array1, Array2, Axis, array, azip};
     use numpy::{
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
@@ -38,7 +38,7 @@ mod nzcvm {
 
     /// Coordinate arrays and optional boolean mask for a vectorised query.
     ///
-    /// Bundles the three `(N,)` coordinate arrays and an optional `(N,)` boolean
+    /// Bundles the four `(N,)` coordinate arrays and an optional `(N,)` boolean
     /// mask into a single object so that [`PyModelTree::query_many`] stays under
     /// Clippy's argument-count limit.  The object holds no GIL lock — arrays are
     /// borrowed only during the actual query call.
@@ -47,6 +47,7 @@ mod nzcvm {
         pub x: Py<PyArray1<Real>>,
         pub y: Py<PyArray1<Real>>,
         pub z: Py<PyArray1<Real>>,
+        pub depth: Py<PyArray1<Real>>,
         pub mask: Option<Py<PyArray1<bool>>>,
     }
 
@@ -56,21 +57,29 @@ mod nzcvm {
         ///
         /// Parameters
         /// ----------
-        /// x, y, z :
-        ///     Three 1-D float32 coordinate arrays of length *N*.
+        /// x, y, z, depth :
+        ///     Four 1-D float32 arrays of length *N*: the position, and its
+        ///     depth below the topography.
         /// mask :
         ///     Optional 1-D boolean array of length *N*.  When supplied, only
         ///     points where ``mask[i]`` is ``True`` are queried; other rows in
         ///     ``out`` are left untouched.
         #[new]
-        #[pyo3(signature = (x, y, z, mask=None))]
+        #[pyo3(signature = (x, y, z, depth, mask=None))]
         pub fn new(
             x: Py<PyArray1<Real>>,
             y: Py<PyArray1<Real>>,
             z: Py<PyArray1<Real>>,
+            depth: Py<PyArray1<Real>>,
             mask: Option<Py<PyArray1<bool>>>,
         ) -> Self {
-            QueryCoordinates { x, y, z, mask }
+            QueryCoordinates {
+                x,
+                y,
+                z,
+                depth,
+                mask,
+            }
         }
     }
 
@@ -130,7 +139,7 @@ mod nzcvm {
     /// which consumes the builder:
     ///
     /// ```python
-    /// MeshModelBuilder(vertices, faces, priority).name("crust").interpolated(qualities)
+    /// MeshModelBuilder(vertices, faces, priority, "elevation").name("crust").interpolated(qualities)
     /// ```
     ///
     /// Each field has its own finishing method, so the field types are
@@ -141,6 +150,7 @@ mod nzcvm {
         /// Taken by the finishing method.
         geometry: Option<Geometry>,
         priority: u8,
+        vertical: Vertical,
         transform: Option<Affine3<Real>>,
         name: String,
     }
@@ -157,12 +167,25 @@ mod nzcvm {
         ///     ``(M, 4)`` integer array of tetrahedral cell indices.
         /// priority :
         ///     Model priority (lower number = higher priority).
+        /// vertical :
+        ///     ``"elevation"`` if the vertices' third coordinate is negated
+        ///     elevation, or ``"depth"`` if it is depth below the topography.
         #[new]
         fn new(
             vertices: PyReadonlyArray2<Real>,
             faces: PyReadonlyArray2<usize>,
             priority: u8,
+            vertical: &str,
         ) -> PyResult<Self> {
+            let vertical = match vertical {
+                "elevation" => Vertical::Elevation,
+                "depth" => Vertical::Depth,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "vertical must be 'elevation' or 'depth', got {other:?}"
+                    )));
+                }
+            };
             let vertices = vertices
                 .as_array()
                 .axis_iter(Axis(0))
@@ -180,6 +203,7 @@ mod nzcvm {
             Ok(Self {
                 geometry: Some((vertices, faces)),
                 priority,
+                vertical,
                 transform: None,
                 name: String::new(),
             })
@@ -276,7 +300,7 @@ mod nzcvm {
             let model = MeshModel::new(vertices, faces, field, self.transform)
                 .map_err(|e| PyValueError::new_err(format!("Model {name:?}: {e}")))?;
             Ok(PyMeshModel {
-                inner: Some(TreeModel::new(model, self.priority, name)),
+                inner: Some(TreeModel::new(model, self.priority, name, self.vertical)),
             })
         }
     }
@@ -399,18 +423,22 @@ mod nzcvm {
         /// Query the velocity model at a single point.
         ///
         /// Only models whose priority falls in `[priority_lo, priority_hi]` contribute.
-        /// Use `0, 255` to query all models.
+        /// Use `0, 255` to query all models. `depth` is the point's depth
+        /// below the topography, which depth-queried models read in place of
+        /// `z`.
         /// Returns a dict `{rho, vp, vs, qp, qs, alpha}` or `None` if outside all models.
+        #[allow(clippy::too_many_arguments)]
         pub fn query<'py>(
             &self,
             py: Python<'py>,
             x: Real,
             y: Real,
             z: Real,
+            depth: Real,
             priority_lo: u8,
             priority_hi: u8,
         ) -> PyResult<Option<Bound<'py, PyAny>>> {
-            let pt = Point3::new(x, y, z);
+            let pt = Point4::new(x, y, z, depth);
             self.inner
                 .query(pt, None, priority_lo, priority_hi)
                 .map(|q| pythonize(py, &q).map_err(|e| e.into()))
@@ -440,8 +468,9 @@ mod nzcvm {
             x: Real,
             y: Real,
             z: Real,
+            depth: Real,
         ) -> PyResult<Bound<'py, PyAny>> {
-            let pt = Point3::new(x, y, z);
+            let pt = Point4::new(x, y, z, depth);
             pythonize(py, &self.inner.query_stats(pt)).map_err(|e| e.into())
         }
 
@@ -455,8 +484,9 @@ mod nzcvm {
             x: Real,
             y: Real,
             z: Real,
+            depth: Real,
         ) -> PyResult<Bound<'py, PyAny>> {
-            let pt = Point3::new(x, y, z);
+            let pt = Point4::new(x, y, z, depth);
             pythonize(py, &self.inner.query_explain(pt)).map_err(|e| e.into())
         }
 
@@ -478,7 +508,7 @@ mod nzcvm {
         /// * `out`    – `(N, 6)` float32 array that receives the results
         ///   in-place.  Columns are ordered `[rho, vp, vs, qp, qs, alpha]`.
         ///   Rows for points outside all matching models are left unchanged.
-        /// * `coords` – [`QueryCoordinates`] bundling the three `(N,)` float32
+        /// * `coords` – [`QueryCoordinates`] bundling the four `(N,)` float32
         ///   coordinate arrays and an optional boolean mask.
         /// * `params` – priority bounds; use `QueryParams(0, 255)` for all models.
         ///
@@ -499,16 +529,19 @@ mod nzcvm {
             let x_ro = coords.x.bind(py).readonly();
             let y_ro = coords.y.bind(py).readonly();
             let z_ro = coords.z.bind(py).readonly();
+            let depth_ro = coords.depth.bind(py).readonly();
             let xs = x_ro.as_array();
             let ys = y_ro.as_array();
             let zs = z_ro.as_array();
+            let depths = depth_ro.as_array();
             let n = xs.len();
-            if ys.len() != n || zs.len() != n {
+            if ys.len() != n || zs.len() != n || depths.len() != n {
                 return Err(PyValueError::new_err(format!(
-                    "x, y, z must have the same length; got x={}, y={}, z={}",
+                    "x, y, z, depth must have the same length; got x={}, y={}, z={}, depth={}",
                     n,
                     ys.len(),
                     zs.len(),
+                    depths.len(),
                 )));
             }
             if out.shape()[0] != n || out.shape()[1] != 6 {
@@ -521,8 +554,8 @@ mod nzcvm {
             match &coords.mask {
                 None => {
                     py.detach(|| {
-                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs) {
-                            let pt = Point3::new(xi, yi, zi);
+                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &di in &depths) {
+                            let pt = Point4::new(xi, yi, zi, di);
                             if let Some(q) = self.inner.query(pt, None, lo, hi) {
                                 lane[0] = q.rho;
                                 lane[1] = q.vp;
@@ -544,9 +577,9 @@ mod nzcvm {
                         )));
                     }
                     py.detach(|| {
-                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &mi in &ms) {
+                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &di in &depths, &mi in &ms) {
                             if mi {
-                                let pt = Point3::new(xi, yi, zi);
+                                let pt = Point4::new(xi, yi, zi, di);
                                 if let Some(q) = self.inner.query(pt, None, lo, hi) {
                                     lane[0] = q.rho;
                                     lane[1] = q.vp;
@@ -743,31 +776,10 @@ mod nzcvm {
             let results = map_points(py, &x, &y, |px, py| self.inner.query(px, py, clamp))?;
             Ok(split_results(py, results))
         }
-
-        /// Interpolate barycentrically at many points, over the two triangles
-        /// of each cell either side of its ``[j, k]``–``[j + 1, k + 1]``
-        /// diagonal. See [`StructuredGrid::query_triangulated`].
-        ///
-        /// Returns the ``(N,)`` interpolated values and an ``(N,)`` boolean
-        /// mask of the points outside the grid, which are clamped onto its
-        /// edge when ``clamp`` is true and NaN otherwise.
-        #[pyo3(signature = (x, y, clamp = true))]
-        pub fn query_triangulated_many<'py>(
-            &self,
-            py: Python<'py>,
-            x: PyReadonlyArray1<f64>,
-            y: PyReadonlyArray1<f64>,
-            clamp: bool,
-        ) -> PyResult<QueryManyResult<'py>> {
-            let results = map_points(py, &x, &y, |px, py| {
-                self.inner.query_triangulated(px, py, clamp)
-            })?;
-            Ok(split_results(py, results))
-        }
     }
 
-    /// Split per-point `(value, outside)` results into the two arrays
-    /// [`PyStructuredGrid::query_many`] returns.
+    /// Split per-point `(value, outside)` results into the two arrays the
+    /// batched queries return.
     fn split_results<'py>(py: Python<'py>, results: Array1<(f64, bool)>) -> QueryManyResult<'py> {
         let values = results.mapv(|(value, _)| value);
         let outside = results.mapv(|(_, outside)| outside);

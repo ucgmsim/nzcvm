@@ -90,7 +90,7 @@ def _mesh(
         TOPOGRAPHY + THICKNESS if bottom is None else bottom,
         model,
         culling_volume=1e-3,
-        pad_top=pad_top,
+        padded_top=TOPOGRAPHY - PAD_DEPTH if pad_top else None,
         priority=3,
     )
 
@@ -221,7 +221,7 @@ def test_layered_mesh_round_trips_through_zarr(tmp_path: Path) -> None:
         TOPOGRAPHY + THICKNESS,
         PROFILE,
         culling_volume=1e-3,
-        pad_top=False,
+        padded_top=None,
     )
     mesh = construct_mesh.construct_volumetric_mesh(
         "layered", shapely.box(0.0, 0.0, SIDE, SIDE), layers, priority=3
@@ -334,3 +334,134 @@ def test_max_edge_caps_triangle_size() -> None:
     corners = triangulation.vertices[triangulation.triangles]
     edges = np.linalg.norm(corners - np.roll(corners, 1, axis=1), axis=2)
     assert edges.max() <= 300.0 + 1e-6
+
+
+def test_depth_below_measures_from_the_topography() -> None:
+    x, y = np.meshgrid(np.arange(4.0), np.arange(3.0), indexing="ij")
+    topography = SurfaceGrid(x, y, -10.0 - x)  # rising to the east
+    basement = SurfaceGrid(x, y, np.full_like(x, 200.0))
+    depth = construct_mesh.depth_below(basement, topography)
+    np.testing.assert_allclose(depth.values, 210.0 + x)
+
+
+# ---------------------------------------------------------------------------
+# Stacked layers sharing one triangulation
+# ---------------------------------------------------------------------------
+
+
+def _stack_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    """A synthetic DEM, basin outline and basement, plus a horizon halfway down."""
+    import h5py
+    from typer.testing import CliRunner
+
+    from nzcvm.scripts.synthetic import app as synthetic_app
+
+    runner = CliRunner()
+    for args in (
+        ["dem", str(tmp_path / "dem.h5"), "--samples", "24"],
+        ["basin", "gully", str(tmp_path), "--samples", "24"],
+    ):
+        result = runner.invoke(synthetic_app, args)
+        assert result.exit_code == 0, result.output
+    dem_path = tmp_path / "dem.h5"
+    basement_path = tmp_path / "gully_basement.h5"
+    with h5py.File(basement_path) as f:
+        longitude, latitude = f["longitude"][:], f["latitude"][:]
+        basement = f["elevation"][:]
+    dem = construct_mesh.read_surface_window(dem_path)
+    lon_grid, lat_grid = np.meshgrid(longitude, latitude)
+    x, y = construct_mesh.TRANSFORMER.transform(lon_grid, lat_grid)
+    ground = -dem(x.ravel(), y.ravel(), clamp=True)[0].reshape(x.shape)
+    middle_path = tmp_path / "middle.h5"
+    with h5py.File(middle_path, "w") as f:
+        f["longitude"], f["latitude"] = longitude, latitude
+        f["elevation"] = (ground + basement) / 2
+    return tmp_path / "gully_outline.geojson", dem_path, middle_path, basement_path
+
+
+def _build(*args: str | Path) -> None:
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(construct_mesh.app, [str(arg) for arg in args])
+    assert result.exit_code == 0, result.output
+
+
+def _columns(mesh: xr.Dataset, reduce) -> pd.Series:
+    """The top or bottom (by *reduce*) depth of each vertex column, by (x, y)."""
+    frame = pd.DataFrame({"x": mesh.x.values, "y": mesh.y.values, "z": mesh.z.values})
+    return frame.groupby(["x", "y"]).z.agg(reduce)
+
+
+def test_stacked_layers_share_their_interface(tmp_path: Path) -> None:
+    outline, dem, middle, basement = _stack_inputs(tmp_path)
+    stack = tmp_path / "stack.npz"
+    _build("triangulate", stack, outline, dem, middle, basement)
+    constants = [
+        "--rho",
+        "2000",
+        "--vp",
+        "2000",
+        "--vs",
+        "800",
+        "--qp",
+        "80",
+        "--qs",
+        "40",
+    ]
+    upper, lower = tmp_path / "upper.zarr", tmp_path / "lower.zarr"
+    _build(
+        "main", outline, dem, dem, middle, upper, *constants, "--triangulation", stack
+    )
+    _build(
+        "main",
+        outline,
+        dem,
+        middle,
+        basement,
+        lower,
+        *constants,
+        "--no-pad-top",
+        "--triangulation",
+        stack,
+    )
+
+    upper_bottom = _columns(xr.open_zarr(upper), "max")
+    lower_top = _columns(xr.open_zarr(lower), "min")
+    shared = upper_bottom.index.intersection(lower_top.index)
+    assert len(shared) > 10
+    np.testing.assert_array_equal(upper_bottom[shared], lower_top[shared])
+
+
+def test_a_triangulation_from_another_region_is_refused(tmp_path: Path) -> None:
+    outline, dem, middle, basement = _stack_inputs(tmp_path)
+    stack = tmp_path / "stack.npz"
+    _build("triangulate", stack, outline, dem, middle, basement)
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(
+        construct_mesh.app,
+        [
+            "main",
+            str(outline),
+            str(dem),
+            str(dem),
+            str(middle),
+            str(tmp_path / "upper.zarr"),
+            "--rho",
+            "2000",
+            "--vp",
+            "2000",
+            "--vs",
+            "800",
+            "--qp",
+            "80",
+            "--qs",
+            "40",
+            "--simplification",
+            "500",
+            "--triangulation",
+            str(stack),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "different region" in result.output

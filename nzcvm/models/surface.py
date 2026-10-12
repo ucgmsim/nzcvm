@@ -1,8 +1,8 @@
 """Surface interpolation for topography-based depth transforms.
 
-A :class:`Surface` wraps a structured surface mesh and provides point-query
-interpolation, used to convert depth-below-surface coordinates into
-absolute elevations.
+A :class:`Surface` wraps a surface sampled on a regular lattice and provides
+point-query interpolation, used to convert depth-below-surface coordinates
+into absolute elevations.
 
 A :class:`SurfaceGrid` holds values on a regular latitude/longitude grid
 projected into NZTM, interpolated bilinearly. :func:`read_surface_file` reads
@@ -12,6 +12,7 @@ one from a modeller-style HDF5 surface file, which holds 1-D ``latitude`` and
 
 import logging
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Self
 
@@ -22,8 +23,6 @@ import xarray as xr
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.tree import Tree
 
-from nzcvm import registry
-from nzcvm.models.mesh import StructuredMesh, StructuredMeshSchema
 from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
     StructuredGrid,
     structured_grid,
@@ -35,55 +34,114 @@ TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
 logger = logging.getLogger(__name__)
 
 
+#: Tolerance on the fractional cell coordinates when deciding a point is
+#: outside a :class:`Surface`.
+OUTSIDE_TOLERANCE = 1e-9
+
+
+def _frame_matrix(frame: list[float] | tuple[float, ...]) -> np.ndarray:
+    """``frame`` as a 2 x 3 matrix acting on ``(X, Y, 1)``."""
+    return np.asarray(frame, dtype=np.float64).reshape(2, 3)
+
+
 @dataclass
 class Surface:
-    """A surface interpolator over a structured mesh.
+    """A surface interpolator over a grid that's regular in its own frame.
 
     Given a set of (x, y) query points, returns the interpolated elevation
     (z) value at each location.  Used by grid builders to convert
     depth-below-surface coordinates to absolute elevations.
 
-    The surface splits each mesh cell into two triangles along the diagonal
-    from node ``[i, j]`` to node ``[i + 1, j + 1]``. A point's elevation
-    interpolates barycentrically over the triangle containing it. The mesh's
-    structure locates the cell. The surface stores only the node coordinates
-    and values: no triangle list and no search tree.
+    A query maps its points into the surface's frame and finds each one's
+    cell from the coordinate indexes, then gathers the cell's corners with
+    one pointwise selection and interpolates bilinearly. A surface from
+    :meth:`load` is lazily indexed: the selection reads only the chunks
+    holding those corners.
     """
 
-    inner: StructuredGrid
-    bounds: np.ndarray
-    n_points: int
+    #: ``z(y, x)`` with increasing 1-D frame coordinates.
+    values: xr.DataArray
+    #: The affine map from NZTM into the frame, as a 2 x 3 matrix.
+    frame: np.ndarray
 
     @classmethod
-    def from_dataset(cls, mesh: StructuredMesh) -> Self:
-        x = np.asarray(mesh.x.values, dtype=np.float64)
-        y = np.asarray(mesh.y.values, dtype=np.float64)
-        z = np.asarray(mesh.z.values, dtype=np.float64)
-        inner = structured_grid(x, y, z)
-
-        bounds = np.array(
-            [x.min(), y.min(), float(z.min()), x.max(), y.max(), float(z.max())]
-        )
-
-        return cls(inner, bounds=bounds, n_points=x.size)
+    def from_dataset(cls, mesh: xr.Dataset) -> Self:
+        """Build a surface over *mesh* (see :class:`~nzcvm.models.mesh.StructuredMeshSchema`)."""
+        return cls(mesh.z.sortby(["y", "x"]), _frame_matrix(mesh.attrs["frame"]))
 
     @classmethod
     def load(cls, path: Path) -> Self:
-        """Load a surface mesh from *surface_path* and return a :class:`Surface`.
+        """Open the surface at *path*, lazily indexed.
 
         Parameters
         ----------
         path :
-            Path to the surface mesh file.
+            Path to the surface's Zarr store.
 
         Returns
         -------
         Surface
-            The loaded surface, ready to interpolate.
+            The surface, ready to interpolate.
         """
-        with xr.open_dataset(path) as dset:
-            mesh = StructuredMeshSchema.from_dataset(dset)
-            return cls.from_dataset(mesh)
+        # cache=False, or one read of the whole array would keep it all.
+        dataset = xr.open_dataset(path, engine="zarr", chunks=None, cache=False)
+        return cls.from_dataset(dataset)
+
+    def to_frame(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """NZTM points ``(x, y)`` in the surface's frame."""
+        frame_x, frame_y = self.frame @ np.stack([x, y, np.ones_like(x)])
+        return frame_x, frame_y
+
+    def from_frame(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Frame points ``(x, y)`` in NZTM."""
+        linear, offset = self.frame[:, :2], self.frame[:, 2]
+        nztm_x, nztm_y = np.linalg.solve(
+            linear, np.stack([x - offset[0], y - offset[1]])
+        )
+        return nztm_x, nztm_y
+
+    def __dask_tokenize__(self) -> object:
+        """A token for dask that doesn't read the surface.
+
+        Grid builders hand :meth:`transform` to dask, which tokenizes it to
+        name tasks. Left to itself, dask hashes every value of a lazily
+        indexed surface, reading all of it. A surface doesn't change once
+        loaded. The object itself identifies it.
+        """
+        return type(self).__name__, id(self)
+
+    @property
+    def n_points(self) -> int:
+        """Number of nodes."""
+        return int(self.values.size)
+
+    @property
+    def corners(self) -> np.ndarray:
+        """``(4, 2)`` NZTM positions of the grid's corner nodes."""
+        x, y = self.values.x.values, self.values.y.values
+        frame_x = np.array([x[0], x[-1], x[0], x[-1]])
+        frame_y = np.array([y[0], y[0], y[-1], y[-1]])
+        return np.column_stack(self.from_frame(frame_x, frame_y))
+
+    @cached_property
+    def bounds(self) -> np.ndarray:
+        """``[xmin, ymin, zmin, xmax, ymax, zmax]`` of the surface.
+
+        The z range reads every value. A lazy surface works it out only when
+        asked.
+        """
+        corners = self.corners
+        values = self.values.values
+        return np.array(
+            [
+                corners[:, 0].min(),
+                corners[:, 1].min(),
+                float(np.nanmin(values)),
+                corners[:, 0].max(),
+                corners[:, 1].max(),
+                float(np.nanmax(values)),
+            ]
+        )
 
     def transform(
         self, x: np.ndarray, y: np.ndarray, extrapolate: bool = False
@@ -96,10 +154,9 @@ class Surface:
             Query point coordinates in the same projected CRS as the mesh.
         extrapolate :
             If True, a point outside the surface takes the edge value at its
-            position clamped onto the nearest edge cell, which extends the
-            edge row or column outward. If False, it takes NaN. A point
-            inside the surface where the surface has no value stays NaN
-            either way.
+            position clamped onto the grid, which extends the edge row or
+            column outward. If False, it takes NaN. A point inside the
+            surface where the surface has no value stays NaN either way.
 
         Returns
         -------
@@ -108,25 +165,51 @@ class Surface:
             point falls outside the surface, unless *extrapolate* fills it.
         """
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
-        x_flat = np.asarray(x, dtype=np.float64).ravel()
-        y_flat = np.asarray(y, dtype=np.float64).ravel()
+        frame_x, frame_y = self.to_frame(
+            np.asarray(x, dtype=np.float64).ravel(),
+            np.asarray(y, dtype=np.float64).ravel(),
+        )
+        if frame_x.size == 0:
+            return np.empty(x.shape, dtype=x.dtype)
 
-        z, _ = self.inner.query_triangulated_many(x_flat, y_flat, extrapolate)
+        def cell(axis: str, position: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            # The node at or before each position, and the fraction of the
+            # way to the next node.
+            index = self.values.indexes[axis]
+            nodes = index.to_numpy()
+            lower = np.clip(
+                index.get_indexer(position, method="pad"), 0, len(nodes) - 2
+            )
+            fraction = (position - nodes[lower]) / (nodes[lower + 1] - nodes[lower])
+            return lower, fraction
+
+        ix, tx = cell("x", frame_x)
+        iy, ty = cell("y", frame_y)
+        outside = (
+            (tx < -OUTSIDE_TOLERANCE)
+            | (tx > 1 + OUTSIDE_TOLERANCE)
+            | (ty < -OUTSIDE_TOLERANCE)
+            | (ty > 1 + OUTSIDE_TOLERANCE)
+        )
+        tx, ty = np.clip(tx, 0.0, 1.0), np.clip(ty, 0.0, 1.0)
+        corners = (
+            self.values.isel(
+                x=xr.DataArray(np.concatenate([ix, ix + 1, ix, ix + 1]), dims="point"),
+                y=xr.DataArray(np.concatenate([iy, iy, iy + 1, iy + 1]), dims="point"),
+            )
+            .values.reshape(4, -1)
+            .astype(np.float64)
+        )
+        z = (
+            (1 - tx) * (1 - ty) * corners[0]
+            + tx * (1 - ty) * corners[1]
+            + (1 - tx) * ty * corners[2]
+            + tx * ty * corners[3]
+        )
+        if not extrapolate:
+            z[outside] = np.nan
         logger.debug("Query complete.")
         return z.reshape(x.shape).astype(x.dtype)
-
-    def __getstate__(self):
-        # When standard pickle hits this object, bypass pickling the Rust object
-        state = self.__dict__.copy()
-
-        state["inner"] = registry.pickle_pass(self.inner)
-        return state
-
-    def __setstate__(self, state):
-        # When unpickling, swap the key back for the live object reference
-        self.__dict__.update(state)
-        key = state["inner"]
-        self.inner = registry.REGISTRY[key]
 
     def __rich_console__(
         self, _console: Console, _options: ConsoleOptions
@@ -139,7 +222,7 @@ class Surface:
             The metadata tree rich should display for this surface.
         """
         tree = Tree("Surface Interpolation")
-        tree.add("Kind: Linear/Sample")
+        tree.add("Kind: Bilinear")
         tree.add(
             f"Bounds: [X: {self.bounds[0]:.0f}-{self.bounds[3]:.0f}, Y: {self.bounds[1]:.0f}-{self.bounds[4]:.0f}]"
         )
@@ -255,3 +338,100 @@ def read_surface_file(
     lon_grid, lat_grid = np.meshgrid(longitude, latitude)
     x, y = TRANSFORMER.transform(lon_grid, lat_grid)
     return SurfaceGrid(x, y, values)
+
+
+def median_spacing(grid: SurfaceGrid) -> float:
+    """The median distance between neighbouring nodes of *grid*, in metres."""
+    x = np.asarray(grid.x, dtype=np.float64)
+    y = np.asarray(grid.y, dtype=np.float64)
+    steps = np.concatenate(
+        [
+            np.hypot(np.diff(x, axis=0), np.diff(y, axis=0)).ravel(),
+            np.hypot(np.diff(x, axis=1), np.diff(y, axis=1)).ravel(),
+        ]
+    )
+    return float(np.median(steps))
+
+
+def _bbox_frame_range(
+    surface: Surface, bbox: tuple[float, float, float, float]
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The x and y ranges, in *surface*'s frame, covering a lat/lon *bbox*."""
+    min_lat, max_lat, min_lon, max_lon = bbox
+    # A latitude/longitude box curves in NZTM, so project its whole
+    # boundary rather than its corners.
+    edge = np.linspace(0.0, 1.0, 64)
+    lon = np.concatenate(
+        [
+            min_lon + (max_lon - min_lon) * edge,
+            np.full(64, max_lon),
+            max_lon - (max_lon - min_lon) * edge,
+            np.full(64, min_lon),
+        ]
+    )
+    lat = np.concatenate(
+        [
+            np.full(64, min_lat),
+            min_lat + (max_lat - min_lat) * edge,
+            np.full(64, max_lat),
+            max_lat - (max_lat - min_lat) * edge,
+        ]
+    )
+    frame_x, frame_y = surface.to_frame(
+        *map(np.asarray, TRANSFORMER.transform(lon, lat))
+    )
+    return (frame_x.min(), frame_x.max()), (frame_y.min(), frame_y.max())
+
+
+def read_surface_window(
+    surface_path: Path,
+    bbox: tuple[float, float, float, float] | None = None,
+    spacing: float | None = None,
+) -> SurfaceGrid:
+    """Read a surface, as depth (+z down), around *bbox* onto an NZTM grid.
+
+    A Zarr store contains a surface already stored as depth. This averages
+    the whole surface in blocks to about *spacing*, so blocks line up
+    whichever window reads them, then selects the window covering the box.
+    Dask computes only the blocks in the window. It reads anything else
+    as an HDF5 elevation file with :func:`read_surface_file`, which negates
+    it.
+
+    Parameters
+    ----------
+    surface_path :
+        Zarr surface or HDF5 elevation file.
+    bbox :
+        ``(min_lat, max_lat, min_lon, max_lon)``. If given, read only the
+        nodes covering it.
+    spacing :
+        Node spacing, in metres, to average a Zarr surface to. The nearest
+        whole number of nodes makes a block. Defaults to the surface's own
+        spacing. It has no effect on an HDF5 surface.
+
+    Returns
+    -------
+    SurfaceGrid
+        The depths at projected nodes.
+    """
+    if surface_path.suffix != ".zarr":
+        return read_surface_file(surface_path, bbox=bbox)
+    surface = Surface.from_dataset(xr.open_zarr(surface_path))
+    z = surface.values
+    node_spacing = float(min(np.diff(z.x.values[:2])[0], np.diff(z.y.values[:2])[0]))
+    factor = 1 if spacing is None else max(1, round(spacing / node_spacing))
+    if factor > 1:
+        z = z.coarsen(x=factor, y=factor, boundary="trim").mean()
+    if bbox is not None:
+        (x_lo, x_hi), (y_lo, y_hi) = _bbox_frame_range(surface, bbox)
+        margin = factor * node_spacing
+        z = z.sel(
+            x=slice(x_lo - margin, x_hi + margin), y=slice(y_lo - margin, y_hi + margin)
+        )
+    frame_x, frame_y = np.meshgrid(z.x.values, z.y.values)
+    nztm_x, nztm_y = surface.from_frame(frame_x.ravel(), frame_y.ravel())
+    return SurfaceGrid(
+        nztm_x.reshape(frame_x.shape),
+        nztm_y.reshape(frame_x.shape),
+        np.asarray(z.values, dtype=np.float64),
+    )

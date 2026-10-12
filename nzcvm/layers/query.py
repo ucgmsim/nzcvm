@@ -60,14 +60,15 @@ class QueryLayer(Layer[QueryLayerConfig], config_cls=QueryLayerConfig):
         Parameters
         ----------
         grid :
-            Grid chunk with spatial variables ``x``, ``y``, ``z``.
+            Grid chunk with spatial variables ``x``, ``y``, ``z`` and the
+            ``depth`` below the topography, which basins read.
         model_range :
             Priority range used for the query.
         """
 
         logger.debug("Beginning query layer query with model_range=%s", model_range)
         qualities = self.model.query_many(
-            grid.x, grid.y, grid.z, model_range=model_range
+            grid.x, grid.y, grid.z, grid.depth, model_range=model_range
         )
         logger.debug("Query complete")
         return qualities

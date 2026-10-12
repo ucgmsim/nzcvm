@@ -13,7 +13,7 @@ from scipy.spatial.transform import Rotation
 
 from nzcvm.coordinates import Affine, affine, reflect_x, scale, translate
 from nzcvm.models.mesh import ModelType as CellModel
-from nzcvm.models.mesh import TetrahedralMesh, make_mesh, mesh_encoding
+from nzcvm.models.mesh import TetrahedralMesh, Vertical, make_mesh, mesh_encoding
 
 CRS_NZTM = CRS.from_epsg(2193)
 CRS_WGS = CRS.from_epsg(4326)
@@ -215,6 +215,7 @@ def data_frame_to_mesh(
 
     return make_mesh(
         name=name,
+        vertical=Vertical.ELEVATION,
         points=points,
         connectivity=connectivity,
         cell_data={

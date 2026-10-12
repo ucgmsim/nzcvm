@@ -29,7 +29,12 @@ from rich.tree import Tree
 
 from nzcvm import nzcvm, registry  # ty: ignore[unresolved-import]
 from nzcvm.components import Component
-from nzcvm.models.mesh import ModelType, TetrahedralMesh, TetrahedralMeshSchema
+from nzcvm.models.mesh import (
+    ModelType,
+    TetrahedralMesh,
+    TetrahedralMeshSchema,
+    Vertical,
+)
 from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
     PyModelTree,
     QueryCoordinates,
@@ -393,6 +398,7 @@ class ModelTree:
         x: Any,
         y: Any,
         z: Any,
+        depth: Any,
         *,
         model_range: ModelRange = ModelRange.ALL,
     ) -> Quality | None:
@@ -401,7 +407,10 @@ class ModelTree:
         Parameters
         ----------
         x, y, z :
-            Coordinates in the model's projected CRS.
+            Coordinates in the model's projected CRS, ``z`` positive down.
+        depth :
+            Depth of the point below the topography, which depth-queried
+            meshes read in place of ``z``.
         model_range :
             Restricts the query to models whose priority falls within this
             range.  Defaults to :attr:`ModelRange.ALL`.
@@ -419,16 +428,18 @@ class ModelTree:
         ModelTree.get_explanation : Query with per-model contribution details.
         """
         lo, hi = model_range.value
-        quality_dict = self.inner.query(x, y, z, lo, hi)
+        quality_dict = self.inner.query(x, y, z, depth, lo, hi)
         return Quality.from_dict(quality_dict) if quality_dict is not None else None
 
-    def query_stats(self, x: Any, y: Any, z: Any) -> QueryStats:
+    def query_stats(self, x: Any, y: Any, z: Any, depth: Any) -> QueryStats:
         """Query one point and return traversal diagnostics.
 
         Parameters
         ----------
         x, y, z :
             Coordinates in the model's projected CRS (metres).
+        depth :
+            Depth of the point below the topography (metres).
 
         Returns
         -------
@@ -439,15 +450,17 @@ class ModelTree:
         --------
         ModelTree.query : Query without diagnostics.
         """
-        return QueryStats.from_dict(self.inner.query_stats(x, y, z))
+        return QueryStats.from_dict(self.inner.query_stats(x, y, z, depth))
 
-    def get_explanation(self, x: Any, y: Any, z: Any) -> Explanation:
+    def get_explanation(self, x: Any, y: Any, z: Any, depth: Any) -> Explanation:
         """Return a full :class:`Explanation` for a single-point query.
 
         Parameters
         ----------
         x, y, z :
             Coordinates in the model's projected CRS (metres).
+        depth :
+            Depth of the point below the topography (metres).
 
         Returns
         -------
@@ -458,9 +471,9 @@ class ModelTree:
         --------
         ModelTree.explain : Pretty-print the explanation to the terminal.
         """
-        return Explanation.from_dict(self.inner.explain(x, y, z))
+        return Explanation.from_dict(self.inner.explain(x, y, z, depth))
 
-    def explain(self, x: float, y: float, z: float) -> None:
+    def explain(self, x: float, y: float, z: float, depth: float) -> None:
         """Pretty-print the blending explanation for a query point.
 
         Prints a rich-formatted tree to stdout showing each model's
@@ -470,12 +483,14 @@ class ModelTree:
         ----------
         x, y, z :
             Coordinates in the model's projected CRS (metres).
+        depth :
+            Depth of the point below the topography (metres).
 
         See Also
         --------
         ModelTree.get_explanation : Return the explanation as a Python object.
         """
-        explanation = self.get_explanation(x, y, z)
+        explanation = self.get_explanation(x, y, z, depth)
         rich.print(explanation)
         if len(explanation.contributions) > 1:
             rich.print(
@@ -488,6 +503,7 @@ class ModelTree:
         x: Any,
         y: Any,
         z: Any,
+        depth: Any,
         model_range: ModelRange = ModelRange.ALL,
         out: np.ndarray | None = None,
         where: Any = None,
@@ -498,6 +514,8 @@ class ModelTree:
         ----------
         x, y, z :
             Arrays of coordinates.
+        depth :
+            Array of depths below the topography, the same shape.
         model_range :
             Restricts the query to models whose priority falls within this
             range.  Defaults to :attr:`ModelRange.ALL`.
@@ -525,10 +543,11 @@ class ModelTree:
         x = np.asarray(x, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32)
         z = np.asarray(z, dtype=np.float32)
-        if x.shape != y.shape or x.shape != z.shape:
+        depth = np.asarray(depth, dtype=np.float32)
+        if not x.shape == y.shape == z.shape == depth.shape:
             raise ValueError(
-                f"x, y, z must have the same shape; "
-                f"got x={x.shape}, y={y.shape}, z={z.shape}"
+                f"x, y, z, depth must have the same shape; "
+                f"got x={x.shape}, y={y.shape}, z={z.shape}, depth={depth.shape}"
             )
         orig_shape = x.shape
         n = x.size
@@ -546,7 +565,9 @@ class ModelTree:
             where_np = np.broadcast_to(np.asarray(where, dtype=bool), orig_shape)
             where_flat = np.ascontiguousarray(where_np.ravel())
 
-        coords = QueryCoordinates(x.ravel(), y.ravel(), z.ravel(), where_flat)
+        coords = QueryCoordinates(
+            x.ravel(), y.ravel(), z.ravel(), depth.ravel(), where_flat
+        )
         self.inner.query_many(out_flat, coords, params)
         return out_flat.reshape(orig_shape + (6,))
 
@@ -555,6 +576,7 @@ class ModelTree:
         x: xr.DataArray,
         y: xr.DataArray,
         z: xr.DataArray,
+        depth: xr.DataArray,
         *,
         model_range: ModelRange = ModelRange.ALL,
     ) -> Qualities:
@@ -564,6 +586,8 @@ class ModelTree:
         ----------
         x, y, z :
             Arrays of coordinates, broadcastable to a common shape.
+        depth :
+            Depths below the topography, broadcastable to the same shape.
         model_range :
             Restricts the query to models whose priority falls within this
             range.  Defaults to :attr:`ModelRange.ALL`.
@@ -577,13 +601,14 @@ class ModelTree:
         --------
         ModelTree.query : Same query logic outside of the pipeline
         """
-        x, y, z = xr.broadcast(x, y, z)
+        x, y, z, depth = xr.broadcast(x, y, z, depth)
         darr = xr.apply_ufunc(
             self._query_many_raw,
             x,
             y,
             z,
-            input_core_dims=[[], [], []],
+            depth,
+            input_core_dims=[[], [], [], []],
             output_core_dims=[["component"]],
             kwargs={"model_range": model_range},
         )
@@ -665,7 +690,9 @@ def _mesh_model_from_tetra(
 
     points = np.c_[mesh_model.x.values, mesh_model.y.values, mesh_model.z.values]
     priority = mesh_model.priority.isel(j=0).item()
-    builder = nzcvm.MeshModelBuilder(points, connectivity, priority).name(name)
+    vertical = Vertical(mesh_model.attrs["vertical"])
+    builder = nzcvm.MeshModelBuilder(points, connectivity, priority, str(vertical))
+    builder = builder.name(name)
     transform = mesh_model.attrs.get("transform")
     if transform is not None:
         builder.transform(np.array(transform, dtype=np.float32))
