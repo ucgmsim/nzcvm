@@ -10,7 +10,7 @@ from nzcvm.models.mesh import (
     DEFAULT_STRUCTURED_ENCODING_SETTINGS,
     SURFACE_CHUNK_SIZE,
     StructuredMesh,
-    regular_mesh,
+    surface_mesh,
 )
 from nzcvm.scripts._extras import missing_extra
 
@@ -29,7 +29,7 @@ def _valid_span(valid: xr.DataArray) -> slice:
 def convert_tiff(
     name: str, tiff_model: xr.DataArray, downsample: int, flip: bool = False
 ) -> StructuredMesh:
-    """Turn a north-up raster into a surface on an upright lattice.
+    """Turn a north-up raster into an upright surface.
 
     The result stays as lazy as *tiff_model*. A chunked raster streams
     through to the output without loading whole.
@@ -39,16 +39,17 @@ def convert_tiff(
     name :
         Name of the surface.
     tiff_model :
-        Raster with 1-D ``x`` and ``y`` pixel-centre coordinates.
+        Raster with 1-D ``x`` and ``y`` pixel-centre coordinates in NZTM.
     downsample :
-        Average blocks of this many pixels along each axis.
+        Average whole blocks of this many pixels along each axis, dropping
+        a partial block at the far edge.
     flip :
         Negate the values, turning elevation (up) into depth (down).
 
     Returns
     -------
     StructuredMesh
-        The surface, with ``i`` along ``y`` and ``j`` along ``x``.
+        The surface, indexed ``(y, x)`` by the raster's coordinates.
     """
     # Crop to the bounding box of the data. Dropping every all-NaN row or
     # column instead would leave gaps in the coordinates wherever no-data
@@ -56,27 +57,10 @@ def convert_tiff(
     valid = tiff_model.notnull()
     rows, columns = dask.compute(valid.any("x"), valid.any("y"))
     clipped = tiff_model.isel(x=_valid_span(columns), y=_valid_span(rows))
-    step_x = (clipped.x[1] - clipped.x[0]).item()
-    step_y = (clipped.y[1] - clipped.y[0]).item()
     if downsample > 1:
-        # The first block is always full, so its mean coordinate is the
-        # centre of a full block, and the rest follow at the coarse step.
-        # The padded last block averages fewer coordinates, which would put
-        # its node off the lattice.
-        origin = (
-            clipped.x[:downsample].mean().item(),
-            clipped.y[:downsample].mean().item(),
-        )
-        clipped = clipped.coarsen(x=downsample, y=downsample, boundary="pad").mean()
-        step_x *= downsample
-        step_y *= downsample
-    else:
-        origin = (clipped.x[0].item(), clipped.y[0].item())
-
-    z = clipped.transpose("y", "x").astype(np.float32).data
-    return regular_mesh(
-        name, -z if flip else z, origin, step_i=(0.0, step_y), step_j=(step_x, 0.0)
-    )
+        clipped = clipped.coarsen(x=downsample, y=downsample, boundary="trim").mean()
+    z = clipped.transpose("y", "x").astype(np.float32)
+    return surface_mesh(name, -z.data if flip else z.data, z.x.values, z.y.values)
 
 
 @app.command()
@@ -102,7 +86,7 @@ def main(
     surface = convert_tiff(
         output_path.stem, dset["band_data"].sel(band=band), downsample, flip
     )
-    surface = surface.chunk({"i": SURFACE_CHUNK_SIZE, "j": SURFACE_CHUNK_SIZE})
+    surface = surface.chunk({"y": SURFACE_CHUNK_SIZE, "x": SURFACE_CHUNK_SIZE})
     surface.to_zarr(output_path, encoding=DEFAULT_STRUCTURED_ENCODING_SETTINGS)
 
 

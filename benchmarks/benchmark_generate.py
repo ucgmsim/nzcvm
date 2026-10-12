@@ -28,7 +28,7 @@ from nzcvm.config.metadata import ModelMetadata
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.layers.dummy import constant
-from nzcvm.models.mesh import regular_mesh
+from nzcvm.models.mesh import surface_mesh
 from nzcvm.velocity_model import VelocityModel
 
 # ---------------------------------------------------------------------------
@@ -58,13 +58,11 @@ def _write_flat_surface(path: Path) -> None:
     xmin, ymin = 1_000_000.0, 4_700_000.0
     extent = 2_000_000.0  # 2000 km side, which encloses the benchmark domain
     n = 10
-    step = extent / (n - 1)
-    mesh = regular_mesh(
+    mesh = surface_mesh(
         "flat",
         np.zeros((n, n), dtype=np.float32),
-        origin=(xmin, ymin),
-        step_i=(step, 0.0),
-        step_j=(0.0, step),
+        x=np.linspace(xmin, xmin + extent, n),
+        y=np.linspace(ymin, ymin + extent, n),
     )
     mesh.to_zarr(path)
 

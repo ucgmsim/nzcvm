@@ -22,7 +22,7 @@ import xarray as xr
 from typer.testing import CliRunner
 
 from nzcvm import ely_taper
-from nzcvm.models.mesh import regular_mesh
+from nzcvm.models.mesh import surface_mesh
 from nzcvm.models.surface import TRANSFORMER
 from nzcvm.scripts import banks
 
@@ -45,13 +45,11 @@ def _write_basement_h5(
 
 def _flat_dem_surface(cx: float, cy: float, side: float, z: float) -> xr.Dataset:
     n = 5
-    step = side / (n - 1)
-    return regular_mesh(
+    return surface_mesh(
         "dem",
         np.full((n, n), z, dtype=np.float32),
-        origin=(cx - side / 2, cy - side / 2),
-        step_i=(step, 0.0),
-        step_j=(0.0, step),
+        x=np.linspace(cx - side / 2, cx + side / 2, n),
+        y=np.linspace(cy - side / 2, cy + side / 2, n),
     )
 
 

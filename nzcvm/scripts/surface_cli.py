@@ -10,7 +10,7 @@ from nzcvm.models.mesh import (
     DEFAULT_STRUCTURED_ENCODING_SETTINGS,
     SURFACE_CHUNK_SIZE,
     StructuredMesh,
-    regular_mesh,
+    surface_mesh,
 )
 from nzcvm.models.surface import SurfaceGrid, median_spacing, read_surface_file
 
@@ -40,27 +40,23 @@ def resample_upright(
     Returns
     -------
     StructuredMesh
-        The resampled surface, with ``i`` along ``y`` and ``j`` along ``x``.
+        The resampled surface, indexed ``(y, x)`` by NZTM coordinates.
     """
     x = np.asarray(grid.x, dtype=np.float64)
     y = np.asarray(grid.y, dtype=np.float64)
     if spacing is None:
         spacing = median_spacing(grid)
     origin = (x.min(), y.min())
-    ni = int(np.ceil((y.max() - origin[1]) / spacing)) + 1
-    nj = int(np.ceil((x.max() - origin[0]) / spacing)) + 1
-    node_y, node_x = np.meshgrid(
-        origin[1] + spacing * np.arange(ni),
-        origin[0] + spacing * np.arange(nj),
-        indexing="ij",
+    node_x = origin[0] + spacing * np.arange(
+        int(np.ceil((x.max() - origin[0]) / spacing)) + 1
     )
-    values, _ = grid(node_x.ravel(), node_y.ravel(), clamp=False)
-    return regular_mesh(
-        name,
-        values.reshape(ni, nj).astype(np.float32),
-        origin,
-        step_i=(0.0, spacing),
-        step_j=(spacing, 0.0),
+    node_y = origin[1] + spacing * np.arange(
+        int(np.ceil((y.max() - origin[1]) / spacing)) + 1
+    )
+    grid_x, grid_y = np.meshgrid(node_x, node_y)
+    values, _ = grid(grid_x.ravel(), grid_y.ravel(), clamp=False)
+    return surface_mesh(
+        name, values.reshape(grid_x.shape).astype(np.float32), node_x, node_y
     )
 
 
@@ -90,7 +86,7 @@ def convert(
     """Entry point for the conversion."""
     grid = read_surface_file(surface, scalar_key, flip)
     surface_mesh = resample_upright(surface.stem, grid, spacing).chunk(
-        {"i": SURFACE_CHUNK_SIZE, "j": SURFACE_CHUNK_SIZE}
+        {"y": SURFACE_CHUNK_SIZE, "x": SURFACE_CHUNK_SIZE}
     )
     surface_mesh.to_zarr(
         output, encoding=DEFAULT_STRUCTURED_ENCODING_SETTINGS, mode="w"

@@ -17,7 +17,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from nzcvm.models.mesh import regular_mesh
+from nzcvm.models.mesh import surface_mesh
 from nzcvm.models.surface import Surface
 
 # ---------------------------------------------------------------------------
@@ -30,13 +30,11 @@ def _flat_surface(
 ) -> Surface:
     """Flat plane at constant elevation *z* covering [cx-side/2, cx+side/2]²."""
     n = 5  # 5x5 grid, matching pv.Plane(i_resolution=4, j_resolution=4)
-    step = side / (n - 1)
-    mesh = regular_mesh(
+    mesh = surface_mesh(
         "flat",
         np.full((n, n), z, dtype=np.float32),
-        origin=(cx - side / 2, cy - side / 2),
-        step_i=(step, 0.0),
-        step_j=(0.0, step),
+        x=np.linspace(cx - side / 2, cx + side / 2, n),
+        y=np.linspace(cy - side / 2, cy + side / 2, n),
     )
     return Surface.from_dataset(mesh)
 
@@ -148,13 +146,14 @@ def test_surface_pickleable(flat_surface: Surface) -> None:
 
 
 def _unit_mesh(name: str, values: np.ndarray):
-    """An upright mesh with node ``[i, j]`` at ``(i, j)``."""
-    return regular_mesh(name, values, (0.0, 0.0), (1.0, 0.0), (0.0, 1.0))
+    """An upright mesh with nodes at whole-number ``(x, y)``, indexed ``(y, x)``."""
+    ny, nx = values.shape
+    return surface_mesh(name, values, np.arange(float(nx)), np.arange(float(ny)))
 
 
 def _sloped_values() -> np.ndarray:
-    """``z = x + 10 y`` on a 5x5 unit lattice."""
-    xx, yy = np.meshgrid(np.arange(5.0), np.arange(5.0), indexing="ij")
+    """``z = x + 10 y`` on a 5x5 unit grid, indexed ``(y, x)``."""
+    xx, yy = np.meshgrid(np.arange(5.0), np.arange(5.0))
     return (xx + 10 * yy).astype(np.float32)
 
 
@@ -216,48 +215,60 @@ def test_extrapolate_leaves_inner_no_data_alone() -> None:
     assert z[1] == pytest.approx(5.5)
 
 
-def test_rotated_lattice_reproduces_a_plane() -> None:
-    """A lattice at 45 degrees maps each query into its own frame first."""
-    step = 30.0 / np.sqrt(2.0)
-    origin = (1.5e6, 5.2e6)
-    step_i, step_j = (step, step), (-step, step)
-    ii, jj = np.meshgrid(np.arange(6.0), np.arange(5.0), indexing="ij")
-    node_x = origin[0] + ii * step_i[0] + jj * step_j[0]
-    node_y = origin[1] + ii * step_i[1] + jj * step_j[1]
+def test_rotated_frame_reproduces_a_plane() -> None:
+    """A surface at 45 degrees maps each query into its own frame first."""
+    origin = np.array([1.5e6, 5.2e6])
+    cos = sin = np.sqrt(0.5)
+    # NZTM -> frame: rotate by -45 degrees about the origin.
+    frame = (
+        cos,
+        sin,
+        -(cos * origin[0] + sin * origin[1]),
+        -sin,
+        cos,
+        sin * origin[0] - cos * origin[1],
+    )
+    frame_x, frame_y = 30.0 * np.arange(5.0), 30.0 * np.arange(6.0)
+    grid_x, grid_y = np.meshgrid(frame_x, frame_y)
+    # Frame -> NZTM: rotate back by +45 degrees.
+    nztm_x = origin[0] + cos * grid_x - sin * grid_y
+    nztm_y = origin[1] + sin * grid_x + cos * grid_y
 
     def plane(x, y):
         return 0.02 * (x - origin[0]) - 0.01 * (y - origin[1]) + 7.0
 
     surface = Surface.from_dataset(
-        regular_mesh(
-            "rotated", plane(node_x, node_y).astype(np.float32), origin, step_i, step_j
+        surface_mesh(
+            "rotated", plane(nztm_x, nztm_y).astype(np.float32), frame_x, frame_y, frame
         )
     )
-    fi = np.array([0.3, 2.5, 4.9, 1.0])
-    fj = np.array([0.7, 3.2, 0.1, 4.0])
-    x = origin[0] + fi * step_i[0] + fj * step_j[0]
-    y = origin[1] + fi * step_i[1] + fj * step_j[1]
+    fx = np.array([9.0, 75.0, 3.0, 120.0])
+    fy = np.array([21.0, 96.0, 147.0, 30.0])
+    x = origin[0] + cos * fx - sin * fy
+    y = origin[1] + sin * fx + cos * fy
     np.testing.assert_allclose(surface.transform(x, y), plane(x, y), rtol=1e-6)
-    # One step beyond the last row is outside.
-    outside_x = origin[0] + 6.0 * step_i[0]
-    outside_y = origin[1] + 6.0 * step_i[1]
-    assert np.isnan(surface.transform(np.array([outside_x]), np.array([outside_y])))
+    # One row beyond the last is outside.
+    beyond_x = origin[0] - sin * 180.0
+    beyond_y = origin[1] + cos * 180.0
+    assert np.isnan(surface.transform(np.array([beyond_x]), np.array([beyond_y])))
 
 
 def test_loaded_surface_reads_lazily_and_matches_memory(tmp_path) -> None:
     """A surface opened from Zarr reads its chunks on demand, with the same values."""
     import pickle
 
-    import zarr
-
     rng = np.random.default_rng(0)
     values = rng.uniform(0.0, 100.0, (40, 30)).astype(np.float32)
-    mesh = regular_mesh("random", values, (1.0e6, 5.0e6), (0.0, -30.0), (30.0, 0.0))
+    mesh = surface_mesh(
+        "random", values, 1.0e6 + 30.0 * np.arange(30), 5.0e6 - 30.0 * np.arange(40)
+    )
     path = tmp_path / "random.zarr"
-    mesh.chunk({"i": 8, "j": 8}).to_zarr(path)
+    mesh.chunk({"y": 8, "x": 8}).to_zarr(path)
 
     loaded = Surface.load(path)
-    assert isinstance(loaded.values, zarr.Array)
+    # Lazily indexed by xarray, not loaded or wrapped in dask.
+    assert not isinstance(loaded.values.variable._data, np.ndarray)
+    assert loaded.values.chunks is None
     in_memory = Surface.from_dataset(mesh)
     x = rng.uniform(1.0e6 - 100.0, 1.0e6 + 1000.0, 500)
     y = rng.uniform(5.0e6 - 1300.0, 5.0e6 + 100.0, 500)
@@ -278,7 +289,12 @@ def test_windows_average_aligned_blocks(tmp_path) -> None:
     # Over the synthetic domain's longitude and latitude in NZTM.
     origin = (1_550_000.0, 5_150_000.0)
     path = tmp_path / "rough.zarr"
-    regular_mesh("rough", values, origin, (0.0, 100.0), (100.0, 0.0)).to_zarr(path)
+    surface_mesh(
+        "rough",
+        values,
+        origin[0] + 100.0 * np.arange(60),
+        origin[1] + 100.0 * np.arange(60),
+    ).to_zarr(path)
     to_lon_lat = __import__("pyproj").Transformer.from_crs(2193, 4326, always_xy=True)
 
     def bbox(x0, y0, x1, y1):

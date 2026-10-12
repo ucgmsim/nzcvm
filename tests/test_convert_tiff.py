@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from nzcvm.models.mesh import UPRIGHT_FRAME
 from nzcvm.scripts.convert_tiff import convert_tiff
 
 
@@ -26,25 +27,28 @@ def test_crops_to_the_data_and_keeps_inner_no_data_rows() -> None:
     values[4, :] = np.nan  # a no-data row inside the data
     mesh = convert_tiff("vs30", _raster(values), downsample=1)
 
-    assert mesh.sizes == {"i": 5, "j": 4}
-    assert mesh.attrs["origin"] == pytest.approx([1.0e6 + 100.0, 5.0e6 - 200.0])
-    assert mesh.attrs["step_i"] == pytest.approx([0.0, -100.0])
-    assert mesh.attrs["step_j"] == pytest.approx([100.0, 0.0])
+    assert mesh.sizes == {"y": 5, "x": 4}
+    np.testing.assert_allclose(mesh.x.values, 1.0e6 + 100.0 * np.arange(1, 5))
+    np.testing.assert_allclose(mesh.y.values, 5.0e6 - 100.0 * np.arange(2, 7))
+    assert mesh.attrs["frame"] == list(UPRIGHT_FRAME)
     assert np.isnan(mesh.z.values[2]).all()
 
 
 @pytest.mark.parametrize("downsample", [2, 3])
-def test_downsampling_scales_the_steps(downsample: int) -> None:
+def test_downsampling_averages_whole_blocks(downsample: int) -> None:
     rng = np.random.default_rng(0)
     values = rng.uniform(100.0, 800.0, (11, 7)).astype(np.float32)
     values[5, :] = np.nan
     mesh = convert_tiff("vs30", _raster(values), downsample=downsample)
 
-    assert mesh.attrs["step_i"] == pytest.approx([0.0, -100.0 * downsample])
-    assert mesh.attrs["step_j"] == pytest.approx([100.0 * downsample, 0.0])
-    # Node [0, 0] is the centre of the first full block.
+    np.testing.assert_allclose(np.diff(mesh.x.values), 100.0 * downsample)
+    np.testing.assert_allclose(np.diff(mesh.y.values), -100.0 * downsample)
+    # The first node is the centre of the first block. Partial blocks at
+    # the far edges drop out.
     half = 50.0 * (downsample - 1)
-    assert mesh.attrs["origin"] == pytest.approx([1.0e6 + half, 5.0e6 - half])
+    assert mesh.x.values[0] == pytest.approx(1.0e6 + half)
+    assert mesh.y.values[0] == pytest.approx(5.0e6 - half)
+    assert mesh.sizes == {"y": 11 // downsample, "x": 7 // downsample}
     assert mesh.z.values[0, 0] == pytest.approx(
         np.nanmean(values[:downsample, :downsample]), rel=1e-6
     )

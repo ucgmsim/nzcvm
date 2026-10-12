@@ -23,6 +23,8 @@ I = Literal["i"]
 J = Literal["j"]
 K = Literal["k"]
 L = Literal["layer"]
+X = Literal["x"]
+Y = Literal["y"]
 
 
 class Vertical(StrEnum):
@@ -203,28 +205,28 @@ class StructuredMesh(xr.Dataset):
     __slots__ = ()
 
 
+#: The frame of an upright raster in NZTM: its ``x`` and ``y`` are NZTM's.
+UPRIGHT_FRAME = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+
 @dataclass
 class StructuredMeshSchema(AsDataset):
-    """A surface sampled on a regular lattice of nodes.
+    """A surface sampled on a grid that's regular in its own frame.
 
-    Node ``[i, j]`` sits at ``origin + i * step_i + j * step_j`` in the
-    projected CRS, so ``z`` alone holds the surface. An upright raster has
-    its steps along the axes. A rotated or sheared one doesn't. Build one
-    with :func:`regular_mesh`.
+    1-D coordinates in the surface's frame index ``z`` as ``(y, x)``.
+    ``frame = [a, b, c, d, e, f]`` maps an NZTM point ``(X, Y)`` into it:
+    ``x = a X + b Y + c`` and ``y = d X + e Y + f``. An upright raster in
+    NZTM uses :data:`UPRIGHT_FRAME`; a rotated one rotates query points into
+    its frame. Build one with :func:`surface_mesh`.
     """
 
-    z: Data[tuple[I, J], np.float32]
+    z: Data[tuple[Y, X], np.float32]
 
-    i: Coord[I, np.uint64]
-    j: Coord[J, np.uint64]
+    y: Coord[Y, np.float64]
+    x: Coord[X, np.float64]
 
     name: Attr[str]
-    #: Position of node ``[0, 0]``.
-    origin: Attr[list[float]]
-    #: Displacement from node ``[i, j]`` to node ``[i + 1, j]``.
-    step_i: Attr[list[float]]
-    #: Displacement from node ``[i, j]`` to node ``[i, j + 1]``.
-    step_j: Attr[list[float]]
+    frame: Attr[list[float]]
 
     __dataoptions__ = DataOptions(StructuredMesh)
 
@@ -234,39 +236,38 @@ class StructuredMeshSchema(AsDataset):
         return cls.new(**dataset.data_vars, **dataset.coords, **dataset.attrs)  # ty: ignore[invalid-argument-type]
 
 
-def regular_mesh(
+def surface_mesh(
     name: str,
     z: Any,
-    origin: tuple[float, float],
-    step_i: tuple[float, float],
-    step_j: tuple[float, float],
+    x: Any,
+    y: Any,
+    frame: tuple[float, ...] = UPRIGHT_FRAME,
 ) -> StructuredMesh:
-    """Build a :class:`StructuredMesh` from its values and lattice placement.
+    """Build a :class:`StructuredMesh` from its values and frame coordinates.
 
     Parameters
     ----------
     name :
         Name of the surface.
     z :
-        ``(m, n)`` values, as a NumPy or Dask array.
-    origin, step_i, step_j :
-        Position of node ``[0, 0]`` and the displacements along ``i`` and
-        ``j``, in the projected CRS.
+        ``(len(y), len(x))`` values, as a NumPy or Dask array.
+    x, y :
+        1-D coordinates of the columns and rows, in the surface's frame.
+    frame :
+        The affine map from NZTM into the frame (see
+        :class:`StructuredMeshSchema`).
 
     Returns
     -------
     StructuredMesh
         The surface.
     """
-    ni, nj = z.shape
     return StructuredMeshSchema.new(
         z=z,
-        i=np.arange(ni),
-        j=np.arange(nj),
+        y=np.asarray(y, dtype=np.float64),
+        x=np.asarray(x, dtype=np.float64),
         name=name,
-        origin=[float(v) for v in origin],
-        step_i=[float(v) for v in step_i],
-        step_j=[float(v) for v in step_j],
+        frame=[float(v) for v in frame],
     )
 
 
