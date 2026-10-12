@@ -93,13 +93,6 @@ jobs:
           # The secret holds the config as plain text, not base64.
           disable_base64: true
 
-      - name: List rclone remotes
-        # Names only, never the config's contents.
-        run: |
-          rclone config file
-          wc -l < "$(rclone config file | tail -1)"
-          rclone listremotes
-
       - name: Download resources and stations
         run: |
           rclone copy "$DROPBOX_DIR/resources.zip" .
