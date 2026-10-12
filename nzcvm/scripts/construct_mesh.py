@@ -918,10 +918,12 @@ def main(
             readable=True,
         ),
     ],
-    topography: Annotated[
+    reference_topography: Annotated[
         Path,
         typer.Argument(
-            help="Topography surface: an HDF5 elevation file or a Zarr surface.",
+            help="The topography the surfaces were modelled against: an HDF5 "
+            "elevation file or a Zarr surface. The basin's depths are measured "
+            "from it.",
             exists=True,
             file_okay=True,
             dir_okay=True,
@@ -933,7 +935,8 @@ def main(
         typer.Argument(
             help="The basin's interfaces, top to bottom: the top surface, the "
             "surface between each pair of layers, then the basement. Each is an "
-            "HDF5 elevation file or a Zarr surface, or the topography itself.",
+            "HDF5 elevation file or a Zarr surface, or the reference topography "
+            "itself.",
             exists=True,
             file_okay=True,
             dir_okay=True,
@@ -950,6 +953,18 @@ def main(
             help="Mesh priority of each layer (lower = higher priority).",
             min=0,
             max=255,
+        ),
+    ],
+    topography: Annotated[
+        Path,
+        typer.Option(
+            help="The topography the model is queried against, which the "
+            "basin's depths follow. It bounds the elevation the meshes can "
+            "occupy.",
+            exists=True,
+            file_okay=True,
+            dir_okay=True,
+            readable=True,
         ),
     ],
     model: Annotated[
@@ -1026,6 +1041,10 @@ def main(
     The layers share one triangulation, fitted to every interface, so the
     bottom of one layer and the top of the next interpolate the same surface
     on the same triangles and meet without a gap.
+
+    The meshes hold depth below the topography. Each surface's depth comes
+    from the reference topography its modeller used. The basin then keeps
+    its modelled thickness wherever the query topography differs.
     """
     n_layers = len(surfaces) - 1
     if n_layers < 1:
@@ -1039,7 +1058,9 @@ def main(
     models = [read_model(spec) for spec in model]
 
     inner, region = basin_polygon(bounds, simplification, smoothing, coastline)
-    depths = basin_depth_surfaces(topography, surfaces, surface_bbox(surfaces))
+    depths = basin_depth_surfaces(
+        reference_topography, surfaces, surface_bbox(surfaces)
+    )
     if depths[-1] is None:
         raise typer.BadParameter("The bottom surface can't be the topography.")
     triangulation = triangulate_polygon(
@@ -1060,7 +1081,7 @@ def main(
     basin = Basin(
         BasinOutline(inner, region, smoothing),
         triangulation,
-        # The full-resolution topography under the basin bounds the
+        # The full-resolution query topography under the basin bounds the
         # elevation its meshes can occupy, which the model tree prunes on.
         surface_range(topography, polygon_bbox(region)),
     )
