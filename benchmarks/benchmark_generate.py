@@ -28,7 +28,7 @@ from nzcvm.config.metadata import ModelMetadata
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.layers.dummy import constant
-from nzcvm.models.mesh import StructuredMeshSchema
+from nzcvm.models.mesh import regular_mesh
 from nzcvm.velocity_model import VelocityModel
 
 # ---------------------------------------------------------------------------
@@ -53,17 +53,18 @@ CHUNK_SIZE = 64  # voxels per chunk along i/j, with k always one chunk
 
 
 def _write_flat_surface(path: Path) -> None:
-    """Write a flat z=0 StructuredGrid to *path* (VTK format)."""
+    """Write a flat z=0 surface to *path* (Zarr lattice)."""
     # NZ-wide bounding box in NZTM2000: origin roughly (1e6, 4.7e6)
     xmin, ymin = 1_000_000.0, 4_700_000.0
     extent = 2_000_000.0  # 2000 km side, which encloses the benchmark domain
     n = 10
-    xs = np.linspace(xmin, xmin + extent, n)
-    ys = np.linspace(ymin, ymin + extent, n)
-    xx, yy = np.meshgrid(xs, ys, indexing="ij")
-    zz = np.zeros_like(xx)
-    mesh = StructuredMeshSchema.new(
-        x=xx, y=yy, z=zz, i=np.arange(n), j=np.arange(n), name="float"
+    step = extent / (n - 1)
+    mesh = regular_mesh(
+        "flat",
+        np.zeros((n, n), dtype=np.float32),
+        origin=(xmin, ymin),
+        step_i=(step, 0.0),
+        step_j=(0.0, step),
     )
     mesh.to_zarr(path)
 
