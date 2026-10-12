@@ -46,8 +46,8 @@ class Surface:
     The surface splits each mesh cell into two triangles along the diagonal
     from node ``[i, j]`` to node ``[i + 1, j + 1]``. A point's elevation
     interpolates barycentrically over the triangle containing it. The mesh's
-    structure locates the cell, so the surface stores only the node
-    coordinates and values: no triangle list and no search tree.
+    structure locates the cell. The surface stores only the node coordinates
+    and values: no triangle list and no search tree.
     """
 
     inner: StructuredGrid
