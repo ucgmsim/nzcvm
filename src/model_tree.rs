@@ -14,7 +14,7 @@ use crate::real::Real;
 use crate::tree_query::{Contains, priority_ray_iterator, priority_ray_stats_iterator};
 use bvh::aabb::{Aabb, Bounded};
 use bvh::bounding_hierarchy::BHShape;
-use nalgebra::{Affine3, Point, Point3};
+use nalgebra::{Affine3, Point, Point3, Point4};
 
 const ALPHA_SATURATED: Real = 1.0;
 const ALPHA_EPS: Real = 1e-4;
@@ -25,6 +25,16 @@ const ALPHA_EPS: Real = 1e-4;
 /// maximum priority reachable through each subtree.
 const PRIORITY_AABB_EXTENT: Real = 0.5;
 
+/// The vertical coordinate a mesh model's vertices use, both positive down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Vertical {
+    /// Negated elevation, so the model stays put as the topography changes:
+    /// tomography.
+    Elevation,
+    /// Depth below the topography, so the model follows it: basins.
+    Depth,
+}
+
 /// Serialisable summary of a [`TreeModel`] for diagnostics.
 #[derive(Serialize)]
 pub struct MeshModelView {
@@ -33,6 +43,7 @@ pub struct MeshModelView {
     pub bounds: [f32; 6],
     pub transform: Option<Affine3<Real>>,
     pub priority: u8,
+    pub vertical: Vertical,
     /// In-memory size of the model in bytes.
     pub size: usize,
 }
@@ -44,17 +55,30 @@ pub struct TreeModel {
     pub priority: u8,
     /// Human-readable name for this mesh model.
     pub name: String,
+    /// Which coordinate of a query point the mesh's third axis matches.
+    pub vertical: Vertical,
+    /// Where the model lies in `(x, y, z)` with `z` negated elevation,
+    /// whatever its vertices hold. The mesh file stores it.
+    pub bounds: Aabb<Real, 3>,
     /// Position in the tree, assigned by [`ModelTree::new`].
     pub id: usize,
     node_index: usize,
 }
 
 impl TreeModel {
-    pub fn new(model: MeshModel<AnyField>, priority: u8, name: String) -> Self {
+    pub fn new(
+        model: MeshModel<AnyField>,
+        priority: u8,
+        name: String,
+        vertical: Vertical,
+        bounds: Aabb<Real, 3>,
+    ) -> Self {
         Self {
             model,
             priority,
             name,
+            vertical,
+            bounds,
             id: 0,
             node_index: 0,
         }
@@ -78,7 +102,7 @@ impl TreeModel {
     }
 
     pub fn view(&self) -> MeshModelView {
-        let aabb = self.model.aabb3();
+        let aabb = self.bounds;
         // The view is a diagnostics summary, so `bounds` stays f32 regardless
         // of `Real`, keeping the serialised schema stable.  The casts are
         // no-ops in the default build and load-bearing under `high_precision`.
@@ -97,6 +121,7 @@ impl TreeModel {
             bounds,
             transform: self.model.mesh().transform(),
             priority: self.priority,
+            vertical: self.vertical,
             size: self.deep_size_of(),
         }
     }
@@ -109,29 +134,42 @@ impl DeepSizeOf for TreeModel {
 }
 
 /// `Contains` yields `(priority, quality)` when a simplex of the model
-/// contains the query point, so the outer `ModelTree` traversal gets the
-/// result without a second lookup.
-impl Contains<Real, 3, (u8, Quality)> for TreeModel {
-    fn contains(&self, query_point: &Point3<Real>) -> Option<(u8, Quality)> {
-        self.model.query(*query_point).map(|q| (self.priority, q))
+/// contains the query point `(x, y, z, depth)`, so the outer `ModelTree`
+/// traversal gets the result without a second lookup. The model reads the
+/// vertical coordinate its mesh uses.
+impl Contains<Real, 4, (u8, Quality)> for TreeModel {
+    fn contains(&self, query_point: &Point4<Real>) -> Option<(u8, Quality)> {
+        let vertical = match self.vertical {
+            Vertical::Elevation => query_point.z,
+            Vertical::Depth => query_point.w,
+        };
+        // The tree prunes on elevation. Reject a point outside the model's
+        // own vertical extent here too, before searching its mesh.
+        let aabb = self.model.aabb3();
+        if vertical < aabb.min.z || vertical > aabb.max.z {
+            return None;
+        }
+        let point = Point3::new(query_point.x, query_point.y, vertical);
+        self.model.query(point).map(|q| (self.priority, q))
     }
 }
 
-/// 4-D AABB used by the outer `ModelTree` BVH.
+/// 4-D AABB used by the outer `ModelTree` BVH: `(x, y, z, priority)`.
 ///
-/// The first three dimensions are the model's geometry AABB. The fourth
-/// dimension is the model's priority: both `min[3]` and `max[3]` are set to
-/// `priority` (with a half-unit extent so the AABB is non-degenerate), which
-/// lets the priority-ray traversal use `aabb.min[3]` as the `t_min` hit
-/// distance and thereby visit models in priority order.
+/// The first three axes are the model's stored bounds, in negated elevation
+/// for every model, so the tree tests a query's `z` against depth and
+/// elevation models alike. The last dimension is the model's priority:
+/// both ends are set to `priority` (with a half-unit extent so the AABB is
+/// non-degenerate), which lets the priority-ray traversal use `aabb.min[3]`
+/// as the `t_min` hit distance and thereby visit models in priority order.
 impl Bounded<Real, 4> for TreeModel {
     fn aabb(&self) -> Aabb<Real, 4> {
-        let aabb = self.model.aabb3();
+        let (min, max) = (self.bounds.min, self.bounds.max);
         let p = self.priority as Real;
-        let min = Point::<Real, 4>::from([aabb.min.x, aabb.min.y, aabb.min.z, p]);
-        let max =
-            Point::<Real, 4>::from([aabb.max.x, aabb.max.y, aabb.max.z, p + PRIORITY_AABB_EXTENT]);
-        Aabb::with_bounds(min, max)
+        Aabb::with_bounds(
+            Point::<Real, 4>::from([min.x, min.y, min.z, p]),
+            Point::<Real, 4>::from([max.x, max.y, max.z, p + PRIORITY_AABB_EXTENT]),
+        )
     }
 }
 
@@ -151,10 +189,10 @@ pub struct ModelTreeView {
     pub size: usize,
 }
 
-/// A collection of [`TreeModel`]s indexed by a 4-D BVH.
+/// A collection of [`TreeModel`]s indexed by a BVH over `(x, y, z, priority)`.
 ///
-/// The fourth dimension encodes model priority; a ray along that axis visits
-/// models in ascending priority order (lowest number = highest priority).
+/// A ray along the priority axis visits models in ascending priority order
+/// (lowest number = highest priority).
 pub struct ModelTree {
     bvh_tree: Bvh<Real, 4>,
     models: Vec<TreeModel>,
@@ -162,8 +200,8 @@ pub struct ModelTree {
 
 impl DeepSizeOf for ModelTree {
     fn deep_size_of_children(&self, context: &mut Context) -> usize {
-        // The outer BVH is 4-dimensional (3 spatial + 1 priority), so the node
-        // size must use `BvhNode<Real, 4>` to account for the extra AABB extent.
+        // The outer BVH is 4-dimensional (x, y, z, priority), so the node
+        // size must use `BvhNode<Real, 4>` to account for the extra extent.
         self.bvh_tree.nodes.capacity() * size_of::<BvhNode<Real, 4>>()
             + self.models.deep_size_of_children(context)
     }
@@ -178,10 +216,11 @@ impl ModelTree {
         Self { bvh_tree, models }
     }
 
+    /// The union of the models' stored bounds, with `z` negated elevation.
     pub fn aabb(&self) -> bvh::aabb::Aabb<Real, 3> {
         self.models
             .iter()
-            .map(|m| m.model.aabb3())
+            .map(|m| m.bounds)
             .reduce(|a, b| a.join(&b))
             .expect("ModelTree must contain at least one model")
     }
@@ -224,7 +263,7 @@ impl Query for ModelTree {
 
     fn query(
         &self,
-        point: Point3<Real>,
+        point: Point4<Real>,
         existing: Option<Quality>,
         lo: u8,
         hi: u8,
@@ -235,7 +274,7 @@ impl Query for ModelTree {
         )
     }
 
-    fn query_stats(&self, point: Point3<Real>) -> QueryStats {
+    fn query_stats(&self, point: Point4<Real>) -> QueryStats {
         let now = Instant::now();
         // NOTE: This method traverses the BVH *twice* — once for AABB/simplex
         // counts and once for the blended quality — so `elapsed` reflects two
@@ -260,7 +299,7 @@ impl Query for ModelTree {
         }
     }
 
-    fn query_explain(&self, point: Point3<Real>) -> Explanation {
+    fn query_explain(&self, point: Point4<Real>) -> Explanation {
         let mut contributions = Vec::new();
         let mut blended: Option<Quality> = None;
         let mut termination = None;
@@ -300,7 +339,7 @@ impl Query for ModelTree {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use nalgebra::Point3;
+    use nalgebra::{Point3, Point4};
 
     use crate::mesh::MeshModel;
     use crate::model::{Constant, Interpolated};
@@ -308,6 +347,10 @@ mod tests {
     use crate::real::Real;
 
     fn cube_mesh(priority: u8, val: Real, alpha: Real) -> TreeModel {
+        vertical_cube_mesh(priority, val, alpha, Vertical::Elevation)
+    }
+
+    fn vertical_cube_mesh(priority: u8, val: Real, alpha: Real, vertical: Vertical) -> TreeModel {
         let v: Vec<Point3<Real>> = vec![
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(1.0, 0.0, 0.0),
@@ -335,10 +378,18 @@ mod tests {
         };
         let field = Interpolated::new(vec![q; v.len()]);
         let model = MeshModel::new(v, faces, field, None).unwrap();
-        TreeModel::new(model.into_any(), priority, String::new())
+        let bounds = match vertical {
+            Vertical::Elevation => model.aabb3(),
+            // Whatever elevation the topography puts the cube at.
+            Vertical::Depth => {
+                Aabb::with_bounds(Point3::new(0.0, 0.0, -100.0), Point3::new(1.0, 1.0, 100.0))
+            }
+        };
+        TreeModel::new(model.into_any(), priority, String::new(), vertical, bounds)
     }
 
-    const PT: Point3<Real> = Point3::new(0.5, 0.5, 0.5);
+    /// Inside the unit cube in both elevation and depth.
+    const PT: Point4<Real> = Point4::new(0.5, 0.5, 0.5, 0.5);
 
     #[test]
     fn test_query_hit_and_miss() {
@@ -349,7 +400,7 @@ mod tests {
             epsilon = 1e-4
         );
         assert!(
-            tree.query(Point3::new(10.0, 10.0, 10.0), None, 0, 255)
+            tree.query(Point4::new(10.0, 10.0, 10.0, 10.0), None, 0, 255)
                 .is_none()
         );
     }
@@ -423,7 +474,7 @@ mod tests {
     /// Adjacent priorities must be discriminated.
     ///
     /// This is what exercises `PRIORITY_AABB_EXTENT = 0.5` (`mesh.rs`): the
-    /// half-unit padding on the priority dimension of the 4D AABB has to sit
+    /// half-unit padding on the priority dimension of the AABB has to sit
     /// strictly between two consecutive integers, or a query for priority 10
     /// would also sweep in the priority-11 model.
     #[test]
@@ -503,13 +554,58 @@ mod tests {
             alpha: 1.0,
         };
         let model = MeshModel::new(v, faces, Constant::new(vec![q]), None).unwrap();
-        let tree = ModelTree::new(vec![TreeModel::new(model.into_any(), 0, String::new())]);
+        let bounds = model.aabb3();
+        let tree = ModelTree::new(vec![TreeModel::new(
+            model.into_any(),
+            0,
+            String::new(),
+            Vertical::Elevation,
+            bounds,
+        )]);
         assert_relative_eq!(
-            tree.query(Point3::new(0.1, 0.1, 0.1), None, 0, 255)
+            tree.query(Point4::new(0.1, 0.1, 0.1, 0.1), None, 0, 255)
                 .unwrap()
                 .rho,
             42.0,
             epsilon = 1e-4
+        );
+    }
+
+    /// Each model reads the vertical coordinate its mesh uses: an elevation
+    /// model the query's z, a depth model its depth.
+    #[test]
+    fn test_models_read_their_own_vertical_coordinate() {
+        let tree = ModelTree::new(vec![
+            vertical_cube_mesh(0, 5.0, 1.0, Vertical::Depth),
+            vertical_cube_mesh(1, 9.0, 1.0, Vertical::Elevation),
+        ]);
+        // Inside both: the depth model has the higher priority.
+        assert_relative_eq!(
+            tree.query(Point4::new(0.5, 0.5, 0.5, 0.5), None, 0, 255)
+                .unwrap()
+                .rho,
+            5.0,
+            epsilon = 1e-4
+        );
+        // Deeper than the depth model reaches, but inside the elevation one.
+        assert_relative_eq!(
+            tree.query(Point4::new(0.5, 0.5, 0.5, 5.0), None, 0, 255)
+                .unwrap()
+                .rho,
+            9.0,
+            epsilon = 1e-4
+        );
+        // Inside the depth model only, by depth, whatever the elevation.
+        assert_relative_eq!(
+            tree.query(Point4::new(0.5, 0.5, 50.0, 0.5), None, 0, 255)
+                .unwrap()
+                .rho,
+            5.0,
+            epsilon = 1e-4
+        );
+        assert!(
+            tree.query(Point4::new(0.5, 0.5, 50.0, 5.0), None, 0, 255)
+                .is_none()
         );
     }
 }

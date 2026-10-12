@@ -7,8 +7,9 @@ and structured grids (topographic surfaces).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, fields
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 from typing import Any, Literal
 
 import numpy as np
@@ -23,6 +24,21 @@ I = Literal["i"]
 J = Literal["j"]
 K = Literal["k"]
 L = Literal["layer"]
+X = Literal["x"]
+Y = Literal["y"]
+
+
+class Vertical(StrEnum):
+    """The coordinate a mesh's vertex ``z`` holds (``vertical`` attribute).
+
+    Both run positive down. A query passes each point's elevation and its
+    depth below the topography, and a mesh reads the one its ``z`` stores.
+    """
+
+    #: Negated elevation, fixed in space: tomography.
+    ELEVATION = "elevation"
+    #: Depth below the topography, following the terrain: basins.
+    DEPTH = "depth"
 
 
 class ModelType(IntEnum):
@@ -95,6 +111,12 @@ DEPTH_PROFILE_VARIABLES = tuple(
 @dataclass
 class TetrahedralMeshSchema(AsDataset):
     name: Attr[str]
+    #: A :class:`Vertical`: what the vertex ``z`` holds.
+    vertical: Attr[str]
+    #: ``[min_x, min_y, min_z, max_x, max_y, max_z]`` of where the model lies,
+    #: with ``z`` negated elevation whatever :attr:`vertical` is. The model
+    #: tree prunes on it.
+    aabb: Attr[list[float]]
 
     x: Data[tuple[I,], np.float32]
     y: Data[tuple[I,], np.float32]
@@ -188,18 +210,28 @@ class StructuredMesh(xr.Dataset):
     __slots__ = ()
 
 
+#: The frame of an upright raster in NZTM: its ``x`` and ``y`` are NZTM's.
+UPRIGHT_FRAME = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+
+
 @dataclass
 class StructuredMeshSchema(AsDataset):
-    """A structured-grid surface mesh."""
+    """A surface sampled on a grid that's regular in its own frame.
 
-    x: Data[tuple[I, J], np.float32]
-    y: Data[tuple[I, J], np.float32]
-    z: Data[tuple[I, J], np.float32]
+    1-D coordinates in the surface's frame index ``z`` as ``(y, x)``.
+    ``frame = [a, b, c, d, e, f]`` maps an NZTM point ``(X, Y)`` into it:
+    ``x = a X + b Y + c`` and ``y = d X + e Y + f``. An upright raster in
+    NZTM uses :data:`UPRIGHT_FRAME`; a rotated one rotates query points into
+    its frame. Build one with :func:`surface_mesh`.
+    """
 
-    i: Coord[I, np.uint64]
-    j: Coord[J, np.uint64]
+    z: Data[tuple[Y, X], np.float32]
+
+    y: Coord[Y, np.float64]
+    x: Coord[X, np.float64]
 
     name: Attr[str]
+    frame: Attr[list[float]]
 
     __dataoptions__ = DataOptions(StructuredMesh)
 
@@ -209,35 +241,52 @@ class StructuredMeshSchema(AsDataset):
         return cls.new(**dataset.data_vars, **dataset.coords, **dataset.attrs)  # ty: ignore[invalid-argument-type]
 
 
-DEFAULT_STRUCTURED_ENCODING_SETTINGS = {
-    "x": {"compressors": MEDIUM_COMPRESSOR},
-    "y": {"compressors": MEDIUM_COMPRESSOR},
-    "z": {"compressors": MEDIUM_COMPRESSOR},
-}
+def surface_mesh(
+    name: str,
+    z: Any,
+    x: Any,
+    y: Any,
+    frame: tuple[float, ...] = UPRIGHT_FRAME,
+) -> StructuredMesh:
+    """Build a :class:`StructuredMesh` from its values and frame coordinates.
+
+    Parameters
+    ----------
+    name :
+        Name of the surface.
+    z :
+        ``(len(y), len(x))`` values, as a NumPy or Dask array.
+    x, y :
+        1-D coordinates of the columns and rows, in the surface's frame.
+    frame :
+        The affine map from NZTM into the frame (see
+        :class:`StructuredMeshSchema`).
+
+    Returns
+    -------
+    StructuredMesh
+        The surface.
+    """
+    return StructuredMeshSchema.new(
+        z=z,
+        y=np.asarray(y, dtype=np.float64),
+        x=np.asarray(x, dtype=np.float64),
+        name=name,
+        frame=[float(v) for v in frame],
+    )
 
 
-def triangulate(mesh: StructuredMesh) -> np.ndarray:
-    nx = mesh.sizes["i"]
-    ny = mesh.sizes["j"]  # This is the stride multiplier for row-major layout
+#: Nodes per chunk along each axis of a stored surface. A query reads the
+#: chunks around its points, and small chunks mean it reads little.
+SURFACE_CHUNK_SIZE = 512
 
-    # Generate the 2D grids
-    ii, jj = np.meshgrid(np.arange(nx - 1), np.arange(ny - 1), indexing="ij")
-
-    # Use ny (the size of j) instead of nx
-    p00 = (ii * ny + jj).ravel()
-    p10 = ((ii + 1) * ny + jj).ravel()
-    p11 = ((ii + 1) * ny + (jj + 1)).ravel()
-    p01 = (ii * ny + (jj + 1)).ravel()
-
-    tri1 = np.stack((p00, p10, p11), axis=1)
-    tri2 = np.stack((p00, p11, p01), axis=1)
-
-    faces = np.vstack((tri1, tri2)).astype(np.uint64)
-    return faces
+DEFAULT_STRUCTURED_ENCODING_SETTINGS = {"z": {"compressors": MEDIUM_COMPRESSOR}}
 
 
 def make_mesh(
     name: str,
+    vertical: Vertical,
+    aabb: Sequence[float],
     points: np.ndarray,
     connectivity: np.ndarray,
     cell_data: dict[str, np.ndarray],
@@ -253,6 +302,12 @@ def make_mesh(
         Optional human-readable name for the model.  Stored in
         ``field_data["name"]`` when provided so it survives VTKHDF
         round-trips and reaches :func:`~nzcvm.model.MeshModel`.
+    vertical :
+        Whether vertex ``z`` stores negated elevation or depth below the
+        topography.
+    aabb :
+        ``[min_x, min_y, min_z, max_x, max_y, max_z]`` of where the model
+        lies, with ``z`` negated elevation.
     points :
         ``(N, 3)`` float32 array of vertex coordinates.
     connectivity :
@@ -282,6 +337,8 @@ def make_mesh(
 
     mesh = TetrahedralMeshSchema.new(
         name=name,
+        vertical=str(vertical),
+        aabb=[float(bound) for bound in aabb],
         x=points[..., 0],
         y=points[..., 1],
         z=points[..., 2],

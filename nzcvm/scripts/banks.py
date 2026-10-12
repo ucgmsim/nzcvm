@@ -1,25 +1,18 @@
 #!/usr/bin/env python3
 """Assign Banks Peninsula basin qualities using weathering from Ely."""
 
-import os
 from pathlib import Path
 from typing import Annotated
 
 import numpy as np
+import pandas as pd
 import typer
 import xarray as xr
 
 from nzcvm import ely_taper
-from nzcvm.models.mesh import StructuredMeshSchema
-from nzcvm.models.surface import Surface, read_surface_file
 
 app = typer.Typer(
     help="Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."
-)
-
-DEFAULT_BASEMENT = (
-    Path(os.environ.get("NZCVM_DATA_ROOT", "."))
-    / "regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5"
 )
 
 ELY_TAPER_DEPTH = 350.0
@@ -31,23 +24,6 @@ VP_FULL = 4000.0
 RHO_FULL = 2393.0
 
 
-def _load_bpv_surface(basement_path: Path) -> Surface:
-    """Build the BPV basement surface from the WGS84 lat/lon/elevation HDF5 file."""
-    grid = read_surface_file(basement_path)
-    ni, nj = grid.x.shape
-    bpv_dset = xr.Dataset(
-        {
-            "x": (("i", "j"), grid.x),
-            "y": (("i", "j"), grid.y),
-            "z": (("i", "j"), grid.values),
-        },
-        coords={"i": np.arange(ni), "j": np.arange(nj)},
-        attrs={"name": "BPV"},
-    )
-    bpv_dset = StructuredMeshSchema.from_dataset(bpv_dset)
-    return Surface.from_dataset(bpv_dset)
-
-
 @app.command()
 def main(
     mesh: Annotated[
@@ -57,20 +33,6 @@ def main(
             exists=True,
         ),
     ] = Path("models/BanksPeninsula.zarr"),
-    dem: Annotated[
-        Path,
-        typer.Argument(
-            help="DEM surface (zarr) used as the Vs30-taper reference depth.",
-            exists=True,
-        ),
-    ] = Path("resources/cant_dem.zarr"),
-    basement: Annotated[
-        Path,
-        typer.Argument(
-            help="BPV basement surface (HDF5, WGS84 lat/lon + elevation).",
-            exists=True,
-        ),
-    ] = DEFAULT_BASEMENT,
     output: Annotated[
         Path, typer.Argument(help="Output path for the tapered mesh (zarr).")
     ] = Path("models/BanksPeninsula_GTL.zarr"),
@@ -115,16 +77,24 @@ def main(
         typer.Option(help="Density (kg/m^3) fill value outside the GTL mask.", min=0.0),
     ] = RHO_FULL,
 ) -> None:
-    """Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh."""
+    """Apply the Ely GTL near-surface taper to the Banks Peninsula Volcanics mesh.
+
+    The BPV top of each column is its shallowest vertex, so build the mesh
+    with ``--no-pad-top``. A padded top would sit ``PAD_DEPTH`` above it.
+    """
     dset = xr.open_dataset(mesh)
-    surface = Surface.load(dem)
-    bpv_surface = _load_bpv_surface(basement)
+    # The mesh is depth-queried: its z is depth below the topography.
+    dem_depth = dset.z.clip(min=0)
 
-    dem_surface = xr.apply_ufunc(surface.transform, dset.x, dset.y)
-    bpv_dem = xr.apply_ufunc(bpv_surface.transform, dset.x, dset.y)
-
-    dem_depth = (dset.z - dem_surface).clip(min=0)
-    bpv_depth = (dset.z - bpv_dem).clip(min=0)
+    # construct_mesh layers this mesh without padding. The shallowest vertex
+    # of each (x, y) column is the BPV top it meshed.
+    column_top = (
+        pd.Series(dset.z.values)
+        .groupby([dset.x.values, dset.y.values])
+        .transform("min")
+        .to_numpy()
+    )
+    bpv_depth = (dset.z - column_top).clip(min=0)
 
     # Apparent surface Vs30 (m/s) at each point, the taper's near-surface endpoint.
     vs_bpv_top = (vs0 + (vs_depth - vs0) * (dem_depth / vs30_taper_depth)) * 1000.0
@@ -140,12 +110,16 @@ def main(
     # True within 1000m of the DEM and within 350m of the BPV basement.
     gtl_mask = (dem_depth < vs30_taper_depth) & (bpv_depth < ely_taper_depth)
 
-    dset["vs"] = xr.where(gtl_mask, gtl_qualities.vs, vs_full)
-    dset["vp"] = xr.where(gtl_mask, gtl_qualities.vp, vp_full)
-    dset["rho"] = xr.where(gtl_mask, gtl_qualities.rho, rho_full)
+    # Keep the mesh's float32 qualities.
+    def masked(inside: xr.DataArray, outside) -> xr.DataArray:
+        return xr.where(gtl_mask, inside, outside).astype(np.float32)
+
+    dset["vs"] = masked(gtl_qualities.vs, vs_full)
+    dset["vp"] = masked(gtl_qualities.vp, vp_full)
+    dset["rho"] = masked(gtl_qualities.rho, rho_full)
     if "qp" in dset.data_vars:
-        dset["qp"] = xr.where(gtl_mask, gtl_qualities.qp, dset["qp"])
-        dset["qs"] = xr.where(gtl_mask, gtl_qualities.qs, dset["qs"])
+        dset["qp"] = masked(gtl_qualities.qp, dset["qp"])
+        dset["qs"] = masked(gtl_qualities.qs, dset["qs"])
 
     dset.to_zarr(output, mode="w")
     print(f"Saved tapered Banks Peninsula Volcanics model to {output}")

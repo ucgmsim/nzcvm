@@ -27,7 +27,7 @@ from nzcvm.coordinates import Coordinate
 from nzcvm.formats.sfile import _solver_z
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.terrain import decay_weight, terrain_z_depth
-from nzcvm.models.mesh import StructuredMeshSchema
+from nzcvm.models.mesh import surface_mesh
 
 _MODEL = Model(
     origin_lon=172.0, origin_lat=-41.0, azimuth=30.0, crs=CRS.from_epsg(2193)
@@ -39,11 +39,9 @@ def _write_surface(path: Path, z) -> Path:
     n = 200
     xs = np.linspace(1_000_000.0, 3_000_000.0, n, dtype=np.float32)
     ys = np.linspace(4_700_000.0, 6_700_000.0, n, dtype=np.float32)
-    xx, yy = np.meshgrid(xs, ys, indexing="ij")
+    xx, yy = np.meshgrid(xs, ys)
     zz = np.broadcast_to(np.asarray(z(xx, yy), dtype=np.float32), xx.shape).copy()
-    StructuredMeshSchema.new(
-        x=xx, y=yy, z=zz, i=np.arange(n), j=np.arange(n), name="surface"
-    ).to_zarr(path, mode="w")
+    surface_mesh("surface", zz, xs, ys).to_zarr(path, mode="w")
     return path
 
 

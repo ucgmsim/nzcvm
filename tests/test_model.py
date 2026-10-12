@@ -19,7 +19,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
-from nzcvm.models.mesh import ModelType, make_mesh
+from nzcvm.models.mesh import ModelType, Vertical, make_mesh
 from nzcvm.models.model import MeshModel, ModelRange, ModelTree
 from tests.conftest import _mesh_model
 
@@ -35,7 +35,7 @@ def test_query_many_raw_1d_shape(unit_tetrahedron_tree, n: int) -> None:
     model = ModelTree(unit_tetrahedron_tree)
     x = np.full(n, 0.1, dtype=np.float32)
     z = np.zeros(n, dtype=np.float32)
-    result = model._query_many_raw(x, z, z)
+    result = model._query_many_raw(x, z, z, z)
     assert result.shape == (n, 6)
     assert result.dtype == np.float32
 
@@ -47,7 +47,7 @@ def test_query_many_raw_1d_shape(unit_tetrahedron_tree, n: int) -> None:
 def test_query_many_raw_nd_shape(unit_tetrahedron_tree, nx: int, ny: int) -> None:
     model = ModelTree(unit_tetrahedron_tree)
     x = np.full((nx, ny), 0.1, dtype=np.float32)
-    result = model._query_many_raw(x, x, x)
+    result = model._query_many_raw(x, x, x, x)
     assert result.shape == (nx, ny, 6)
 
 
@@ -106,6 +106,8 @@ def _tetrahedral_mesh(model_type: np.ndarray | None = None):
     ones = np.ones(len(points), dtype=np.float32)
     return make_mesh(
         name="mesh",
+        vertical=Vertical.ELEVATION,
+        aabb=[*points.min(axis=0), *points.max(axis=0)],
         points=points,
         connectivity=connectivity,
         cell_data={
@@ -150,8 +152,22 @@ def _as_mesh_model(raw) -> MeshModel:
     return MeshModel(raw)
 
 
-def _as_model_tree(raw) -> ModelTree:
-    return ModelTree(_nzcvm.model_tree([raw]))
+class _ElevationTree:
+    """A one-model tree queried like a mesh, passing z as the depth.
+
+    The test meshes are elevation-queried, so the depth a tree query takes
+    doesn't affect them.
+    """
+
+    def __init__(self, raw) -> None:
+        self.tree = ModelTree(_nzcvm.model_tree([raw]))
+
+    def query(self, x: float, y: float, z: float):
+        return self.tree.query(x, y, z, z)
+
+
+def _as_model_tree(raw) -> _ElevationTree:
+    return _ElevationTree(raw)
 
 
 _WRAPPERS = pytest.mark.parametrize(
@@ -187,7 +203,7 @@ def test_model_range_basins_includes_priority_zero() -> None:
     model = ModelTree(_nzcvm.model_tree([_mesh_model(vs=vs, priority=0)]))
     x = 0.1
     z = 0.4
-    result = model.query(x, z, z, model_range=ModelRange.BASINS)
+    result = model.query(x, z, z, z, model_range=ModelRange.BASINS)
     assert result is not None
     assert result.vs == pytest.approx(vs)
 
@@ -197,7 +213,7 @@ def test_model_range_tomography_excludes_priority_zero() -> None:
     model = ModelTree(_nzcvm.model_tree([_mesh_model(vs=3500.0, priority=0)]))
     x = 0.1
     z = 1.0
-    result = model.query(x, z, z, model_range=ModelRange.TOMOGRAPHY)
+    result = model.query(x, z, z, z, model_range=ModelRange.TOMOGRAPHY)
     assert result is None
 
 
@@ -218,8 +234,8 @@ def test_query_matches_query_many(x: float, y: float, z: float) -> None:
     z_arr = xr.DataArray(
         np.atleast_3d(z), dims=["i", "j", "k"], coords={"i": [0], "j": [0], "k": [0]}
     )
-    result_query = model.query(x, y, z)
-    result_query_many = model.query_many(x_arr, y_arr, z_arr)
+    result_query = model.query(x, y, z, z)
+    result_query_many = model.query_many(x_arr, y_arr, z_arr, z_arr)
     assert (result_query is None) == (result_query_many.alpha.item() == 0.0)
     if result_query:
         assert result_query.vs == pytest.approx(result_query_many.vs.item())

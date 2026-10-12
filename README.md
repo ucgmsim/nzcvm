@@ -97,7 +97,7 @@ uv run nzcvm generate examples/synthetic.toml synthetic/model.zarr
 | `nzcvm view`         | Interactive 3D PyVista viewer for model output               |
 | `nzcvm basin`        | Construct a tetrahedral mesh for a basin model                |
 | `nzcvm tomography`   | Convert a CSV-like tomography model to a tetrahedral mesh     |
-| `nzcvm surface`      | Convert an HDF5 topography surface to a VTK unstructured grid |
+| `nzcvm surface`      | Convert an HDF5 surface onto an upright NZTM grid             |
 | `nzcvm convert-tiff` | Convert a GeoTIFF raster to a surface                         |
 | `nzcvm tree-stats`   | Benchmark BVH query performance                               |
 | `nzcvm synthetic`    | Write synthetic DEM, Vs30, basin, and tomography inputs       |
@@ -125,6 +125,20 @@ vertices. It then extrudes one prism column per triangle between the top and
 bottom surfaces, split into three depth-profile tetrahedra. The triangulation
 keeps the outline's own vertices, so on small basins `--simplification`
 (metres) bounds the size as much as the tolerance does.
+
+A basin of several stacked layers meshes in one run. List its interfaces
+from the top down, then give each layer an `--output`, a `--priority` and a
+`--model`: a 1-D model file, or `rho=...,vp=...,vs=...,qp=...,qs=...` for
+uniform qualities.
+
+```sh
+nzcvm basin main outline.geojson dem.zarr dem.zarr pliocene.h5 basement.h5 \
+    --output upper.zarr --priority 11 --model upper.fd_modfile \
+    --output lower.zarr --priority 12 --model rho=2120,vp=2600,vs=1100,qp=110,qs=55
+```
+
+The layers share one triangulation, fitted to every interface, so each pair
+of neighbouring layers meets exactly. `--pad-top` pads the top layer only.
 
 ---
 
@@ -474,19 +488,21 @@ from nzcvm.models.model import ModelTree
 tree = ModelTree.load_models(
     [Path("models/ep2020.zarr"), Path("models/Wellington.zarr")]
 )
-quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0)
+quality = tree.query(x=1_749_150.0, y=5_428_150.0, z=500.0, depth=520.0)
 print(quality.vp, quality.vs)  # None if the point is outside every mesh
 ```
 
 `load_models` takes an iterable of mesh paths, anything `xarray` can open
 (the meshes distributed in `models/` are Zarr). Coordinates are in the model's
-projected CRS with `z` positive downwards.
+projected CRS with `z` positive downwards, and `depth` gives the point's
+depth below the topography. Basin meshes store depth and read it, while the
+tomography reads `z`. A grid computes both for every point.
 
 `query_many` is the vectorised form and returns a `Qualities` dataset.
 `explain` shows which models contributed to the blend:
 
 ```python
->>> tree.explain(1_749_150.0, 5_428_150.0, 100.0)
+>>> tree.explain(1_749_150.0, 5_428_150.0, 100.0, 120.0)
 (ρ=1810.00, Vp=1800.00, Vs=580.00, Qp=58.00, Qs=29.00, ɑ=1.00)
 ├── Model 0 (priority = 38)
 │   └── Quality: (ρ=1810.00, Vp=1800.00, Vs=580.00, ...)
@@ -551,9 +567,11 @@ Four subpackages, each with a narrow responsibility.
 
 Geospatial Rust wrappers and mesh I/O. `MeshModel` wraps one tetrahedral
 mesh. `ModelTree` combines many meshes into a priority-ordered BVH tree and
-handles alpha-composited queries. `Surface` interpolates values from a 2-D
-triangular surface mesh (used for the DEM and the Vs30 map). `mesh` provides
-the tetrahedral and structured mesh dataclasses and their I/O.
+handles alpha-composited queries. `Surface` interpolates the DEM and the Vs30
+map with bilinear interpolation, reading them lazily with xarray. A structured mesh is `z(y, x)`
+on 1-D coordinates in the surface's own frame, with a `frame` attribute for the
+affine map from NZTM into it, so an upright or a rotated raster works. `mesh`
+provides the tetrahedral and structured mesh dataclasses and their I/O.
 
 Each mesh has one field type, its `model_type`, which turns a query point
 into a quality: `INTERPOLATE` (barycentric interpolation of the vertex

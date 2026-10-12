@@ -21,102 +21,11 @@ pub trait Contains<T: BHValue, const D: usize, Data> {
     fn contains(&self, point: &Point<T, D>) -> Option<Data>;
 }
 
-const SMALL_VEC_SIZE: usize = 16;
 const SMALL_VEC_RAY_SIZE: usize = 8;
 /// Stack capacity for the stats iterator.  Larger than `SMALL_VEC_RAY_SIZE`
 /// because diagnostic traversals visit every matching leaf (no early-exit on
 /// alpha saturation) so the stack may grow deeper.
 const SMALL_VEC_STATS_SIZE: usize = 16;
-
-pub struct ContainsIterator<
-    'bvh,
-    'shape,
-    T: BHValue,
-    const D: usize,
-    Data,
-    Shape: Contains<T, D, Data> + Bounded<T, D>,
-> {
-    bvh: &'bvh Bvh<T, D>,
-    point: &'bvh Point<T, D>,
-    shapes: &'shape [Shape],
-    stack: SmallVec<[usize; SMALL_VEC_SIZE]>,
-    _phantom: std::marker::PhantomData<Data>,
-}
-
-impl<'bvh, 'shape, T, const D: usize, Data, Shape> ContainsIterator<'bvh, 'shape, T, D, Data, Shape>
-where
-    T: BHValue,
-    Shape: Bounded<T, D> + Contains<T, D, Data>,
-{
-    fn new(bvh: &'bvh Bvh<T, D>, point: &'bvh Point<T, D>, shapes: &'shape [Shape]) -> Self {
-        // To avoid panic! on an empty tree, we only populate with the root node
-        // if the shapes array is non-empty.
-        let mut heap = SmallVec::new();
-        if !shapes.is_empty() {
-            heap.push(0);
-        }
-
-        Self {
-            bvh,
-            point,
-            shapes,
-            stack: heap,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<'shape, T, const D: usize, Data, Shape> Iterator
-    for ContainsIterator<'_, 'shape, T, D, Data, Shape>
-where
-    T: BHValue,
-    Shape: Bounded<T, D> + Contains<T, D, Data>,
-{
-    type Item = Data;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(heap_leader) = self.stack.pop() {
-            match self.bvh.nodes[heap_leader] {
-                BvhNode::Leaf { shape_index, .. } => {
-                    let shape = &self.shapes[shape_index];
-                    if let Some(data) = shape.contains(self.point) {
-                        return Some(data);
-                    }
-                }
-                BvhNode::Node {
-                    child_l_index,
-                    ref child_l_aabb,
-                    child_r_index,
-                    ref child_r_aabb,
-                    ..
-                } => {
-                    if child_l_aabb.contains(self.point) {
-                        self.stack.push(child_l_index);
-                    }
-                    if child_r_aabb.contains(self.point) {
-                        self.stack.push(child_r_index);
-                    }
-                }
-            }
-        }
-        None
-    }
-}
-
-pub fn contains_point_iterator<
-    'bvh,
-    'shape,
-    T: BHValue,
-    const D: usize,
-    Data,
-    Shape: Contains<T, D, Data> + Bounded<T, D>,
->(
-    bvh_tree: &'bvh Bvh<T, D>,
-    shapes: &'shape [Shape],
-    point: &'bvh Point<T, D>,
-) -> ContainsIterator<'bvh, 'shape, T, D, Data, Shape> {
-    ContainsIterator::new(bvh_tree, point, shapes)
-}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TraversalStats {
@@ -128,24 +37,26 @@ pub struct TraversalStats {
 // Priority-ray traversal
 // ---------------------------------------------------------------------------
 
-/// Tests whether a `DQ`-dimensional query point lies within the first `DQ`
-/// dimensions of a `DBVH`-dimensional AABB, and whether the subtree's
-/// priority range overlaps `[priority_lo, priority_hi]`.
+/// Tests whether a query point lies within the first `DBVH - 1` dimensions
+/// of a `DBVH`-dimensional AABB, and whether the subtree's priority range
+/// overlaps `[priority_lo, priority_hi]`.  The point may carry more than
+/// `DBVH - 1` coordinates: the AABB tests only the leading ones, and the
+/// shapes' containment tests see them all.
 ///
-/// Returns `Some(aabb.min[DQ])` — the minimum value along the extra
+/// Returns `Some(aabb.min[DBVH - 1])` — the minimum value along the last
 /// dimension (i.e. the minimum priority reachable through this subtree) —
 /// on hit, or `None` on a spatial miss or priority-range miss.
 ///
 /// This implements the AABB intersection test for the conceptual ray
-/// `origin = (p[0], …, p[DQ-1], 0)`, `direction = (0, …, 0, 1)`.
+/// `origin = (p[0], …, p[DBVH-2], 0)`, `direction = (0, …, 0, 1)`.
 ///
 /// For a leaf at priority `p` the AABB's priority dimension is `[p, p + 0.5]`.
 /// For an internal node it spans `[min_priority_in_subtree, max_priority_in_subtree + 0.5]`.
 /// The subtree is pruned when:
 /// - its minimum priority exceeds `priority_hi`, or
-/// - its maximum priority (= `aabb.max[DQ] - 0.5`) is less than `priority_lo`
-///   (equivalently `aabb.max[DQ] <= priority_lo`, since priorities are integers
-///   and the extent is exactly `0.5`).
+/// - its maximum priority (= `aabb.max[DBVH - 1] - 0.5`) is less than
+///   `priority_lo` (equivalently `aabb.max[DBVH - 1] <= priority_lo`, since
+///   priorities are integers and the extent is exactly `0.5`).
 #[inline]
 fn priority_aabb_hit_bounded<T: BHValue, const DBVH: usize, const DQ: usize>(
     point: &Point<T, DQ>,
@@ -153,13 +64,14 @@ fn priority_aabb_hit_bounded<T: BHValue, const DBVH: usize, const DQ: usize>(
     priority_lo: T,
     priority_hi: T,
 ) -> Option<T> {
-    for i in 0..DQ {
+    let priority_axis = DBVH - 1;
+    for i in 0..priority_axis {
         if point.coords[i] < aabb.min.coords[i] || point.coords[i] > aabb.max.coords[i] {
             return None;
         }
     }
-    let p_min = aabb.min.coords[DQ];
-    let p_max = aabb.max.coords[DQ];
+    let p_min = aabb.min.coords[priority_axis];
+    let p_max = aabb.max.coords[priority_axis];
     if p_min > priority_hi || p_max <= priority_lo {
         return None;
     }
@@ -189,7 +101,7 @@ impl Ord for Priority {
 /// Iterator over a `DBVH`-dimensional BVH that models a ray from
 /// `(point, 0)` along the `DBVH`-th axis (the *priority* dimension).
 ///
-/// Leaves are visited in ascending order of `aabb.min[DQ]` (= priority),
+/// Leaves are visited in ascending order of `aabb.min[DBVH - 1]` (= priority),
 /// so callers receive results from the highest-priority model first.
 /// At each internal node the child with the lower `t_min` (= lower minimum
 /// priority value in that subtree) is pushed on top of the stack and
@@ -261,7 +173,7 @@ where
                     let shape = &self.shapes[shape_index];
                     // Check this leaf's own priority is within bounds before
                     // running the (potentially expensive) containment test.
-                    let leaf_p = shape.aabb().min.coords[DQ];
+                    let leaf_p = shape.aabb().min.coords[DBVH - 1];
                     if leaf_p < self.priority_lo || leaf_p > self.priority_hi {
                         continue;
                     }
@@ -387,7 +299,7 @@ where
             match self.bvh.nodes[node_idx] {
                 BvhNode::Leaf { shape_index, .. } => {
                     let shape = &self.shapes[shape_index];
-                    let leaf_p = shape.aabb().min.coords[DQ];
+                    let leaf_p = shape.aabb().min.coords[DBVH - 1];
                     if leaf_p < self.priority_lo || leaf_p > self.priority_hi {
                         continue;
                     }

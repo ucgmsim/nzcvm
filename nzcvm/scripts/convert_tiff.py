@@ -1,49 +1,92 @@
 from pathlib import Path
+from typing import Annotated
 
+import dask
 import numpy as np
 import typer
 import xarray as xr
 
 from nzcvm.models.mesh import (
     DEFAULT_STRUCTURED_ENCODING_SETTINGS,
+    SURFACE_CHUNK_SIZE,
     StructuredMesh,
-    StructuredMeshSchema,
+    surface_mesh,
 )
 from nzcvm.scripts._extras import missing_extra
 
 app = typer.Typer()
 
+#: Raster block read at once, in pixels along each axis.
+READ_CHUNK_SIZE = 4096
+
+
+def _valid_span(valid: xr.DataArray) -> slice:
+    """The span from the first to the last True entry of 1-D *valid*."""
+    index = np.flatnonzero(valid.values)
+    return slice(index[0], index[-1] + 1)
+
 
 def convert_tiff(
-    name: str, tiff_model: xr.DataArray, downsample: int
+    name: str, tiff_model: xr.DataArray, downsample: int, flip: bool = False
 ) -> StructuredMesh:
-    clipped = tiff_model.dropna("x", how="all").dropna("y", how="all")
+    """Turn a north-up raster into an upright surface.
+
+    The result stays as lazy as *tiff_model*. A chunked raster streams
+    through to the output without loading whole.
+
+    Parameters
+    ----------
+    name :
+        Name of the surface.
+    tiff_model :
+        Raster with 1-D ``x`` and ``y`` pixel-centre coordinates in NZTM.
+    downsample :
+        Average whole blocks of this many pixels along each axis, dropping
+        a partial block at the far edge.
+    flip :
+        Negate the values, turning elevation (up) into depth (down).
+
+    Returns
+    -------
+    StructuredMesh
+        The surface, indexed ``(y, x)`` by the raster's coordinates.
+    """
+    # Crop to the bounding box of the data. Dropping every all-NaN row or
+    # column instead would leave gaps in the coordinates wherever no-data
+    # rows sit inside the raster, and the grid would no longer be uniform.
+    valid = tiff_model.notnull()
+    rows, columns = dask.compute(valid.any("x"), valid.any("y"))
+    clipped = tiff_model.isel(x=_valid_span(columns), y=_valid_span(rows))
     if downsample > 1:
-        clipped = clipped.coarsen(x=downsample, y=downsample, boundary="pad").mean()
-
-    xi = clipped.x.astype(np.float32).values
-    yi = clipped.y.astype(np.float32).values
-    z = clipped.astype(np.float32).values
-
-    x, y = np.meshgrid(xi, yi)
-    ni, nj = x.shape
-    return StructuredMeshSchema.new(
-        x=x, y=y, z=z, i=np.arange(ni), j=np.arange(nj), name=name
-    )
+        clipped = clipped.coarsen(x=downsample, y=downsample, boundary="trim").mean()
+    z = clipped.transpose("y", "x").astype(np.float32)
+    return surface_mesh(name, -z.data if flip else z.data, z.x.values, z.y.values)
 
 
 @app.command()
-def main(tiff_path: Path, band: int, output_path: Path, downsample: int = 1) -> None:
+def main(
+    tiff_path: Path,
+    band: int,
+    output_path: Path,
+    downsample: int = 1,
+    flip: Annotated[
+        bool, typer.Option(help="Negate the values, as for elevation to depth.")
+    ] = False,
+) -> None:
     try:
         # Imported for its side effect: it registers xarray's "rasterio" engine.
         import rioxarray  # noqa: F401
     except ImportError as err:
         raise missing_extra("rioxarray", "raster", "convert-tiff") from err
 
-    dset = xr.open_dataset(tiff_path, engine="rasterio")
-    surface = convert_tiff(
-        output_path.stem, dset["band_data"].sel(band=band), downsample
+    chunk = READ_CHUNK_SIZE * downsample
+    dset = xr.open_dataset(
+        tiff_path, engine="rasterio", chunks={"x": chunk, "y": chunk}
     )
+    surface = convert_tiff(
+        output_path.stem, dset["band_data"].sel(band=band), downsample, flip
+    )
+    surface = surface.chunk({"y": SURFACE_CHUNK_SIZE, "x": SURFACE_CHUNK_SIZE})
     surface.to_zarr(output_path, encoding=DEFAULT_STRUCTURED_ENCODING_SETTINGS)
 
 

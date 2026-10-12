@@ -13,8 +13,9 @@ import numpy as np
 import pandas as pd
 import pytest
 import shapely
+import typer
 import xarray as xr
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from nzcvm.models.mesh import (
@@ -85,13 +86,13 @@ def _mesh(
         "square",
         shapely.box(0.0, 0.0, SIDE, SIDE),
         _square(),
-        TOPOGRAPHY,
         TOPOGRAPHY.copy(),
         TOPOGRAPHY + THICKNESS if bottom is None else bottom,
         model,
         culling_volume=1e-3,
         pad_top=pad_top,
         priority=3,
+        topography_range=(0.0, 0.0),
     )
 
 
@@ -109,11 +110,10 @@ def test_one_layer_of_depth_profile_tetrahedra() -> None:
     assert mesh.has_depth_profile
 
 
-def test_vertex_depth_is_below_topography() -> None:
+def test_vertex_depth_is_its_z() -> None:
+    """A basin mesh is in depth below the topography, so depth is z."""
     mesh = _mesh()
-    np.testing.assert_allclose(
-        mesh.depth.values, mesh.z.values - _topography(mesh.x.values, mesh.y.values)
-    )
+    np.testing.assert_allclose(mesh.depth.values, mesh.z.values)
 
 
 # Avoid the layer boundaries, where rounding picks either layer.
@@ -125,11 +125,14 @@ depths = st.floats(min_value=1.0, max_value=THICKNESS - 1.0).filter(
 
 @given(x=interior, y=interior, depth=depths)
 def test_query_evaluates_profile_at_depth(x: float, y: float, depth: float) -> None:
-    model = MeshModel.from_mesh(_mesh())
+    """A basin's z is depth below the topography. The profile reads it."""
     z = _topography_at(x, y) + depth
+    # Avoid the layer boundaries, where rounding picks either layer.
+    assume(abs(z - 100.0) > 0.5 and abs(z - 300.0) > 0.5)
+    model = MeshModel.from_mesh(_mesh())
     quality = model.query(x, y, z)
     assert quality is not None
-    assert quality.vs == pytest.approx(_expected_vs(np.array(depth)))
+    assert quality.vs == pytest.approx(_expected_vs(np.array(z)))
     assert quality.alpha == pytest.approx(1.0)
 
 
@@ -192,7 +195,6 @@ def test_layered_mesh_round_trips_through_zarr(tmp_path: Path) -> None:
     """``--layered`` meshes have no depth profile and still write and query."""
     layers = construct_mesh.slice_with_model(
         _square(),
-        TOPOGRAPHY,
         TOPOGRAPHY.copy(),
         TOPOGRAPHY + THICKNESS,
         PROFILE,
@@ -200,7 +202,11 @@ def test_layered_mesh_round_trips_through_zarr(tmp_path: Path) -> None:
         pad_top=False,
     )
     mesh = construct_mesh.construct_volumetric_mesh(
-        "layered", shapely.box(0.0, 0.0, SIDE, SIDE), layers, priority=3
+        "layered",
+        shapely.box(0.0, 0.0, SIDE, SIDE),
+        layers,
+        priority=3,
+        topography_range=(0.0, 0.0),
     )
     # One slice of three tetrahedra per triangle per profile layer.
     assert mesh.sizes["j"] == 2 * 3 * len(PROFILE)
@@ -310,3 +316,212 @@ def test_max_edge_caps_triangle_size() -> None:
     corners = triangulation.vertices[triangulation.triangles]
     edges = np.linalg.norm(corners - np.roll(corners, 1, axis=1), axis=2)
     assert edges.max() <= 300.0 + 1e-6
+
+
+def test_depth_below_measures_from_the_topography() -> None:
+    x, y = np.meshgrid(np.arange(4.0), np.arange(3.0), indexing="ij")
+    topography = SurfaceGrid(x, y, -10.0 - x)  # rising to the east
+    basement = SurfaceGrid(x, y, np.full_like(x, 200.0))
+    depth = construct_mesh.depth_below(basement, topography)
+    np.testing.assert_allclose(depth.values, 210.0 + x)
+
+
+# ---------------------------------------------------------------------------
+# Stacked layers sharing one triangulation
+# ---------------------------------------------------------------------------
+
+
+def _stack_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    """A synthetic DEM, basin outline and basement, plus a horizon halfway down."""
+    import h5py
+    from typer.testing import CliRunner
+
+    from nzcvm.scripts.synthetic import app as synthetic_app
+
+    runner = CliRunner()
+    for args in (
+        ["dem", str(tmp_path / "dem.h5"), "--samples", "24"],
+        ["basin", "gully", str(tmp_path), "--samples", "24"],
+    ):
+        result = runner.invoke(synthetic_app, args)
+        assert result.exit_code == 0, result.output
+    dem_path = tmp_path / "dem.h5"
+    basement_path = tmp_path / "gully_basement.h5"
+    with h5py.File(basement_path) as f:
+        longitude, latitude = f["longitude"][:], f["latitude"][:]
+        basement = f["elevation"][:]
+    dem = construct_mesh.read_surface_window(dem_path)
+    lon_grid, lat_grid = np.meshgrid(longitude, latitude)
+    x, y = construct_mesh.TRANSFORMER.transform(lon_grid, lat_grid)
+    ground = -dem(x.ravel(), y.ravel(), clamp=True)[0].reshape(x.shape)
+    middle_path = tmp_path / "middle.h5"
+    with h5py.File(middle_path, "w") as f:
+        f["longitude"], f["latitude"] = longitude, latitude
+        f["elevation"] = (ground + basement) / 2
+    return tmp_path / "gully_outline.geojson", dem_path, middle_path, basement_path
+
+
+def _build(*args: str | Path) -> None:
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(construct_mesh.app, [str(arg) for arg in args])
+    assert result.exit_code == 0, result.output
+
+
+def _columns(mesh: xr.Dataset, reduce) -> pd.Series:
+    """The top or bottom (by *reduce*) depth of each vertex column, by (x, y)."""
+    frame = pd.DataFrame({"x": mesh.x.values, "y": mesh.y.values, "z": mesh.z.values})
+    return frame.groupby(["x", "y"]).z.agg(reduce)
+
+
+def test_stacked_layers_share_their_interface(tmp_path: Path) -> None:
+    _assert_stack_meets(tmp_path, *_stack_inputs(tmp_path))
+
+
+def test_stacked_layers_meet_over_bases_at_different_spacings(
+    tmp_path: Path,
+) -> None:
+    """Every layer averages a Zarr DEM to the stack's spacing, not its own base's.
+
+    The basement here has half the horizon's resolution, so each layer's own
+    basement would average the DEM differently and convert the shared horizon
+    to different depths.
+    """
+    import h5py
+    from typer.testing import CliRunner
+
+    from nzcvm.scripts.surface_cli import app as surface_app
+
+    outline, dem_h5, middle, basement = _stack_inputs(tmp_path)
+    coarse = tmp_path / "coarse_basement.h5"
+    with h5py.File(basement) as source, h5py.File(coarse, "w") as f:
+        f["longitude"] = source["longitude"][::2]
+        f["latitude"] = source["latitude"][::2]
+        f["elevation"] = source["elevation"][::2, ::2]
+    fine = construct_mesh.median_spacing(construct_mesh.read_surface_window(middle))
+    dem = tmp_path / "dem.zarr"
+    result = CliRunner().invoke(
+        surface_app, [str(dem_h5), str(dem), "--spacing", str(fine / 4)]
+    )
+    assert result.exit_code == 0, result.output
+    _assert_stack_meets(tmp_path, outline, dem, middle, coarse)
+
+
+def _assert_stack_meets(
+    tmp_path: Path, outline: Path, dem: Path, middle: Path, basement: Path
+) -> None:
+    """Build the two layers of a stack in one run and check they meet."""
+    uniform = "rho=2000,vp=2000,vs=800,qp=80,qs=40"
+    upper, lower = tmp_path / "upper.zarr", tmp_path / "lower.zarr"
+    _build(
+        "main",
+        outline,
+        dem,
+        dem,
+        middle,
+        basement,
+        *("--topography", dem),
+        *("--output", upper, "--output", lower),
+        *("--priority", "1", "--priority", "2"),
+        *("--model", uniform, "--model", uniform),
+    )
+
+    upper_bottom = _columns(xr.open_zarr(upper), "max")
+    lower_top = _columns(xr.open_zarr(lower), "min")
+    shared = upper_bottom.index.intersection(lower_top.index)
+    assert len(shared) > 10
+    # A padded lower layer would start PAD_DEPTH above the upper one's bottom.
+    np.testing.assert_array_equal(upper_bottom[shared], lower_top[shared])
+
+
+def test_each_layer_needs_its_own_options(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    outline, dem, middle, basement = _stack_inputs(tmp_path)
+    result = CliRunner().invoke(
+        construct_mesh.app,
+        [
+            "main",
+            *map(str, (outline, dem, dem, middle, basement)),
+            *("--topography", str(dem)),
+            *("--output", str(tmp_path / "only.zarr")),
+            *("--priority", "1"),
+            *("--model", "rho=2000,vp=2000,vs=800,qp=80,qs=40"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "2 layer(s)" in result.output
+
+
+@pytest.mark.parametrize(
+    ("spec", "message"),
+    [
+        ("rho=1,vp=2,vs=3,qp=4", "exactly"),
+        ("no/such/model.fd_modfile", "No 1-D model file"),
+    ],
+)
+def test_read_model_rejects_bad_specs(spec: str, message: str) -> None:
+    with pytest.raises(typer.BadParameter, match=message):
+        construct_mesh.read_model(spec)
+
+
+def test_read_model_reads_uniform_qualities() -> None:
+    model = construct_mesh.read_model("rho=1,vp=2,vs=3,qp=4,qs=5")
+    assert model[["rho", "vp", "vs", "qp", "qs"]].iloc[0].tolist() == [1, 2, 3, 4, 5]
+
+
+def test_depth_mesh_bounds_span_its_depths_over_the_topography() -> None:
+    """A depth mesh's bounds hold the elevation range it can occupy."""
+    mesh = profile_mesh(
+        "square",
+        shapely.box(0.0, 0.0, SIDE, SIDE),
+        _square(),
+        TOPOGRAPHY.copy(),
+        TOPOGRAPHY + THICKNESS,
+        PROFILE,
+        culling_volume=1e-3,
+        pad_top=False,
+        priority=3,
+        topography_range=(-300.0, 20.0),
+    )
+    min_x, min_y, min_z, max_x, max_y, max_z = mesh.attrs["aabb"]
+    assert (min_x, min_y, max_x, max_y) == pytest.approx((0.0, 0.0, SIDE, SIDE))
+    margin = construct_mesh.ELEVATION_MARGIN
+    assert min_z == pytest.approx(-300.0 + float(mesh.z.min()) - margin)
+    assert max_z == pytest.approx(20.0 + float(mesh.z.max()) + margin)
+
+
+def test_depths_come_from_the_reference_topography(tmp_path: Path) -> None:
+    """A query topography 100 m higher moves the bounds, not the depths."""
+    from typer.testing import CliRunner
+
+    from nzcvm.scripts.surface_cli import app as surface_app
+
+    outline, dem, _, basement = _stack_inputs(tmp_path)
+    flat = tmp_path / "dem.zarr"
+    result = CliRunner().invoke(surface_app, [str(dem), str(flat)])
+    assert result.exit_code == 0, result.output
+    raised = tmp_path / "raised.zarr"
+    with xr.open_zarr(flat) as surface:
+        # A surface stores depth, the negation of elevation. Higher ground
+        # stores 100 m less.
+        (surface - 100.0).assign_attrs(surface.attrs).to_zarr(raised)
+
+    meshes = {}
+    for name, topography in (("same", flat), ("raised", raised)):
+        meshes[name] = tmp_path / f"{name}.zarr"
+        _build(
+            "main",
+            outline,
+            dem,
+            dem,
+            basement,
+            *("--topography", topography),
+            *("--output", meshes[name]),
+            *("--priority", "1"),
+            *("--model", "rho=2000,vp=2000,vs=800,qp=80,qs=40"),
+        )
+    same, raised_mesh = (xr.open_zarr(meshes[name]) for name in ("same", "raised"))
+    np.testing.assert_array_equal(same.z.values, raised_mesh.z.values)
+    shift = np.subtract(raised_mesh.attrs["aabb"], same.attrs["aabb"])
+    np.testing.assert_allclose(shift[[2, 5]], -100.0, atol=1.0)

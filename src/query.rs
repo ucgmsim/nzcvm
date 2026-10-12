@@ -1,6 +1,6 @@
 use crate::quality::Quality;
 use crate::real::Real;
-use nalgebra::Point3;
+use nalgebra::Point4;
 use serde::Serialize;
 
 /// Performance counters collected during a single model query.
@@ -33,18 +33,19 @@ pub struct Explanation {
 pub trait Query {
     type Explanation;
 
-    /// Blend models whose priority falls in `[lo, hi]` into `existing` at `point`.
+    /// Blend models whose priority falls in `[lo, hi]` into `existing` at
+    /// `point`, given as `(x, y, z, depth)`.
     ///
     /// Pass `existing = None` for a fresh query and `lo = 0, hi = 255` to
     /// consider all models.  This single method subsumes the old
     /// `query`, `query_bounded`, `query_into`, and `query_bounded_into`.
     fn query(
         &self,
-        point: Point3<Real>,
+        point: Point4<Real>,
         existing: Option<Quality>,
         lo: u8,
         hi: u8,
     ) -> Option<Quality>;
-    fn query_stats(&self, point: Point3<Real>) -> QueryStats;
-    fn query_explain(&self, point: Point3<Real>) -> Self::Explanation;
+    fn query_stats(&self, point: Point4<Real>) -> QueryStats;
+    fn query_explain(&self, point: Point4<Real>) -> Self::Explanation;
 }

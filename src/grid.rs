@@ -18,9 +18,11 @@ pub struct StructuredGrid {
     x: Array2<f64>,
     y: Array2<f64>,
     values: Array2<f64>,
-    /// Origin and inverse basis of an affine map from coordinates to
-    /// fractional `(j, k)` index, used to guess the cell containing a point.
-    origin: Vector2<f64>,
+    /// Affine map from coordinates to fractional `(j, k)` index, used to
+    /// guess the cell containing a point: `index_centre + inverse_basis *
+    /// (p - centre)`.
+    centre: Vector2<f64>,
+    index_centre: Vector2<f64>,
     inverse_basis: Matrix2<f64>,
 }
 
@@ -28,7 +30,7 @@ impl StructuredGrid {
     /// Create a grid from `(m, n)` arrays of node coordinates and values.
     ///
     /// Returns an error if the shapes differ, the grid has fewer than two
-    /// rows or columns, or its corner nodes don't span a 2D area.
+    /// rows or columns, or its nodes don't span a 2D area.
     pub fn new(x: Array2<f64>, y: Array2<f64>, values: Array2<f64>) -> Result<Self, String> {
         let (m, n) = x.dim();
         if y.dim() != (m, n) || values.dim() != (m, n) {
@@ -44,18 +46,29 @@ impl StructuredGrid {
                 "grid must have at least two rows and columns; got {m}x{n}"
             ));
         }
-        let node = |j: usize, k: usize| Vector2::new(x[[j, k]], y[[j, k]]);
-        let origin = node(0, 0);
-        let row_step = (node(m - 1, 0) - origin) / (m - 1) as f64;
-        let col_step = (node(0, n - 1) - origin) / (n - 1) as f64;
-        let inverse_basis = Matrix2::from_columns(&[row_step, col_step])
-            .try_inverse()
-            .ok_or("grid corner nodes are collinear")?;
+        // Fit the index guess to every node by least squares, so curved or
+        // unevenly spaced rows and columns pull it no further than they must.
+        let count = (m * n) as f64;
+        let centre = Vector2::new(x.sum() / count, y.sum() / count);
+        let index_centre = Vector2::new((m - 1) as f64 / 2.0, (n - 1) as f64 / 2.0);
+        let mut position_moments = Matrix2::zeros();
+        let mut index_moments = Matrix2::zeros();
+        for ((j, k), &node_x) in x.indexed_iter() {
+            let position = Vector2::new(node_x, y[[j, k]]) - centre;
+            let index = Vector2::new(j as f64, k as f64) - index_centre;
+            position_moments += position * position.transpose();
+            index_moments += index * position.transpose();
+        }
+        let inverse_basis = index_moments
+            * position_moments
+                .try_inverse()
+                .ok_or("grid nodes are collinear")?;
         Ok(Self {
             x,
             y,
             values,
-            origin,
+            centre,
+            index_centre,
             inverse_basis,
         })
     }
@@ -101,7 +114,7 @@ impl StructuredGrid {
     pub fn query(&self, px: f64, py: f64, clamp: bool) -> (f64, bool) {
         let (m, n) = self.x.dim();
         let p = Vector2::new(px, py);
-        let guess = self.inverse_basis * (p - self.origin);
+        let guess = self.index_centre + self.inverse_basis * (p - self.centre);
         let to_cell = |v: f64, len: usize| (v.floor().max(0.0) as usize).min(len - 2);
         let mut j = to_cell(guess.x, m);
         let mut k = to_cell(guess.y, n);

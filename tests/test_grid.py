@@ -20,7 +20,7 @@ from nzcvm.config.grids.terrain import SquashedDecay
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids.builder import build_grids_from_config
 from nzcvm.grids.grid import Grid
-from nzcvm.models.mesh import StructuredMeshSchema
+from nzcvm.models.mesh import surface_mesh
 
 # ---------------------------------------------------------------------------
 # Shared fixture: flat surface file
@@ -41,11 +41,7 @@ def _write_flat_surface(path: Path) -> None:
     ys = np.linspace(
         _SURFACE_YMIN, _SURFACE_YMIN + _SURFACE_EXTENT, n, dtype=np.float32
     )
-    xx, yy = np.meshgrid(xs, ys, indexing="ij")
-    zz = np.zeros_like(xx)
-    mesh = StructuredMeshSchema.new(
-        x=xx, y=yy, z=zz, i=np.arange(n), j=np.arange(n), name="flat"
-    )
+    mesh = surface_mesh("flat", np.zeros((n, n), dtype=np.float32), xs, ys)
     mesh.to_zarr(path, mode="w")
 
 

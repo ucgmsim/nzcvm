@@ -10,10 +10,8 @@ pub mod quality;
 pub mod query;
 pub mod real;
 pub mod simplex;
-pub mod surface;
 pub mod tin;
 mod tree_query;
-pub mod triangle;
 use pyo3::prelude::*;
 
 #[pymodule]
@@ -22,14 +20,14 @@ mod nzcvm {
     use crate::grid::StructuredGrid;
     use crate::mesh::MeshModel;
     use crate::model::{AnyField, DepthProfile, Interpolated, Profiled};
-    use crate::model_tree::{ModelTree, TreeModel};
+    use crate::model_tree::{ModelTree, TreeModel, Vertical};
     use crate::quality::Quality;
     use crate::query::Query;
     use crate::real::Real;
-    use crate::surface::SurfaceModel;
     use crate::tin::{self, TinSurface};
+    use bvh::aabb::Aabb;
 
-    use nalgebra::{Affine3, Matrix4, Point2, Point3};
+    use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
     use ndarray::{Array1, Array2, Axis, array, azip};
     use numpy::{
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
@@ -37,11 +35,12 @@ mod nzcvm {
     };
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
+    use pyo3::pybacked::PyBackedStr;
     use pythonize::pythonize;
 
     /// Coordinate arrays and optional boolean mask for a vectorised query.
     ///
-    /// Bundles the three `(N,)` coordinate arrays and an optional `(N,)` boolean
+    /// Bundles the four `(N,)` coordinate arrays and an optional `(N,)` boolean
     /// mask into a single object so that [`PyModelTree::query_many`] stays under
     /// Clippy's argument-count limit.  The object holds no GIL lock — arrays are
     /// borrowed only during the actual query call.
@@ -50,6 +49,7 @@ mod nzcvm {
         pub x: Py<PyArray1<Real>>,
         pub y: Py<PyArray1<Real>>,
         pub z: Py<PyArray1<Real>>,
+        pub depth: Py<PyArray1<Real>>,
         pub mask: Option<Py<PyArray1<bool>>>,
     }
 
@@ -59,21 +59,29 @@ mod nzcvm {
         ///
         /// Parameters
         /// ----------
-        /// x, y, z :
-        ///     Three 1-D float32 coordinate arrays of length *N*.
+        /// x, y, z, depth :
+        ///     Four 1-D float32 arrays of length *N*: the position, and its
+        ///     depth below the topography.
         /// mask :
         ///     Optional 1-D boolean array of length *N*.  When supplied, only
         ///     points where ``mask[i]`` is ``True`` are queried; other rows in
         ///     ``out`` are left untouched.
         #[new]
-        #[pyo3(signature = (x, y, z, mask=None))]
+        #[pyo3(signature = (x, y, z, depth, mask=None))]
         pub fn new(
             x: Py<PyArray1<Real>>,
             y: Py<PyArray1<Real>>,
             z: Py<PyArray1<Real>>,
+            depth: Py<PyArray1<Real>>,
             mask: Option<Py<PyArray1<bool>>>,
         ) -> Self {
-            QueryCoordinates { x, y, z, mask }
+            QueryCoordinates {
+                x,
+                y,
+                z,
+                depth,
+                mask,
+            }
         }
     }
 
@@ -133,17 +141,52 @@ mod nzcvm {
     /// which consumes the builder:
     ///
     /// ```python
-    /// MeshModelBuilder(vertices, faces, priority).name("crust").interpolated(qualities)
+    /// MeshModelBuilder(vertices, faces, priority, "elevation", bounds).name("crust").interpolated(qualities)
     /// ```
     ///
     /// Each field has its own finishing method, so the field types are
     /// defined once, here; the file format's model types map onto them in
     /// Python.  (Constant fields have no file format, so no method.)
+    impl<'a, 'py> FromPyObject<'a, 'py> for Vertical {
+        type Error = PyErr;
+
+        /// ``"elevation"`` or ``"depth"``, as the mesh file's ``vertical``
+        /// attribute spells it.
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            match &*obj.extract::<PyBackedStr>()? {
+                "elevation" => Ok(Vertical::Elevation),
+                "depth" => Ok(Vertical::Depth),
+                other => Err(PyValueError::new_err(format!(
+                    "vertical must be 'elevation' or 'depth', got {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// Where a mesh lies, from the mesh file's ``aabb`` attribute:
+    /// ``[min_x, min_y, min_z, max_x, max_y, max_z]`` with ``z`` negated
+    /// elevation.
+    pub struct Bounds(Aabb<Real, 3>);
+
+    impl<'a, 'py> FromPyObject<'a, 'py> for Bounds {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            let [min_x, min_y, min_z, max_x, max_y, max_z] = obj.extract::<[Real; 6]>()?;
+            Ok(Bounds(Aabb::with_bounds(
+                Point3::new(min_x, min_y, min_z),
+                Point3::new(max_x, max_y, max_z),
+            )))
+        }
+    }
+
     #[pyclass(name = "MeshModelBuilder")]
     pub struct PyMeshModelBuilder {
         /// Taken by the finishing method.
         geometry: Option<Geometry>,
         priority: u8,
+        vertical: Vertical,
+        bounds: Bounds,
         transform: Option<Affine3<Real>>,
         name: String,
     }
@@ -160,11 +203,20 @@ mod nzcvm {
         ///     ``(M, 4)`` integer array of tetrahedral cell indices.
         /// priority :
         ///     Model priority (lower number = higher priority).
+        /// vertical :
+        ///     ``"elevation"`` if the vertices' third coordinate is negated
+        ///     elevation, or ``"depth"`` if it is depth below the topography.
+        /// bounds :
+        ///     ``[min_x, min_y, min_z, max_x, max_y, max_z]``, with ``z``
+        ///     negated elevation whatever *vertical* is. The model tree
+        ///     prunes on it.
         #[new]
         fn new(
             vertices: PyReadonlyArray2<Real>,
             faces: PyReadonlyArray2<usize>,
             priority: u8,
+            vertical: Vertical,
+            bounds: Bounds,
         ) -> PyResult<Self> {
             let vertices = vertices
                 .as_array()
@@ -183,6 +235,8 @@ mod nzcvm {
             Ok(Self {
                 geometry: Some((vertices, faces)),
                 priority,
+                vertical,
+                bounds,
                 transform: None,
                 name: String::new(),
             })
@@ -279,7 +333,13 @@ mod nzcvm {
             let model = MeshModel::new(vertices, faces, field, self.transform)
                 .map_err(|e| PyValueError::new_err(format!("Model {name:?}: {e}")))?;
             Ok(PyMeshModel {
-                inner: Some(TreeModel::new(model, self.priority, name)),
+                inner: Some(TreeModel::new(
+                    model,
+                    self.priority,
+                    name,
+                    self.vertical,
+                    self.bounds.0,
+                )),
             })
         }
     }
@@ -352,7 +412,7 @@ mod nzcvm {
             let inner = self.inner.as_ref().ok_or_else(|| {
                 PyValueError::new_err("MeshModel has been consumed by model_tree()")
             })?;
-            let b = inner.model.aabb3();
+            let b = inner.bounds;
             let min = array![b.min.x, b.min.y, b.min.z];
             let max = array![b.max.x, b.max.y, b.max.z];
             Ok((min.into_pyarray(py), max.into_pyarray(py)))
@@ -402,18 +462,22 @@ mod nzcvm {
         /// Query the velocity model at a single point.
         ///
         /// Only models whose priority falls in `[priority_lo, priority_hi]` contribute.
-        /// Use `0, 255` to query all models.
+        /// Use `0, 255` to query all models. `depth` is the point's depth
+        /// below the topography, which depth-queried models read in place of
+        /// `z`.
         /// Returns a dict `{rho, vp, vs, qp, qs, alpha}` or `None` if outside all models.
+        #[allow(clippy::too_many_arguments)]
         pub fn query<'py>(
             &self,
             py: Python<'py>,
             x: Real,
             y: Real,
             z: Real,
+            depth: Real,
             priority_lo: u8,
             priority_hi: u8,
         ) -> PyResult<Option<Bound<'py, PyAny>>> {
-            let pt = Point3::new(x, y, z);
+            let pt = Point4::new(x, y, z, depth);
             self.inner
                 .query(pt, None, priority_lo, priority_hi)
                 .map(|q| pythonize(py, &q).map_err(|e| e.into()))
@@ -443,8 +507,9 @@ mod nzcvm {
             x: Real,
             y: Real,
             z: Real,
+            depth: Real,
         ) -> PyResult<Bound<'py, PyAny>> {
-            let pt = Point3::new(x, y, z);
+            let pt = Point4::new(x, y, z, depth);
             pythonize(py, &self.inner.query_stats(pt)).map_err(|e| e.into())
         }
 
@@ -458,8 +523,9 @@ mod nzcvm {
             x: Real,
             y: Real,
             z: Real,
+            depth: Real,
         ) -> PyResult<Bound<'py, PyAny>> {
-            let pt = Point3::new(x, y, z);
+            let pt = Point4::new(x, y, z, depth);
             pythonize(py, &self.inner.query_explain(pt)).map_err(|e| e.into())
         }
 
@@ -481,7 +547,7 @@ mod nzcvm {
         /// * `out`    – `(N, 6)` float32 array that receives the results
         ///   in-place.  Columns are ordered `[rho, vp, vs, qp, qs, alpha]`.
         ///   Rows for points outside all matching models are left unchanged.
-        /// * `coords` – [`QueryCoordinates`] bundling the three `(N,)` float32
+        /// * `coords` – [`QueryCoordinates`] bundling the four `(N,)` float32
         ///   coordinate arrays and an optional boolean mask.
         /// * `params` – priority bounds; use `QueryParams(0, 255)` for all models.
         ///
@@ -502,16 +568,19 @@ mod nzcvm {
             let x_ro = coords.x.bind(py).readonly();
             let y_ro = coords.y.bind(py).readonly();
             let z_ro = coords.z.bind(py).readonly();
+            let depth_ro = coords.depth.bind(py).readonly();
             let xs = x_ro.as_array();
             let ys = y_ro.as_array();
             let zs = z_ro.as_array();
+            let depths = depth_ro.as_array();
             let n = xs.len();
-            if ys.len() != n || zs.len() != n {
+            if ys.len() != n || zs.len() != n || depths.len() != n {
                 return Err(PyValueError::new_err(format!(
-                    "x, y, z must have the same length; got x={}, y={}, z={}",
+                    "x, y, z, depth must have the same length; got x={}, y={}, z={}, depth={}",
                     n,
                     ys.len(),
                     zs.len(),
+                    depths.len(),
                 )));
             }
             if out.shape()[0] != n || out.shape()[1] != 6 {
@@ -524,8 +593,8 @@ mod nzcvm {
             match &coords.mask {
                 None => {
                     py.detach(|| {
-                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs) {
-                            let pt = Point3::new(xi, yi, zi);
+                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &di in &depths) {
+                            let pt = Point4::new(xi, yi, zi, di);
                             if let Some(q) = self.inner.query(pt, None, lo, hi) {
                                 lane[0] = q.rho;
                                 lane[1] = q.vp;
@@ -547,9 +616,9 @@ mod nzcvm {
                         )));
                     }
                     py.detach(|| {
-                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &mi in &ms) {
+                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &di in &depths, &mi in &ms) {
                             if mi {
-                                let pt = Point3::new(xi, yi, zi);
+                                let pt = Point4::new(xi, yi, zi, di);
                                 if let Some(q) = self.inner.query(pt, None, lo, hi) {
                                     lane[0] = q.rho;
                                     lane[1] = q.vp;
@@ -569,101 +638,6 @@ mod nzcvm {
         /// Print a human-readable summary of the model tree to stdout.
         pub fn print_structure(&self) {
             self.inner.pretty_print();
-        }
-    }
-
-    /// Python-facing surface model for 2D elevation/property interpolation.
-    #[pyclass]
-    pub struct PySurfaceModel {
-        pub inner: Option<SurfaceModel>,
-    }
-
-    /// Create a [`PySurfaceModel`] from raw NumPy arrays.
-    ///
-    /// # Arguments
-    /// * `vertices_py` – `(N, 2)` array of (x, y) coordinates.
-    /// * `faces_py`    – `(M, 3)` array of triangle vertex indices.
-    /// * `z_py`        – `(N,)` array of values (e.g. elevation) at each vertex.
-    #[pyfunction]
-    pub fn surface_model(
-        vertices_py: PyReadonlyArray2<Real>,
-        faces_py: PyReadonlyArray2<usize>,
-        z_py: PyReadonlyArray1<Real>,
-    ) -> PyResult<PySurfaceModel> {
-        let vertices = vertices_py
-            .as_array()
-            .axis_iter(Axis(0))
-            .map(|a| Point2::new(a[0], a[1]))
-            .collect();
-
-        let faces = faces_py
-            .as_array()
-            .axis_iter(Axis(0))
-            .map(|a| Point3::new(a[0], a[1], a[2]))
-            .collect();
-
-        let z = z_py.as_array().to_vec();
-
-        Ok(PySurfaceModel {
-            inner: Some(SurfaceModel::new(vertices, faces, z)),
-        })
-    }
-
-    #[pymethods]
-    impl PySurfaceModel {
-        /// Query the surface at (x, y) to get the interpolated value.
-        pub fn query(&self, x: Real, y: Real) -> PyResult<Option<Real>> {
-            let inner = self
-                .inner
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("SurfaceModel has been consumed"))?;
-            Ok(inner.query(Point2::new(x, y)))
-        }
-
-        /// Query the surface for many points at once, returning a 1D float array.
-        ///
-        /// `xy` is an `(N, 2)` float array with columns `[x, y]`.
-        ///
-        /// Returns an `(N,)` float array. Points outside the surface are NaN, so a
-        /// caller cannot mistake a miss for a real value of zero.
-        pub fn query_many<'py>(
-            &self,
-            py: Python<'py>,
-            xy: PyReadonlyArray2<Real>,
-        ) -> PyResult<Bound<'py, PyArray1<Real>>> {
-            let inner = self
-                .inner
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("SurfaceModel has been consumed"))?;
-
-            // Capture the input view
-            let coords = xy.as_array();
-            let n = coords.nrows();
-
-            // Every point starts as a miss and is overwritten only on a hit.
-            let mut buf = Array1::<Real>::from_elem(n, Real::NAN);
-
-            // Detach from GIL to allow multi-threaded Python to keep moving
-            // (or to allow Rayon par_iter if you decide to add it later)
-            py.detach(|| {
-                azip!((out in &mut buf, row in coords.rows()) {
-                    let pt = Point2::new(row[0], row[1]);
-                    if let Some(val) = inner.query(pt) {
-                        *out = val;
-                    }
-                });
-            });
-
-            Ok(buf.into_pyarray(py))
-        }
-
-        /// Return a serialisable Python dict describing this surface.
-        pub fn view<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            let inner = self
-                .inner
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("SurfaceModel has been consumed"))?;
-            pythonize(py, &inner.view()).map_err(|e| e.into())
         }
     }
 
@@ -936,13 +910,11 @@ mod nzcvm {
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<PyMeshModel>()?;
-        m.add_class::<PySurfaceModel>()?;
         m.add_class::<PyCoastline>()?;
         m.add_class::<PyModelTree>()?;
         m.add_class::<QueryParams>()?;
         m.add_class::<QueryCoordinates>()?;
         m.add_class::<PyMeshModelBuilder>()?;
-        m.add_function(wrap_pyfunction!(surface_model, m)?)?;
         m.add_function(wrap_pyfunction!(coastline, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;
         m.add_function(wrap_pyfunction!(blend_many, m)?)?;
