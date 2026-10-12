@@ -6,23 +6,27 @@ Writes four files to the output directory:
     One row per sample of every station's profile, in the layout of the
     ``parquet`` output format. This is the reference copy.
 ``profiles.csv``
-    The same table as CSV, converted from the Parquet file.
+    The same table as CSV.
 ``summary.parquet`` / ``summary.csv``
     One row per station: Vs30, Z1.0 and Z2.5, and the depth the station's
     profile reaches.
+
+The config gives the borehole grid: the station list (``sites``), the depth
+every profile starts at and the sample spacing. The layers come from a
+second config, the whole-country model, without its clamp layer, so the
+profiles carry the Ely taper unclamped.
 
 The stations are the observational ones in the station list: those with a
 three- or four-character name, as opposed to the seven-character names of
 the virtual stations. ``--all-stations`` takes every station instead.
 
-Every profile goes down to ``--depth`` at ``--resolution`` spacing. A station
-whose profile never reaches Vs = 2.5 km/s has its profile re-run twice as
-deep, again and again, until it does. Its rows in ``profiles.parquet`` reach
-further than the rest. The build fails if any station still misses
-2.5 km/s at ``--max-depth``.
+A station whose profile never reaches Vs = 2.5 km/s has its profile re-run
+twice as deep, again and again, until it does. Its rows in
+``profiles.parquet`` reach further than the rest. The build fails if any
+station still misses 2.5 km/s at ``--max-depth``.
 
-The script builds the grid and query pipeline once for every station, which
-is the slow part since it loads the nationwide DEM and Vs30 surfaces. It then
+The script builds the query pipeline once for every station, which is the
+slow part since it loads the nationwide DEM and Vs30 surfaces. It then
 computes the profiles in batches of about ``--rows-per-batch`` samples, since
 the table writer loads a whole batch into memory and the full database
 doesn't fit in a CI runner's RAM.
@@ -32,23 +36,23 @@ import dataclasses
 import logging
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Self
 
 import dask
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-import pyarrow.csv as pa_csv
 import pyarrow.parquet as pq
 import typer
 
 from nzcvm.components import Component
 from nzcvm.config import VelocityModelConfig
-from nzcvm.config.grids.borehole import DEFAULT_CHUNK_SIZES, Site
+from nzcvm.config.grids.borehole import DEFAULT_CHUNK_SIZES, BoreholeGridConfig
+from nzcvm.config.layers.clamp import ClampLayerConfig
 from nzcvm.coordinates import Coordinate
-from nzcvm.formats.table import flatten
+from nzcvm.formats.table import FLOAT_FORMAT, flatten
+from nzcvm.grids.borehole import read_site_table, sites_from_frame
 from nzcvm.layers import pipeline
-from nzcvm.layers.core import Layer
 from nzcvm.velocity_model import VelocityModel
 
 logger = logging.getLogger("site_database")
@@ -80,7 +84,7 @@ def read_stations(path: Path) -> pd.DataFrame:
     Parameters
     ----------
     path :
-        CSV with ``lon``, ``lat`` and ``station`` columns.
+        Table with ``lon``, ``lat`` and ``station`` columns.
 
     Returns
     -------
@@ -93,7 +97,7 @@ def read_stations(path: Path) -> pd.DataFrame:
         If a station name appears more than once. Names key the deepening
         passes, so they have to be unique.
     """
-    stations = pd.read_csv(path).rename(
+    stations = read_site_table(path).rename(
         columns={"lon": "longitude", "lat": "latitude"}
     )[[STATION, "longitude", "latitude"]]
     duplicated = stations[STATION][stations[STATION].duplicated()]
@@ -103,17 +107,9 @@ def read_stations(path: Path) -> pd.DataFrame:
 
 
 def sites_model(
-    config: VelocityModelConfig,
-    stations: pd.DataFrame,
-    depth_m: float,
-    model_pipeline: Layer | None = None,
-) -> tuple[VelocityModel, Layer]:
-    """Lay out a profile at each of *stations* and attach the query pipeline.
-
-    This leaves the qualities lazy, for the caller to compute a slice of
-    stations at a time.  Building the grid and the pipeline
-    is the slow part, since each loads a nationwide surface (the DEM and the
-    Vs30 map), so this happens once per depth rather than once per slice.
+    config: VelocityModelConfig, stations: pd.DataFrame, depth_m: float
+) -> VelocityModel:
+    """Lay out a profile at each of *stations*, with lazy qualities.
 
     Parameters
     ----------
@@ -123,29 +119,16 @@ def sites_model(
         Stations to lay profiles out at.
     depth_m :
         Bottom of every profile, in metres below the topography.
-    model_pipeline :
-        Pipeline to reuse from an earlier call, built over a superset of
-        *stations*.  Built afresh when not given.
 
     Returns
     -------
-    velocity_model : VelocityModel
-        The profiles, with lazy qualities.
-    model_pipeline : Layer
-        The query pipeline, for reuse.
+    VelocityModel
+        The profiles, before the query pipeline runs.
     """
-    sites = [
-        Site(longitude=longitude, latitude=latitude, labels={STATION: station})
-        for station, longitude, latitude in zip(
-            stations[STATION], stations["longitude"], stations["latitude"]
-        )
-    ]
-    grid = dataclasses.replace(config.grid, sites=sites, depth=depth_m)
-    velocity_model = VelocityModel.from_config(dataclasses.replace(config, grid=grid))
-    if model_pipeline is None:
-        model_pipeline = pipeline.build_pipeline(velocity_model.geometry, config.layers)
-    velocity_model = pipeline.execute_model_pipeline(velocity_model, model_pipeline)
-    return velocity_model, model_pipeline
+    grid = dataclasses.replace(
+        config.grid, sites=sites_from_frame(stations), depth=depth_m
+    )
+    return VelocityModel.from_config(dataclasses.replace(config, grid=grid))
 
 
 def query_profiles(velocity_model: VelocityModel, sites: slice) -> pd.DataFrame:
@@ -154,7 +137,7 @@ def query_profiles(velocity_model: VelocityModel, sites: slice) -> pd.DataFrame:
     Parameters
     ----------
     velocity_model :
-        Output of :func:`sites_model`.
+        Output of :func:`sites_model`, after the query pipeline.
     sites :
         Stations to compute, as a slice along the ``i`` axis.
 
@@ -219,27 +202,44 @@ def summarise(profiles: pd.DataFrame, stations: pd.DataFrame) -> pd.DataFrame:
 
 
 class ProfileWriter:
-    """Append profile tables to one Parquet file under a fixed schema."""
+    """Append profile tables to a Parquet file and a CSV file.
 
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.writer: pq.ParquetWriter | None = None
+    The Parquet schema comes from the first table, and the CSV numbers use
+    the ``csv`` output format's float format.
+    """
+
+    def __init__(self, parquet_path: Path, csv_path: Path) -> None:
+        self.parquet_path = parquet_path
+        self.csv_path = csv_path
+        self.parquet: pq.ParquetWriter | None = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self.parquet is not None:
+            self.parquet.close()
 
     def write(self, profiles: pd.DataFrame) -> None:
-        """Append *profiles*, taking the schema from the first call."""
-        if self.writer is None:
+        """Append *profiles* to both files."""
+        first = self.parquet is None
+        if self.parquet is None:
             table = pa.Table.from_pandas(profiles, preserve_index=False)
-            self.writer = pq.ParquetWriter(self.path, table.schema, compression="zstd")
+            self.parquet = pq.ParquetWriter(
+                self.parquet_path, table.schema, compression="zstd"
+            )
         else:
             table = pa.Table.from_pandas(
-                profiles, schema=self.writer.schema, preserve_index=False
+                profiles, schema=self.parquet.schema, preserve_index=False
             )
-        self.writer.write_table(table)
-
-    def close(self) -> None:
-        """Finish the file."""
-        if self.writer is not None:
-            self.writer.close()
+        self.parquet.write_table(table)
+        profiles.to_csv(
+            self.csv_path,
+            mode="w" if first else "a",
+            header=first,
+            index=False,
+            float_format=FLOAT_FORMAT,
+        )
 
 
 def write_pass(
@@ -253,7 +253,8 @@ def write_pass(
     Parameters
     ----------
     velocity_model :
-        Output of :func:`sites_model` for *stations*.
+        Output of :func:`sites_model` for *stations*, after the query
+        pipeline.
     stations :
         The stations, in grid order.
     batch_size :
@@ -301,21 +302,18 @@ def write_pass(
     )
 
 
-def parquet_to_csv(parquet_path: Path, csv_path: Path) -> None:
-    """Convert *parquet_path* to CSV one row group at a time."""
-    parquet = pq.ParquetFile(parquet_path)
-    with pa_csv.CSVWriter(csv_path, parquet.schema_arrow) as writer:
-        for index in range(parquet.num_row_groups):
-            writer.write_table(parquet.read_row_group(index))
-
-
 @app.command()
 def main(
-    stations_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
     config_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    layers_path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            help="Config to take the layers from, minus any clamp layer.",
+        ),
+    ],
     output_dir: Path,
-    depth_m: Annotated[float, typer.Option("--depth", min=1.0)] = 5000.0,
-    resolution_m: Annotated[float, typer.Option("--resolution", min=0.1)] = 5.0,
     max_depth_m: Annotated[float, typer.Option("--max-depth", min=1.0)] = 80000.0,
     n_threads: Annotated[int, typer.Option(min=1)] = 4,
     rows_per_batch: Annotated[int, typer.Option(min=1)] = 4_000_000,
@@ -329,54 +327,65 @@ def main(
 ) -> None:
     """Build profiles.parquet, profiles.csv, summary.parquet and summary.csv."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    stations = read_stations(stations_path)
+    config = VelocityModelConfig.read_config(config_path)
+    layers = [
+        layer
+        for layer in VelocityModelConfig.read_config(layers_path).layers
+        if not isinstance(layer, ClampLayerConfig)
+    ]
+    config = dataclasses.replace(config, layers=layers)
+    grid = config.grid
+    if not isinstance(grid, BoreholeGridConfig) or not isinstance(grid.sites, Path):
+        raise typer.BadParameter(
+            "The config needs a borehole grid over a station file."
+        )
+    stations = read_stations(grid.sites)
     if not all_stations:
         observational = stations[STATION].str.len().isin(OBSERVATIONAL_NAME_LENGTHS)
         stations = stations[observational].reset_index(drop=True)
     if limit is not None:
         stations = stations.head(limit)
-    config = VelocityModelConfig.read_config(config_path)
-    config = dataclasses.replace(
-        config, grid=dataclasses.replace(config.grid, resolution_z=resolution_m)
-    )
+    depth_m = grid.depth
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    profiles_path = output_dir / "profiles.parquet"
-    writer = ProfileWriter(profiles_path)
     summaries = []
-    model_pipeline = None
     pending = stations
-    try:
-        with dask.config.set(scheduler="threads", num_workers=n_threads):
-            while not pending.empty:
-                if depth_m > max_depth_m:
-                    raise RuntimeError(
-                        f"{len(pending)} station(s) never reach Vs = {VS_2P5} m/s "
-                        f"above {max_depth_m} m: {pending[STATION].tolist()[:10]}"
-                    )
-                logger.info("%d station(s) to %.0f m", len(pending), depth_m)
-                velocity_model, model_pipeline = sites_model(
-                    config, pending, depth_m, model_pipeline
+    with (
+        dask.config.set(scheduler="threads", num_workers=n_threads),
+        ProfileWriter(
+            output_dir / "profiles.parquet", output_dir / "profiles.csv"
+        ) as writer,
+    ):
+        # Building the pipeline loads the nationwide DEM and Vs30 surfaces,
+        # so it happens once, over every station, and serves the deeper
+        # passes too.
+        model_pipeline = pipeline.build_pipeline(
+            sites_model(config, stations, depth_m).geometry, config.layers
+        )
+        while not pending.empty:
+            if depth_m > max_depth_m:
+                raise RuntimeError(
+                    f"{len(pending)} station(s) never reach Vs = {VS_2P5} m/s "
+                    f"above {max_depth_m} m: {pending[STATION].tolist()[:10]}"
                 )
-                samples_per_profile = int(depth_m // resolution_m) + 1
-                # Whole chunks of the borehole grid's station axis per batch.
-                batch_size = max(
-                    CHUNK, rows_per_batch // samples_per_profile // CHUNK * CHUNK
-                )
-                summary, pending = write_pass(
-                    velocity_model, pending, batch_size, writer
-                )
-                summaries.append(summary)
-                depth_m *= 2
-    finally:
-        writer.close()
+            logger.info("%d station(s) to %.0f m", len(pending), depth_m)
+            velocity_model = pipeline.execute_model_pipeline(
+                sites_model(config, pending, depth_m), model_pipeline
+            )
+            samples_per_profile = int(depth_m // grid.resolution_z) + 1
+            # Whole chunks of the borehole grid's station axis per batch.
+            batch_size = max(
+                CHUNK, rows_per_batch // samples_per_profile // CHUNK * CHUNK
+            )
+            summary, pending = write_pass(velocity_model, pending, batch_size, writer)
+            summaries.append(summary)
+            depth_m *= 2
 
     summary = (
         pd.concat(summaries).set_index(STATION).loc[stations[STATION]].reset_index()
     )
     summary.to_parquet(output_dir / "summary.parquet", index=False)
-    summary.to_csv(output_dir / "summary.csv", index=False)
-    parquet_to_csv(profiles_path, output_dir / "profiles.csv")
+    summary.to_csv(output_dir / "summary.csv", index=False, float_format=FLOAT_FORMAT)
     logger.info(
         "%d stations, %d deepened past the first pass",
         len(summary),

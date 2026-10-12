@@ -68,10 +68,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: nzcvm_data
-          # The workflow hash invalidates the cache when LFS_INCLUDE changes.
-          key: >-
-            nzcvm-data-${{ steps.data.outputs.sha }}-${{
-            hashFiles('.github/workflows/vm-data.yml') }}
+          key: nzcvm-data-${{ steps.data.outputs.sha }}-${{ env.LFS_INCLUDE }}
 
       - name: Clone nzcvm_data
         if: steps.data-cache.outputs.cache-hit != 'true'
@@ -91,7 +88,6 @@ jobs:
           rclone copy "$DROPBOX_DIR/resources.zip" .
           rclone copy "$DROPBOX_DIR/stations.csv" .
           unzip -q resources.zip
-          cp nzcvm_data/tomography/EP2020/ep2020.csv ep2020.csv
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -107,69 +103,44 @@ jobs:
         # Also zips sites/ into sites.zip.
         run: just sites --n-threads "$(nproc)"
 
-      - name: Name the build
-        id: name
+      - name: Upload to Dropbox
         env:
           TAG: ${{ github.event.release.tag_name }}
-        run: |
-          if [ -n "$TAG" ]; then
-            echo "suffix=v${TAG#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "suffix=master" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload to Dropbox
-        id: upload
-        env:
-          SUFFIX: ${{ steps.name.outputs.suffix }}
-        run: |
-          {
-            echo "resources_link=$(rclone link "$DROPBOX_DIR/resources.zip")"
-            echo "resources_sha=$(sha256sum resources.zip | cut -d' ' -f1)"
-          } >> "$GITHUB_OUTPUT"
-          for kind in models sites; do
-            name="$kind-$SUFFIX.zip"
-            sha=$(sha256sum "$kind.zip" | cut -d' ' -f1)
-            echo "$sha  $name" > "$name.sha256"
-            rclone copyto "$kind.zip" "$DROPBOX_DIR/$name"
-            rclone copyto "$name.sha256" "$DROPBOX_DIR/$name.sha256"
-            {
-              echo "${kind}_name=$name"
-              echo "${kind}_sha=$sha"
-              echo "${kind}_link=$(rclone link "$DROPBOX_DIR/$name")"
-            } >> "$GITHUB_OUTPUT"
-          done
-
-      - name: Write the download table
-        env:
-          RESOURCES_LINK: ${{ steps.upload.outputs.resources_link }}
-          RESOURCES_SHA: ${{ steps.upload.outputs.resources_sha }}
-          MODELS_NAME: ${{ steps.upload.outputs.models_name }}
-          MODELS_LINK: ${{ steps.upload.outputs.models_link }}
-          MODELS_SHA: ${{ steps.upload.outputs.models_sha }}
-          SITES_NAME: ${{ steps.upload.outputs.sites_name }}
-          SITES_LINK: ${{ steps.upload.outputs.sites_link }}
-          SITES_SHA: ${{ steps.upload.outputs.sites_sha }}
           DATA_SHA: ${{ steps.data.outputs.sha }}
           MODELS_ABOUT: Basin and tomography models
           SITES_ABOUT: >-
             Site database: profiles, and Vs30, Z1.0 and Z2.5 per station
           RESOURCES_ABOUT: Vs30, DEM and coastline that the models build from
         run: |
-          DATA_URL="https://github.com/ucgmsim/nzcvm_data/tree/$DATA_SHA"
+          suffix=master
+          if [ -n "$TAG" ]; then suffix="v${TAG#v}"; fi
           row() { printf '| [%s](%s) | %s | `%s` |\n' "$@"; }
+          rows=()
+          for kind in models sites; do
+            name="$kind-$suffix.zip"
+            sha=$(sha256sum "$kind.zip" | cut -d' ' -f1)
+            # The checksum sits beside each zip too, since only releases
+            # record it in their description.
+            echo "$sha  $name" > "$name.sha256"
+            rclone copyto "$kind.zip" "$DROPBOX_DIR/$name"
+            rclone copyto "$name.sha256" "$DROPBOX_DIR/$name.sha256"
+            about="${kind^^}_ABOUT"
+            link=$(rclone link "$DROPBOX_DIR/$name")
+            rows+=("$(row "$name" "$link" "${!about}" "$sha")")
+          done
+          link=$(rclone link "$DROPBOX_DIR/resources.zip")
+          sha=$(sha256sum resources.zip | cut -d' ' -f1)
+          rows+=("$(row resources.zip "$link" "$RESOURCES_ABOUT" "$sha")")
           {
             echo "<!-- vm-data -->"
             echo "## Model data"
             echo
             echo "| File | Contents | SHA-256 |"
             echo "| --- | --- | --- |"
-            row "$MODELS_NAME" "$MODELS_LINK" "$MODELS_ABOUT" "$MODELS_SHA"
-            row "$SITES_NAME" "$SITES_LINK" "$SITES_ABOUT" "$SITES_SHA"
-            row resources.zip "$RESOURCES_LINK" "$RESOURCES_ABOUT" \
-              "$RESOURCES_SHA"
+            printf '%s\n' "${rows[@]}"
             echo
-            echo "Built from [nzcvm_data@${DATA_SHA:0:7}]($DATA_URL)."
+            data_url="https://github.com/ucgmsim/nzcvm_data/tree/$DATA_SHA"
+            echo "Built from [nzcvm_data@${DATA_SHA:0:7}]($data_url)."
             echo "<!-- /vm-data -->"
           } > downloads.md
           cat downloads.md >> "$GITHUB_STEP_SUMMARY"

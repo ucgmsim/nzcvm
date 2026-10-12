@@ -339,18 +339,17 @@ def uniform_model(
         bottom_depth = np.asarray(layer_bottoms, dtype=float)
         if bottom_depth.size == 0 or np.any(np.diff(bottom_depth) <= 0):
             raise ValueError("Layer bottoms must be non-empty and increasing.")
-        top_depth = np.concatenate(([0.0], bottom_depth[:-1]))
-        return pd.DataFrame(
-            {
-                "vp": vp,
-                "vs": vs,
-                "rho": rho,
-                "qp": qp,
-                "qs": qs,
-                "bottom_depth": bottom_depth,
-                "z": top_depth,
-                "thickness": bottom_depth - top_depth,
-            }
+        return with_layer_tops(
+            pd.DataFrame(
+                {
+                    "vp": vp,
+                    "vs": vs,
+                    "rho": rho,
+                    "qp": qp,
+                    "qs": qs,
+                    "bottom_depth": bottom_depth,
+                }
+            )
         )
     return pd.DataFrame(
         {
@@ -376,11 +375,19 @@ def read_layered_model(layered_model_path: Path) -> pd.DataFrame:
     )
     for col in ["vp", "vs", "rho", "bottom_depth"]:
         df[col] *= 1000.0
-    bottom_depth = df["bottom_depth"].to_numpy()
-    df["z"] = np.concatenate(([0.0], bottom_depth[:-1]))
-    df["thickness"] = bottom_depth - df["z"]
+    return with_layer_tops(df)
 
-    return df
+
+def with_layer_tops(model: pd.DataFrame) -> pd.DataFrame:
+    """Add each layer's top ``z`` and ``thickness`` from the ``bottom_depth`` column.
+
+    The first layer starts at the topography, and each later one at the
+    bottom of the layer above.
+    """
+    bottom_depth = model["bottom_depth"].to_numpy()
+    model["z"] = np.concatenate(([0.0], bottom_depth[:-1]))
+    model["thickness"] = bottom_depth - model["z"]
+    return model
 
 
 def volumes(vertices: np.ndarray, tetra: np.ndarray) -> np.ndarray:

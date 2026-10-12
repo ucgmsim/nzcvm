@@ -37,6 +37,73 @@ SITE_READERS: dict[str, Callable[[Path], pd.DataFrame]] = {
 }
 
 
+def read_site_table(path: Path) -> pd.DataFrame:
+    """Read a CSV or Parquet table of sites.
+
+    Parameters
+    ----------
+    path :
+        CSV or Parquet file.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The table as stored.
+
+    Raises
+    ------
+    ValueError
+        If the suffix isn't a supported format.
+    """
+    reader = SITE_READERS.get(path.suffix.lower())
+    if reader is None:
+        supported = ", ".join(sorted(SITE_READERS))
+        raise ValueError(
+            f"Cannot read sites from '{path}': expected one of {supported}"
+        )
+    return reader(path)
+
+
+def sites_from_frame(
+    frame: pd.DataFrame, source: object = "the site table"
+) -> list[Site]:
+    """Turn each row of a site table into a :class:`Site`.
+
+    Parameters
+    ----------
+    frame :
+        Table with ``longitude`` and ``latitude`` columns.  Every other column
+        becomes a label on the site it belongs to.
+    source :
+        Where *frame* came from, for the error message.
+
+    Returns
+    -------
+    list[Site]
+        One :class:`~nzcvm.config.grids.borehole.Site` per row, in order.
+
+    Raises
+    ------
+    ValueError
+        If a spatial column is missing.
+    """
+    missing = [column for column in SPATIAL_KEYS if column not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"Site file '{source}' is missing the {', '.join(missing)} column(s). "
+            f"Expected {', '.join(SPATIAL_KEYS)}."
+        )
+
+    return [
+        Site(
+            longitude=float(record.pop("longitude")),
+            latitude=float(record.pop("latitude")),
+            labels=record,
+        )
+        for record in frame.to_dict("records")
+    ]
+
+
 def read_sites(path: Path) -> list[Site]:
     """Read borehole sites from a CSV or Parquet file.
 
@@ -57,29 +124,7 @@ def read_sites(path: Path) -> list[Site]:
         If the suffix isn't a supported format, or a spatial column is
         missing.
     """
-    reader = SITE_READERS.get(path.suffix.lower())
-    if reader is None:
-        supported = ", ".join(sorted(SITE_READERS))
-        raise ValueError(
-            f"Cannot read sites from '{path}': expected one of {supported}"
-        )
-
-    frame = reader(path)
-    missing = [column for column in SPATIAL_KEYS if column not in frame.columns]
-    if missing:
-        raise ValueError(
-            f"Site file '{path}' is missing the {', '.join(missing)} column(s). "
-            f"Expected {', '.join(SPATIAL_KEYS)}."
-        )
-
-    return [
-        Site(
-            longitude=float(record.pop("longitude")),
-            latitude=float(record.pop("latitude")),
-            labels=record,
-        )
-        for record in frame.to_dict("records")
-    ]
+    return sites_from_frame(read_site_table(path), path)
 
 
 def site_labels(sites: list[Site]) -> dict[str, np.ndarray]:

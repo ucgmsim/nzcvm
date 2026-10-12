@@ -193,7 +193,7 @@ tomography := "uv run nzcvm tomography convert"
 surface := "uv run --extra raster nzcvm convert-tiff main"
 
 ep2020:
-    @test -f models/ep2020.zarr || {{ tomography }} ep2020.csv models/ep2020.zarr
+    @test -f models/ep2020.zarr || {{ tomography }} ${NZCVM_DATA_ROOT}/tomography/EP2020/ep2020.csv models/ep2020.zarr
 
 models: ep2020 basins
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py
@@ -203,7 +203,7 @@ models: ep2020 basins
 # from the models in models/. Extra arguments go to the script, e.g.
 # `--all-stations` for the virtual stations too.
 sites *args:
-    uv run scripts/site_database.py stations.csv examples/site_database.toml sites {{ args }}
+    uv run scripts/site_database.py examples/site_database.toml examples/whole_country.toml sites {{ args }}
     zip -r sites.zip sites
 
 vs30:
