@@ -13,8 +13,8 @@ Writes four files to the output directory:
 
 The config gives the borehole grid: the station list (``sites``), the depth
 every profile starts at and the sample spacing. The layers come from a
-second config, the whole-country model, without its clamp layer, so the
-profiles carry the Ely taper unclamped.
+second config, the whole-country model. The script drops its clamp layer,
+leaving the Ely taper in the profiles unclamped.
 
 The stations are the observational ones in the station list: those with a
 three- or four-character name, as opposed to the seven-character names of
