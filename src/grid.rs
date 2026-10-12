@@ -1,4 +1,4 @@
-//! Bilinear interpolation on structured grids in a Cartesian frame.
+//! Interpolation on structured grids in a Cartesian frame.
 //!
 //! In a structured grid, node `[j, k]` neighbours nodes `[j ± 1, k]` and
 //! `[j, k ± 1]`, but the cells can be arbitrary quadrilaterals. A regular
@@ -6,12 +6,21 @@
 //! [`StructuredGrid`] interpolates bilinearly within those quadrilaterals.
 //! Outside the grid, it clamps the query point onto the edge cell, which
 //! extends the edge row or column outward.
+//!
+//! [`StructuredGrid::query_triangulated`] instead splits each cell into two
+//! triangles along its `[j, k]`–`[j + 1, k + 1]` diagonal and interpolates
+//! barycentrically, as a triangle mesh over the nodes would. It finds the
+//! cell the same way as the bilinear query, so it needs no search tree.
 
 use nalgebra::{Matrix2, Vector2};
 use ndarray::Array2;
 
 /// Tolerance on the local cell coordinates when deciding a point is outside.
 const OUTSIDE_TOLERANCE: f64 = 1e-9;
+
+/// Most negative barycentric weight a point can have and still count as
+/// inside a triangle in [`StructuredGrid::query_triangulated`].
+const TRIANGLE_TOLERANCE: f64 = 1e-4;
 
 /// A structured grid of Cartesian nodes carrying one value per node.
 pub struct StructuredGrid {
@@ -93,14 +102,11 @@ impl StructuredGrid {
         (t, s)
     }
 
-    /// Interpolate the grid bilinearly at the point `(px, py)`.
-    ///
-    /// Returns the interpolated value and whether the point lies outside
-    /// the grid. An outside point is clamped onto the edge cell when `clamp`
-    /// is true, and takes NaN otherwise.
-    pub fn query(&self, px: f64, py: f64, clamp: bool) -> (f64, bool) {
+    /// The cell `(j, k)` containing `p`, or the edge cell nearest it when
+    /// `p` lies outside the grid, and the local coordinates `(t, s)` of `p`
+    /// in that cell.
+    fn locate(&self, p: Vector2<f64>) -> (usize, usize, f64, f64) {
         let (m, n) = self.x.dim();
-        let p = Vector2::new(px, py);
         let guess = self.inverse_basis * (p - self.origin);
         let to_cell = |v: f64, len: usize| (v.floor().max(0.0) as usize).min(len - 2);
         let mut j = to_cell(guess.x, m);
@@ -117,7 +123,16 @@ impl StructuredGrid {
             (j, k) = (next_j, next_k);
             (t, s) = self.local_coordinates(j, k, p);
         }
+        (j, k, t, s)
+    }
 
+    /// Interpolate the grid bilinearly at the point `(px, py)`.
+    ///
+    /// Returns the interpolated value and whether the point lies outside
+    /// the grid. An outside point is clamped onto the edge cell when `clamp`
+    /// is true, and takes NaN otherwise.
+    pub fn query(&self, px: f64, py: f64, clamp: bool) -> (f64, bool) {
+        let (j, k, t, s) = self.locate(Vector2::new(px, py));
         let inside = |v: f64| (-OUTSIDE_TOLERANCE..=1.0 + OUTSIDE_TOLERANCE).contains(&v);
         let outside = !inside(t) || !inside(s);
         if outside && !clamp {
@@ -131,6 +146,56 @@ impl StructuredGrid {
             + t * s * self.values[[j + 1, k + 1]];
         (value, outside)
     }
+
+    /// Interpolate the grid barycentrically at the point `(px, py)`, over
+    /// the two triangles of each cell either side of its
+    /// `[j, k]`–`[j + 1, k + 1]` diagonal.
+    ///
+    /// A cell's edges are straight in both the bilinear and the triangulated
+    /// view, so the cell [`Self::locate`] finds is the one whose triangles
+    /// contain the point. Of the two, the point takes the triangle it is
+    /// furthest inside, which is the one containing it. It returns NaN when
+    /// neither triangle contains it to within [`TRIANGLE_TOLERANCE`].
+    pub fn query_triangulated(&self, px: f64, py: f64) -> f64 {
+        let p = Vector2::new(px, py);
+        let (j, k, _, _) = self.locate(p);
+        let corner = self.node(j, k);
+        let diagonal = self.node(j + 1, k + 1);
+        let mut best = (f64::NEG_INFINITY, f64::NAN);
+        for (side_j, side_k) in [(j + 1, k), (j, k + 1)] {
+            let side = self.node(side_j, side_k);
+            let Some([w_corner, w_side, w_diagonal]) =
+                barycentric_weights(corner, side, diagonal, p)
+            else {
+                continue;
+            };
+            let worst = w_corner.min(w_side).min(w_diagonal);
+            if worst > best.0 {
+                let value = w_corner * self.values[[j, k]]
+                    + w_side * self.values[[side_j, side_k]]
+                    + w_diagonal * self.values[[j + 1, k + 1]];
+                best = (worst, value);
+            }
+        }
+        if best.0 >= -TRIANGLE_TOLERANCE {
+            best.1
+        } else {
+            f64::NAN
+        }
+    }
+}
+
+/// Barycentric weights of `p` in the triangle `(a, b, c)`, or `None` if the
+/// triangle has no area.
+fn barycentric_weights(
+    a: Vector2<f64>,
+    b: Vector2<f64>,
+    c: Vector2<f64>,
+    p: Vector2<f64>,
+) -> Option<[f64; 3]> {
+    let basis = Matrix2::from_columns(&[b - a, c - a]).try_inverse()?;
+    let w = basis * (p - a);
+    Some([1.0 - w.x - w.y, w.x, w.y])
 }
 
 /// The neighbouring cell index in the direction of local coordinate `v`,
@@ -233,6 +298,73 @@ mod tests {
         }
     }
 
+    /// A field linear in x and y, which barycentric interpolation reproduces
+    /// exactly on any triangulation of the nodes.
+    fn plane(x: f64, y: f64) -> f64 {
+        3e-3 * x - 2e-3 * y + 5.0
+    }
+
+    fn plane_grid(m: usize, n: usize) -> StructuredGrid {
+        let x = Array2::from_shape_fn((m, n), |(j, k)| position(j as f64, k as f64).0);
+        let y = Array2::from_shape_fn((m, n), |(j, k)| position(j as f64, k as f64).1);
+        let values = Array2::from_shape_fn((m, n), |(j, k)| plane(x[[j, k]], y[[j, k]]));
+        StructuredGrid::new(x, y, values).unwrap()
+    }
+
+    /// A unit cell with a value only at node `[1, 0]`. The `[0, 0]`–`[1, 1]`
+    /// diagonal puts that node in one triangle only, and a bilinear or
+    /// other-diagonal interpolation would give different values.
+    #[test]
+    fn test_triangulated_splits_along_the_main_diagonal() {
+        let x = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 1.0]).unwrap();
+        let y = Array2::from_shape_vec((2, 2), vec![0.0, 1.0, 0.0, 1.0]).unwrap();
+        let values = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 0.0]).unwrap();
+        let g = StructuredGrid::new(x, y, values).unwrap();
+        // (0.75, 0.25) lies in triangle [0, 0], [1, 0], [1, 1], with weight
+        // 0.5 on node [1, 0]. Bilinear interpolation would give 0.5625.
+        assert!((g.query_triangulated(0.75, 0.25) - 0.5).abs() < 1e-12);
+        // (0.25, 0.75) lies in triangle [0, 0], [0, 1], [1, 1].
+        assert!(g.query_triangulated(0.25, 0.75).abs() < 1e-12);
+        // On the diagonal both triangles agree.
+        assert!(g.query_triangulated(0.5, 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_triangulated_reproduces_nodes() {
+        let g = plane_grid(6, 5);
+        for j in 0..6 {
+            for k in 0..5 {
+                let (px, py) = position(j as f64, k as f64);
+                assert!((g.query_triangulated(px, py) - plane(px, py)).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn test_triangulated_outside_is_nan() {
+        let g = plane_grid(4, 4);
+        for (j, k) in [
+            (-0.5, 1.5),
+            (1.5, -0.5),
+            (3.5, 1.0),
+            (1.0, 3.5),
+            (-1.0, -1.0),
+        ] {
+            let (px, py) = position(j, k);
+            assert!(g.query_triangulated(px, py).is_nan(), "({j}, {k})");
+        }
+    }
+
+    #[test]
+    fn test_triangulated_propagates_nan_values() {
+        let x = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 1.0]).unwrap();
+        let y = Array2::from_shape_vec((2, 2), vec![0.0, 1.0, 0.0, 1.0]).unwrap();
+        let values = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, f64::NAN, 0.0]).unwrap();
+        let g = StructuredGrid::new(x, y, values).unwrap();
+        assert!(g.query_triangulated(0.75, 0.25).is_nan());
+        assert_eq!(g.query_triangulated(0.25, 0.75), 0.0);
+    }
+
     #[test]
     fn test_rejects_mismatched_shapes() {
         let a = Array2::<f64>::zeros((3, 3));
@@ -241,6 +373,16 @@ mod tests {
     }
 
     proptest! {
+        /// Barycentric interpolation reproduces a field linear in x and y
+        /// wherever the point falls in the grid.
+        #[test]
+        fn prop_triangulated_reproduces_linear_field(j in 0.0f64..7.0, k in 0.0f64..5.0) {
+            let g = plane_grid(8, 6);
+            let (px, py) = position(j, k);
+            let got = g.query_triangulated(px, py);
+            prop_assert!((got - plane(px, py)).abs() < 1e-9, "{got} != {}", plane(px, py));
+        }
+
         /// Bilinear interpolation in each mapped cell reproduces a field that is
         /// bilinear in index space, wherever the point falls in the grid.
         #[test]

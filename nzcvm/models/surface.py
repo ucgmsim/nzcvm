@@ -1,6 +1,6 @@
 """Surface interpolation for topography-based depth transforms.
 
-A :class:`Surface` wraps a surface mesh and provides point-query
+A :class:`Surface` wraps a structured surface mesh and provides point-query
 interpolation, used to convert depth-below-surface coordinates into
 absolute elevations.
 
@@ -24,12 +24,10 @@ from rich.console import Console, ConsoleOptions, RenderResult
 from rich.tree import Tree
 
 from nzcvm import registry
-from nzcvm.models.mesh import StructuredMesh, StructuredMeshSchema, triangulate
+from nzcvm.models.mesh import StructuredMesh, StructuredMeshSchema
 from nzcvm.nzcvm import (  # ty: ignore[unresolved-import]
-    PySurfaceModel,
     StructuredGrid,
     structured_grid,
-    surface_model,
 )
 
 DEFAULT_TOLERANCE = 1e-4
@@ -40,14 +38,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Surface:
-    """A surface interpolator backed by a triangulated mesh.
+    """A surface interpolator over a structured mesh.
 
     Given a set of (x, y) query points, returns the interpolated elevation
     (z) value at each location.  Used by grid builders to convert
     depth-below-surface coordinates to absolute elevations.
+
+    The surface splits each mesh cell into two triangles along the diagonal
+    from node ``[i, j]`` to node ``[i + 1, j + 1]``. A point's elevation
+    interpolates barycentrically over the triangle containing it. The mesh's
+    structure locates the cell, so the surface stores only the node
+    coordinates and values: no triangle list and no search tree.
     """
 
-    inner: PySurfaceModel
+    inner: StructuredGrid
     bounds: np.ndarray
     n_points: int
     #: Values on the mesh boundary, and a tree over their (x, y), for
@@ -58,22 +62,13 @@ class Surface:
 
     @classmethod
     def from_dataset(cls, mesh: StructuredMesh) -> Self:
-        points = np.c_[mesh.x.values.ravel(), mesh.y.values.ravel()]
-        z = mesh.z.values.ravel()
-        faces = triangulate(mesh)
-        logger.debug("Constructing inner surface model")
-        inner = surface_model(points, faces, z)
-        logger.debug("Inner model constructed.")
+        x = mesh.x.values.astype(np.float64)
+        y = mesh.y.values.astype(np.float64)
+        z = mesh.z.values.astype(np.float64)
+        inner = structured_grid(x, y, z)
 
         bounds = np.array(
-            [
-                points[..., 0].min(),
-                points[..., 1].min(),
-                float(z.min()),
-                points[..., 0].max(),
-                points[..., 1].max(),
-                float(z.max()),
-            ]
+            [x.min(), y.min(), float(z.min()), x.max(), y.max(), float(z.max())]
         )
 
         edges = (
@@ -89,7 +84,7 @@ class Surface:
         return cls(
             inner,
             bounds=bounds,
-            n_points=len(points),
+            n_points=x.size,
             edge_tree=scipy.spatial.KDTree(np.c_[edge_x, edge_y]),
             edge_z=edge_z,
         )
@@ -132,16 +127,17 @@ class Surface:
             point falls outside the surface, unless *extrapolate* fills it.
         """
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
-        pts = np.stack((x.flatten(), y.flatten()), axis=-1).astype(
-            np.float32, copy=False
-        )
+        x_flat = x.ravel().astype(np.float64)
+        y_flat = y.ravel().astype(np.float64)
 
-        z = self.inner.query_many(pts)
+        z = self.inner.query_triangulated_many(x_flat, y_flat)
         logger.debug("Query complete.")
         if extrapolate:
             outside = np.isnan(z)
             if outside.any():
-                _, nearest = self.edge_tree.query(pts[outside])
+                _, nearest = self.edge_tree.query(
+                    np.c_[x_flat[outside], y_flat[outside]]
+                )
                 z[outside] = self.edge_z[nearest]
         return z.reshape(x.shape).astype(x.dtype)
 
