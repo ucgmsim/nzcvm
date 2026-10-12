@@ -14,14 +14,14 @@ Writes four files to the output directory:
 Every profile goes down to ``--depth`` at ``--resolution`` spacing. A station
 whose profile never reaches Vs = 2.5 km/s has its profile re-run twice as
 deep, again and again, until it does, so its rows in ``profiles.parquet``
-reach further than the rest. A station that hasn't reached it by
-``--max-depth`` stops the build.
+reach further than the rest. The build fails if any station still misses
+2.5 km/s at ``--max-depth``.
 
-The grid and query pipeline are built once for every station, which is the
-slow part since it loads the nationwide DEM and Vs30 surfaces. The profiles
-are then computed in batches of about ``--rows-per-batch`` samples, since the
-table writer holds a batch in memory and the full database does not fit in a
-CI runner's RAM.
+The script builds the grid and query pipeline once for every station, which
+is the slow part since it loads the nationwide DEM and Vs30 surfaces. It then
+computes the profiles in batches of about ``--rows-per-batch`` samples, since
+the table writer loads a whole batch into memory and the full database
+doesn't fit in a CI runner's RAM.
 """
 
 import dataclasses
@@ -52,8 +52,9 @@ logger = logging.getLogger("site_database")
 #: Column naming each station in both the input CSV and the outputs.
 STATION = "station"
 
-#: Vs thresholds, in m/s, for Z1.0 and Z2.5.
+#: Vs that Z1.0 is the depth to, in m/s.
 VS_1P0 = 1000.0
+#: Vs that Z2.5 is the depth to, in m/s.
 VS_2P5 = 2500.0
 
 #: Stations per chunk of the borehole grid's ``i`` axis.
@@ -101,15 +102,15 @@ def sites_model(
 ) -> tuple[VelocityModel, Layer]:
     """Lay out a profile at each of *stations* and attach the query pipeline.
 
-    Nothing is computed here: the qualities are lazy, and the caller computes
-    them a slice of stations at a time.  Building the grid and the pipeline
+    This leaves the qualities lazy, for the caller to compute a slice of
+    stations at a time.  Building the grid and the pipeline
     is the slow part, since each loads a nationwide surface (the DEM and the
     Vs30 map), so this happens once per depth rather than once per slice.
 
     Parameters
     ----------
     config :
-        Site database config. Its ``sites`` and ``depth`` are replaced.
+        Site database config. This replaces its ``sites`` and ``depth``.
     stations :
         Stations to lay profiles out at.
     depth_m :
@@ -172,7 +173,7 @@ def summarise(profiles: pd.DataFrame, stations: pd.DataFrame) -> pd.DataFrame:
     profiles :
         Output of :func:`query_profiles` for *stations*.
     stations :
-        The stations *profiles* was queried at, in the same order.
+        The stations *profiles* holds, in the same order.
 
     Returns
     -------
