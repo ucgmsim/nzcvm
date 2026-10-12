@@ -188,6 +188,30 @@ def test_uniform_model_is_a_one_layer_profile() -> None:
     assert quality.vs == 1000.0
 
 
+def test_uniform_model_with_layer_bottoms_matches_the_file_layout(
+    tmp_path: Path,
+) -> None:
+    """Generated layers match the same layers read from a 1-D model file."""
+    bottoms = [50.0, 100.0, 200.0]
+    path = tmp_path / "uniform.fd_modfile"
+    path.write_text(
+        "DEF HST\n"
+        + "".join(f"1.8 2.0 1.81 38 19 {bottom / 1000.0}\n" for bottom in bottoms)
+    )
+    generated = construct_mesh.uniform_model(
+        1810.0, 1800.0, 2000.0, 38.0, 19.0, layer_bottoms=bottoms
+    )
+    pd.testing.assert_frame_equal(
+        generated, construct_mesh.read_layered_model(path), check_dtype=False
+    )
+
+
+@pytest.mark.parametrize("bottoms", [[], [100.0, 50.0], [50.0, 50.0]])
+def test_uniform_model_rejects_bad_layer_bottoms(bottoms: list[float]) -> None:
+    with pytest.raises(ValueError, match="increasing"):
+        construct_mesh.uniform_model(1.0, 1.0, 1.0, 1.0, 1.0, layer_bottoms=bottoms)
+
+
 def test_layered_mesh_round_trips_through_zarr(tmp_path: Path) -> None:
     """``--layered`` meshes have no depth profile and still write and query."""
     layers = construct_mesh.slice_with_model(

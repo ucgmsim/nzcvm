@@ -11,6 +11,10 @@ Writes four files to the output directory:
     One row per station: Vs30, Z1.0 and Z2.5, and the depth the station's
     profile reaches.
 
+The stations are the observational ones in the station list: those with a
+three- or four-character name, as opposed to the seven-character names of
+the virtual stations. ``--all-stations`` takes every station instead.
+
 Every profile goes down to ``--depth`` at ``--resolution`` spacing. A station
 whose profile never reaches Vs = 2.5 km/s has its profile re-run twice as
 deep, again and again, until it does, so its rows in ``profiles.parquet``
@@ -51,6 +55,10 @@ logger = logging.getLogger("site_database")
 
 #: Column naming each station in both the input CSV and the outputs.
 STATION = "station"
+
+#: Name lengths of the observational stations. Virtual stations have
+#: seven-character names.
+OBSERVATIONAL_NAME_LENGTHS = (3, 4)
 
 #: Vs that Z1.0 is the depth to, in m/s.
 VS_1P0 = 1000.0
@@ -311,6 +319,10 @@ def main(
     max_depth_m: Annotated[float, typer.Option("--max-depth", min=1.0)] = 80000.0,
     n_threads: Annotated[int, typer.Option(min=1)] = 4,
     rows_per_batch: Annotated[int, typer.Option(min=1)] = 4_000_000,
+    all_stations: Annotated[
+        bool,
+        typer.Option(help="Include the virtual stations, not just observational ones."),
+    ] = False,
     limit: Annotated[
         int | None, typer.Option(help="Only use the first N stations (for testing).")
     ] = None,
@@ -318,6 +330,9 @@ def main(
     """Build profiles.parquet, profiles.csv, summary.parquet and summary.csv."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     stations = read_stations(stations_path)
+    if not all_stations:
+        observational = stations[STATION].str.len().isin(OBSERVATIONAL_NAME_LENGTHS)
+        stations = stations[observational].reset_index(drop=True)
     if limit is not None:
         stations = stations.head(limit)
     config = VelocityModelConfig.read_config(config_path)

@@ -3,6 +3,7 @@
 import gzip
 import itertools
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
@@ -303,8 +304,38 @@ def enforce_mesh_constraints(mesh_top, mesh_bottom):
 
 
 def uniform_model(
-    rho: float, vp: float, vs: float, qp: float, qs: float
+    rho: float,
+    vp: float,
+    vs: float,
+    qp: float,
+    qs: float,
+    layer_bottoms: Sequence[float] | None = None,
 ) -> pd.DataFrame:
+    """Return a profile with the same qualities at every depth.
+
+    Without *layer_bottoms* the profile is one layer that covers any depth.
+    With them, it's one layer per bottom depth, from the topography down,
+    laid out as :func:`read_layered_model` would read the same layers from a
+    file. ``--layered`` slices a mesh at each layer, so the layers give the
+    mesh vertical resolution for a later pass (``banks.py``) to rewrite.
+    """
+    if layer_bottoms is not None:
+        bottom_depth = np.asarray(layer_bottoms, dtype=float)
+        if bottom_depth.size == 0 or np.any(np.diff(bottom_depth) <= 0):
+            raise ValueError("Layer bottoms must be non-empty and increasing.")
+        top_depth = np.concatenate(([0.0], bottom_depth[:-1]))
+        return pd.DataFrame(
+            {
+                "vp": vp,
+                "vs": vs,
+                "rho": rho,
+                "qp": qp,
+                "qs": qs,
+                "bottom_depth": bottom_depth,
+                "z": top_depth,
+                "thickness": bottom_depth - top_depth,
+            }
+        )
     return pd.DataFrame(
         {
             "z": [-1e6],
@@ -681,6 +712,13 @@ def main(
     qs: Annotated[
         float | None, typer.Option(help="Constant S-wave attenuation factor.", min=0.0)
     ] = None,
+    layer_bottoms: Annotated[
+        str | None,
+        typer.Option(
+            help="Comma-separated layer bottom depths (m) that split the constant "
+            "--rho/--vp/--vs/--qp/--qs model into layers, for --layered."
+        ),
+    ] = None,
     priority: Annotated[
         int,
         typer.Option(
@@ -705,6 +743,8 @@ def main(
 ) -> None:
     """Entry point for the ``nzcvm construct-mesh`` command."""
 
+    if vm_1d is not None and layer_bottoms is not None:
+        raise typer.BadParameter("--layer-bottoms only applies to a constant model.")
     if vm_1d is not None:
         model = read_layered_model(vm_1d)
     elif (
@@ -714,7 +754,16 @@ def main(
         and qp is not None
         and qs is not None
     ):
-        model = uniform_model(rho, vp, vs, qp, qs)
+        model = uniform_model(
+            rho,
+            vp,
+            vs,
+            qp,
+            qs,
+            layer_bottoms=None
+            if layer_bottoms is None
+            else [float(depth) for depth in layer_bottoms.split(",")],
+        )
     else:
         raise typer.BadParameter(
             "Provide either --vm-1d, or all of --rho, --vp, --vs, --qp and --qs."

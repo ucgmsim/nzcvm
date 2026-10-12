@@ -6,9 +6,15 @@ smoothing := "10000.0"
 construct := "uv run nzcvm basin main"
 coastline := "resources/coastline.wkb.gz"
 
+# Layer bottoms (m) that slice the Banks Peninsula mesh: every 50 m to
+# 1150 m, then every 100 m to 2850 m. They give the mesh vertical resolution
+# for banks.py, which rewrites rho, vp and vs at every vertex, so those
+# constants are placeholders. Qp and Qs outside the taper are kept.
+banks_layer_bottoms := `seq -s, 50 50 1150` + "," + `seq -s, 1250 100 2850`
+
 banks:
     if [ ! -d models/BanksPeninsula_GTL.zarr ]; then \
-        {{ construct }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_outline_WGS84.geojson ${NZCVM_DATA_ROOT}/regional/Canterbury/CantDEM.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_Miocene_WGS84.h5 models/BanksPeninsula.zarr --priority 44 --vm-1d ${NZCVM_DATA_ROOT}/vm1d/banks_dummy.fd_modfile --no-pad-top --layered; \
+        {{ construct }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_outline_WGS84.geojson ${NZCVM_DATA_ROOT}/regional/Canterbury/CantDEM.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_Miocene_WGS84.h5 models/BanksPeninsula.zarr --priority 44 --rho 1810 --vp 1800 --vs 9999000 --qp 38 --qs 19 --layer-bottoms {{ banks_layer_bottoms }} --no-pad-top --layered; \
         uv run nzcvm/scripts/banks.py; \
         rm -r models/BanksPeninsula.zarr; \
     fi
@@ -180,8 +186,9 @@ models: ep2020 basins
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py
     zip -r models.zip models
 
-# Profiles and Vs30/Z1.0/Z2.5 at every station in stations.csv, from the
-# models in models/. Extra arguments go to the script, e.g. `--limit 100`.
+# Profiles and Vs30/Z1.0/Z2.5 at the observational stations in stations.csv,
+# from the models in models/. Extra arguments go to the script, e.g.
+# `--all-stations` for the virtual stations too.
 sites *args:
     uv run scripts/site_database.py stations.csv examples/site_database.toml sites {{ args }}
     zip -r sites.zip sites

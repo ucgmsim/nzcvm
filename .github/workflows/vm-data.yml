@@ -9,7 +9,8 @@ run-name: >-
 # Dropbox folder:
 #
 #   resources.zip         Vs30, DEM and coastline. Fixed; uploaded by hand.
-#   stations.csv          Station list for the site database. Uploaded by hand.
+#   stations.csv          Station list. The site database covers its
+#                         observational stations. Uploaded by hand.
 #   models-master.zip     Rebuilt on every push to master.
 #   sites-master.zip
 #   models-vX.Y.Z.zip     Built once per release, and linked from the
@@ -50,14 +51,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - name: Free disk space
-        # The runner image ships about 30 GB of toolchains nothing here uses,
-        # and the site database CSV alone runs to several GB.
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          df -h .
-
       - name: Add swap
         # Building the site database holds the nationwide DEM and Vs30
         # surfaces in memory, which peaks near 13 GB against the runner's
