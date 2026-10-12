@@ -127,12 +127,10 @@ def sites_model(
         The query pipeline, for reuse.
     """
     sites = [
-        Site(
-            longitude=row.longitude,
-            latitude=row.latitude,
-            labels={STATION: row.station},
+        Site(longitude=longitude, latitude=latitude, labels={STATION: station})
+        for station, longitude, latitude in zip(
+            stations[STATION], stations["longitude"], stations["latitude"]
         )
-        for row in stations.itertuples(index=False)
     ]
     grid = dataclasses.replace(config.grid, sites=sites, depth=depth_m)
     velocity_model = VelocityModel.from_config(dataclasses.replace(config, grid=grid))
