@@ -20,10 +20,6 @@ use crate::barycentric::{interpolate, triangle_coordinates};
 /// Tolerance on the local cell coordinates when deciding a point is outside.
 const OUTSIDE_TOLERANCE: f64 = 1e-9;
 
-/// Most negative barycentric weight a point can have and still count as
-/// inside a triangle in [`StructuredGrid::query_triangulated`].
-const TRIANGLE_TOLERANCE: f64 = 1e-4;
-
 /// A structured grid of Cartesian nodes carrying one value per node.
 pub struct StructuredGrid {
     x: Array2<f64>,
@@ -148,18 +144,14 @@ impl StructuredGrid {
     /// is true, and takes NaN otherwise.
     pub fn query(&self, px: f64, py: f64, clamp: bool) -> (f64, bool) {
         let (j, k, t, s) = self.locate(Vector2::new(px, py));
-        let inside = |v: f64| (-OUTSIDE_TOLERANCE..=1.0 + OUTSIDE_TOLERANCE).contains(&v);
-        let outside = !inside(t) || !inside(s);
+        let outside = is_outside(t, s);
         if outside && !clamp {
             return (f64::NAN, true);
         }
-        let t = t.clamp(0.0, 1.0);
-        let s = s.clamp(0.0, 1.0);
-        let value = (1.0 - t) * (1.0 - s) * self.values[[j, k]]
-            + (1.0 - t) * s * self.values[[j, k + 1]]
-            + t * (1.0 - s) * self.values[[j + 1, k]]
-            + t * s * self.values[[j + 1, k + 1]];
-        (value, outside)
+        (
+            self.bilinear(j, k, t.clamp(0.0, 1.0), s.clamp(0.0, 1.0)),
+            outside,
+        )
     }
 
     /// Interpolate the grid barycentrically at the point `(px, py)`, over
@@ -169,11 +161,22 @@ impl StructuredGrid {
     /// A cell's edges are straight in both the bilinear and the triangulated
     /// view, so the cell [`Self::locate`] finds is the one whose triangles
     /// contain the point, and the side of the diagonal it lies on picks the
-    /// triangle. It returns NaN when that triangle doesn't contain it to
-    /// within [`TRIANGLE_TOLERANCE`].
-    pub fn query_triangulated(&self, px: f64, py: f64) -> f64 {
+    /// triangle. Outside the grid it behaves as [`Self::query`] does: an
+    /// outside point is clamped onto the edge cell when `clamp` is true, and
+    /// takes NaN otherwise. On a cell edge the triangulated and bilinear
+    /// interpolants are the same line between the edge's two nodes, so the
+    /// clamped value is the bilinear one.
+    pub fn query_triangulated(&self, px: f64, py: f64, clamp: bool) -> (f64, bool) {
         let p = Vector2::new(px, py);
-        let (j, k, _, _) = self.locate(p);
+        let (j, k, t, s) = self.locate(p);
+        if is_outside(t, s) {
+            let value = if clamp {
+                self.bilinear(j, k, t.clamp(0.0, 1.0), s.clamp(0.0, 1.0))
+            } else {
+                f64::NAN
+            };
+            return (value, true);
+        }
         let corner = self.node(j, k);
         let diagonal = self.node(j + 1, k + 1) - corner;
         let row_side = self.node(j + 1, k) - corner;
@@ -191,19 +194,31 @@ impl StructuredGrid {
             ],
             point(p),
         );
-        // NaN weights, from a flat triangle, fail this test too.
-        if !weights.iter().all(|&weight| weight >= -TRIANGLE_TOLERANCE) {
-            return f64::NAN;
-        }
-        interpolate(
+        let value = interpolate(
             [
                 self.values[[j, k]],
                 self.values[[side_j, side_k]],
                 self.values[[j + 1, k + 1]],
             ],
             weights,
-        )
+        );
+        (value, false)
     }
+
+    /// The bilinear interpolant of cell `(j, k)` at local coordinates
+    /// `(t, s)`.
+    fn bilinear(&self, j: usize, k: usize, t: f64, s: f64) -> f64 {
+        (1.0 - t) * (1.0 - s) * self.values[[j, k]]
+            + (1.0 - t) * s * self.values[[j, k + 1]]
+            + t * (1.0 - s) * self.values[[j + 1, k]]
+            + t * s * self.values[[j + 1, k + 1]]
+    }
+}
+
+/// Whether local cell coordinates `(t, s)` put a point outside its cell.
+fn is_outside(t: f64, s: f64) -> bool {
+    let inside = |v: f64| (-OUTSIDE_TOLERANCE..=1.0 + OUTSIDE_TOLERANCE).contains(&v);
+    !inside(t) || !inside(s)
 }
 
 /// The neighbouring cell index in the direction of local coordinate `v`,
@@ -330,11 +345,11 @@ mod tests {
         let g = StructuredGrid::new(x, y, values).unwrap();
         // (0.75, 0.25) lies in triangle [0, 0], [1, 0], [1, 1], with weight
         // 0.5 on node [1, 0]. Bilinear interpolation would give 0.5625.
-        assert!((g.query_triangulated(0.75, 0.25) - 0.5).abs() < 1e-12);
+        assert!((g.query_triangulated(0.75, 0.25, false).0 - 0.5).abs() < 1e-12);
         // (0.25, 0.75) lies in triangle [0, 0], [0, 1], [1, 1].
-        assert!(g.query_triangulated(0.25, 0.75).abs() < 1e-12);
+        assert!(g.query_triangulated(0.25, 0.75, false).0.abs() < 1e-12);
         // On the diagonal both triangles agree.
-        assert!(g.query_triangulated(0.5, 0.5).abs() < 1e-12);
+        assert!(g.query_triangulated(0.5, 0.5, false).0.abs() < 1e-12);
     }
 
     #[test]
@@ -343,7 +358,7 @@ mod tests {
         for j in 0..6 {
             for k in 0..5 {
                 let (px, py) = position(j as f64, k as f64);
-                assert!((g.query_triangulated(px, py) - plane(px, py)).abs() < 1e-9);
+                assert!((g.query_triangulated(px, py, false).0 - plane(px, py)).abs() < 1e-9);
             }
         }
     }
@@ -359,8 +374,30 @@ mod tests {
             (-1.0, -1.0),
         ] {
             let (px, py) = position(j, k);
-            assert!(g.query_triangulated(px, py).is_nan(), "({j}, {k})");
+            let (got, outside) = g.query_triangulated(px, py, false);
+            assert!(outside && got.is_nan(), "({j}, {k})");
         }
+    }
+
+    /// Outside the grid, a clamped point takes the value on the edge cell
+    /// at its clamped position, as the bilinear query does.
+    #[test]
+    fn test_triangulated_clamps_outside_onto_edge() {
+        let x = Array2::from_shape_fn((3, 3), |(_, k)| 100.0 * k as f64);
+        let y = Array2::from_shape_fn((3, 3), |(j, _)| 100.0 * j as f64);
+        let values = Array2::from_shape_fn((3, 3), |(j, k)| field(j as f64, k as f64));
+        let g = StructuredGrid::new(x, y, values).unwrap();
+        for (px, py) in [
+            (150.0, 900.0),
+            (-50.0, -50.0),
+            (250.0, 130.0),
+            (-80.0, 170.0),
+        ] {
+            let (got, outside) = g.query_triangulated(px, py, true);
+            assert!(outside, "({px}, {py})");
+            assert_eq!(got, g.query(px, py, true).0, "({px}, {py})");
+        }
+        assert!(!g.query_triangulated(50.0, 50.0, true).1);
     }
 
     #[test]
@@ -369,8 +406,8 @@ mod tests {
         let y = Array2::from_shape_vec((2, 2), vec![0.0, 1.0, 0.0, 1.0]).unwrap();
         let values = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, f64::NAN, 0.0]).unwrap();
         let g = StructuredGrid::new(x, y, values).unwrap();
-        assert!(g.query_triangulated(0.75, 0.25).is_nan());
-        assert_eq!(g.query_triangulated(0.25, 0.75), 0.0);
+        assert!(g.query_triangulated(0.75, 0.25, false).0.is_nan());
+        assert_eq!(g.query_triangulated(0.25, 0.75, false), (0.0, false));
     }
 
     #[test]
@@ -387,7 +424,7 @@ mod tests {
         fn prop_triangulated_reproduces_linear_field(j in 0.0f64..7.0, k in 0.0f64..5.0) {
             let g = plane_grid(8, 6);
             let (px, py) = position(j, k);
-            let got = g.query_triangulated(px, py);
+            let (got, _) = g.query_triangulated(px, py, false);
             prop_assert!((got - plane(px, py)).abs() < 1e-9, "{got} != {}", plane(px, py));
         }
 

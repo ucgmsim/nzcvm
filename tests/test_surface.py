@@ -158,12 +158,31 @@ def _sloped_surface() -> Surface:
 
 @pytest.mark.parametrize(
     ("x", "y", "expected"),
-    [(10.0, 2.0, 24.0), (2.0, -7.0, 2.0), (-3.0, 9.0, 40.0), (1e6, 1e6, 44.0)],
-    ids=["east", "south", "north-west", "far"],
+    [
+        (10.0, 2.0, 24.0),
+        (10.0, 2.5, 29.0),
+        (2.0, -7.0, 2.0),
+        (1.5, -7.0, 1.5),
+        (-3.0, 9.0, 40.0),
+        (1e6, 1e6, 44.0),
+    ],
+    ids=[
+        "east",
+        "east-between-nodes",
+        "south",
+        "south-between-nodes",
+        "north-west",
+        "far",
+    ],
 )
-def test_transform_extrapolates_nearest_boundary_vertex(
+def test_transform_extends_the_edge_outward(
     x: float, y: float, expected: float
 ) -> None:
+    """An outside point takes the edge value at its clamped position.
+
+    Between two edge nodes that's the line between them, not the nearer
+    node's value.
+    """
     surface = _sloped_surface()
     z = surface.transform(
         np.array([x], np.float32), np.array([y], np.float32), extrapolate=True
@@ -178,3 +197,18 @@ def test_extrapolate_leaves_hits_alone() -> None:
     np.testing.assert_allclose(
         surface.transform(x, y, extrapolate=True), surface.transform(x, y)
     )
+
+
+def test_extrapolate_leaves_inner_no_data_alone() -> None:
+    """A NaN node inside the surface isn't outside it, so nothing fills it."""
+    xs = np.arange(5, dtype=np.float64)
+    xx, yy = np.meshgrid(xs, xs, indexing="ij")
+    zz = xx + 10 * yy
+    zz[2, 2] = np.nan
+    mesh = StructuredMeshSchema.new(
+        x=xx, y=yy, z=zz, i=np.arange(5), j=np.arange(5), name="holed"
+    )
+    surface = Surface.from_dataset(mesh)
+    z = surface.transform(np.array([2.0, 0.5]), np.array([2.0, 0.5]), extrapolate=True)
+    assert np.isnan(z[0])
+    assert z[1] == pytest.approx(5.5)
