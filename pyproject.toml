@@ -57,6 +57,9 @@ checks = ["GL05", "GL10", "PR02", "PR07", "RT03", "YD01"]
 # Used through a plugin registry rather than an import: zfpy backs the
 # numcodecs ZFPY codec used by nzcvm/formats/datatree.py.
 DEP002 = ["zfpy"]
+# scripts/site_database.py streams Parquet with pyarrow directly. The
+# `pandas[parquet]` extra is what guarantees it is installed.
+DEP003 = ["pyarrow"]
 
 [project.optional-dependencies]
 vis = ["pyvista>=0.47.2"]

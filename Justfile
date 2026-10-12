@@ -14,9 +14,15 @@ dem := "resources/dem.zarr"
 nz_dem := "${NZCVM_DATA_ROOT}/surface/NZ_DEM_HD.h5"
 cant_dem := "${NZCVM_DATA_ROOT}/regional/Canterbury/CantDEM.h5"
 
+# Layer bottoms (m) that slice the Banks Peninsula mesh: every 50 m to
+# 1150 m, then every 100 m to 2850 m. They give the mesh vertical resolution
+# for banks.py, which rewrites rho, vp and vs at every vertex, so those
+# constants are placeholders. Qp and Qs outside the taper are kept.
+banks_layer_bottoms := `seq -s, 50 50 1150` + "," + `seq -s, 1250 100 2850`
+
 banks:
     if [ ! -d models/BanksPeninsula_GTL.zarr ]; then \
-        {{ construct }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_outline_WGS84.geojson {{ cant_dem }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_Miocene_WGS84.h5 --topography {{ dem }} --output models/BanksPeninsula.zarr --priority 44 --model ${NZCVM_DATA_ROOT}/vm1d/banks_dummy.fd_modfile --no-pad-top --layered; \
+        {{ construct }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_outline_WGS84.geojson {{ cant_dem }} ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_basement_WGS84.h5 ${NZCVM_DATA_ROOT}/regional/BanksPeninsulaVolcanics/BanksPeninsulaVolcanics_Miocene_WGS84.h5 --topography {{ dem }} --output models/BanksPeninsula.zarr --priority 44 --model rho=1810,vp=1800,vs=9999000,qp=38,qs=19 --layer-bottoms {{ banks_layer_bottoms }} --no-pad-top --layered; \
         uv run nzcvm/scripts/banks.py; \
         rm -r models/BanksPeninsula.zarr; \
     fi
@@ -182,17 +188,24 @@ kaikoura:
     @test -d models/Kaikoura.zarr || {{ construct }} ${NZCVM_DATA_ROOT}/regional/Kaikoura/Kaikoura_outline_WGS84_v25p5.geojson {{ nz_dem }} {{ nz_dem }} ${NZCVM_DATA_ROOT}/regional/Kaikoura/Kaikoura_basement_WGS84_v25p5.h5 --topography {{ dem }} --output models/Kaikoura.zarr --priority 43 --model ${NZCVM_DATA_ROOT}/vm1d/Cant1D_v2.fd_modfile --smoothing {{ smoothing }} --coastline {{ coastline }}
 
 [parallel]
-basins: alexandra balclutha canterbury castle_hill cheviot collingwood dunedin gisborne greater_wellington hakataramea hanmer hawkes_bay kaikoura karamea mackenzie marlborough mosgiel murchison napier ne_otago nelson north_canterbury omaio_bay palmerston_north porirua queen_charlotte ranfurly rarakau southern_hawkes_bay southland springs_junction te_anau te_araroa tolaga_bay waiapu waikato_hauraki wairarapa waitaki wakatipu wanaka wellington west_coast westport whakatane whangaparoa
+basins: alexandra balclutha banks canterbury castle_hill cheviot collingwood dunedin gisborne greater_wellington hakataramea hanmer hawkes_bay kaikoura karamea mackenzie marlborough mosgiel murchison napier ne_otago nelson north_canterbury omaio_bay palmerston_north porirua queen_charlotte ranfurly rarakau southern_hawkes_bay southland springs_junction te_anau te_araroa tolaga_bay waiapu waikato_hauraki wairarapa waitaki wakatipu wanaka wellington west_coast westport whakatane whangaparoa
 
 tomography := "uv run nzcvm tomography convert"
 surface := "uv run --extra raster nzcvm convert-tiff main"
 
 ep2020:
-    @test -f models/ep2020.zarr || {{ tomography }} ep2020.csv models/ep2020.zarr
+    @test -d models/ep2020.zarr || {{ tomography }} ${NZCVM_DATA_ROOT}/tomography/EP2020/ep2020.csv models/ep2020.zarr
 
 models: ep2020 basins
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py
     zip -r models.zip models
+
+# Profiles and Vs30/Z1.0/Z2.5 at the observational stations in stations.csv,
+# from the models in models/. Extra arguments go to the script, e.g.
+# `--all-stations` for the virtual stations too.
+sites *args:
+    uv run scripts/site_database.py examples/site_database.toml examples/whole_country.toml sites {{ args }}
+    zip -r sites.zip sites
 
 vs30:
     @test -d resources/vs30.zarr || {{ surface }} ${VS30_TIFF} 1 resources/vs30.zarr --downsample 3

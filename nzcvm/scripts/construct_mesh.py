@@ -354,8 +354,37 @@ def enforce_mesh_constraints(mesh_top, mesh_bottom):
 
 
 def uniform_model(
-    rho: float, vp: float, vs: float, qp: float, qs: float
+    rho: float,
+    vp: float,
+    vs: float,
+    qp: float,
+    qs: float,
+    layer_bottoms: Sequence[float] | None = None,
 ) -> pd.DataFrame:
+    """Return a profile with the same qualities at every depth.
+
+    Without *layer_bottoms* the profile is one layer that covers any depth.
+    With them, it's one layer per bottom depth, from the topography down,
+    laid out as :func:`read_layered_model` would read the same layers from a
+    file. ``--layered`` slices a mesh at each layer. The layers give the mesh
+    vertical resolution for a later pass (``banks.py``) to rewrite.
+    """
+    if layer_bottoms is not None:
+        bottom_depth = np.asarray(layer_bottoms, dtype=float)
+        if bottom_depth.size == 0 or np.any(np.diff(bottom_depth) <= 0):
+            raise ValueError("Layer bottoms must be non-empty and increasing.")
+        return with_layer_tops(
+            pd.DataFrame(
+                {
+                    "vp": vp,
+                    "vs": vs,
+                    "rho": rho,
+                    "qp": qp,
+                    "qs": qs,
+                    "bottom_depth": bottom_depth,
+                }
+            )
+        )
     return pd.DataFrame(
         {
             "z": [-1e6],
@@ -380,11 +409,19 @@ def read_layered_model(layered_model_path: Path) -> pd.DataFrame:
     )
     for col in ["vp", "vs", "rho", "bottom_depth"]:
         df[col] *= 1000.0
-    bottom_depth = df["bottom_depth"].to_numpy()
-    df["z"] = np.concatenate(([0.0], bottom_depth[:-1]))
-    df["thickness"] = bottom_depth - df["z"]
+    return with_layer_tops(df)
 
-    return df
+
+def with_layer_tops(model: pd.DataFrame) -> pd.DataFrame:
+    """Add each layer's top ``z`` and ``thickness`` from the ``bottom_depth`` column.
+
+    The first layer starts at the topography, and each later one at the
+    bottom of the layer above.
+    """
+    bottom_depth = model["bottom_depth"].to_numpy()
+    model["z"] = np.concatenate(([0.0], bottom_depth[:-1]))
+    model["thickness"] = bottom_depth - model["z"]
+    return model
 
 
 def volumes(vertices: np.ndarray, tetra: np.ndarray) -> np.ndarray:
@@ -753,7 +790,7 @@ def basin_depth_surfaces(
 UNIFORM_QUALITIES = ("rho", "vp", "vs", "qp", "qs")
 
 
-def read_model(spec: str) -> pd.DataFrame:
+def read_model(spec: str, layer_bottoms: Sequence[float] | None = None) -> pd.DataFrame:
     """Read one layer's ``--model``: a 1-D model file, or uniform qualities.
 
     Parameters
@@ -761,6 +798,9 @@ def read_model(spec: str) -> pd.DataFrame:
     spec :
         Path to a 1-D model file, or ``rho=...,vp=...,vs=...,qp=...,qs=...``
         for the same qualities at every depth.
+    layer_bottoms :
+        Bottom depths (m) to split a uniform model into layers at, as
+        :func:`uniform_model` takes them.
 
     Returns
     -------
@@ -770,7 +810,8 @@ def read_model(spec: str) -> pd.DataFrame:
     Raises
     ------
     typer.BadParameter
-        If *spec* is neither an existing file nor all five qualities.
+        If *spec* is neither an existing file nor all five qualities, or
+        gives a file along with *layer_bottoms*.
     """
     if "=" in spec:
         pairs = dict(pair.split("=", 1) for pair in spec.split(","))
@@ -779,7 +820,10 @@ def read_model(spec: str) -> pd.DataFrame:
                 f"A uniform model needs exactly {', '.join(UNIFORM_QUALITIES)}, "
                 f"got {spec!r}."
             )
-        return uniform_model(**{key: float(value) for key, value in pairs.items()})
+        qualities = {key: float(value) for key, value in pairs.items()}
+        return uniform_model(**qualities, layer_bottoms=layer_bottoms)
+    if layer_bottoms is not None:
+        raise typer.BadParameter("--layer-bottoms only applies to a uniform model.")
     path = Path(spec)
     if not path.is_file():
         raise typer.BadParameter(f"No 1-D model file at {spec!r}.")
@@ -1019,6 +1063,13 @@ def main(
             help="Coastline to clip smoothing boundary",
         ),
     ] = None,
+    layer_bottoms: Annotated[
+        str | None,
+        typer.Option(
+            help="Comma-separated layer bottom depths (m) that split each uniform "
+            "--model into layers, for --layered."
+        ),
+    ] = None,
     pad_top: Annotated[
         bool,
         typer.Option(
@@ -1055,7 +1106,12 @@ def main(
                 f"{len(surfaces)} surfaces make {n_layers} layer(s), but "
                 f"--{name} is given {len(values)} time(s)."
             )
-    models = [read_model(spec) for spec in model]
+    bottoms = (
+        None
+        if layer_bottoms is None
+        else [float(depth) for depth in layer_bottoms.split(",")]
+    )
+    models = [read_model(spec, bottoms) for spec in model]
 
     inner, region = basin_polygon(bounds, simplification, smoothing, coastline)
     depths = basin_depth_surfaces(
