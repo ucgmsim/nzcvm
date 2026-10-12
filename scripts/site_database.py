@@ -14,7 +14,8 @@ Writes four files to the output directory:
 The config gives the borehole grid: the station list (``sites``), the depth
 every profile starts at and the sample spacing. The layers come from a
 second config, the whole-country model. The script drops its clamp layer,
-leaving the Ely taper in the profiles unclamped.
+leaving the Ely taper in the profiles unclamped, and puts the taper's horizon
+at ``ELY_TAPER_DEPTH``.
 
 The stations are the observational ones in the station list: those with a
 three- or four-character name, as opposed to the seven-character names of
@@ -50,6 +51,7 @@ from nzcvm.components import Component
 from nzcvm.config import VelocityModelConfig
 from nzcvm.config.grids.borehole import DEFAULT_CHUNK_SIZES, BoreholeGridConfig
 from nzcvm.config.layers.clamp import ClampLayerConfig
+from nzcvm.config.layers.ely import ElyLayerConfig
 from nzcvm.coordinates import Coordinate
 from nzcvm.formats.table import FLOAT_FORMAT, flatten
 from nzcvm.grids.borehole import read_site_table, sites_from_frame
@@ -75,6 +77,10 @@ CHUNK = DEFAULT_CHUNK_SIZES[Coordinate.I]
 
 #: Depth, in metres, that Vs30 averages over.
 VS30_DEPTH = 30.0
+
+#: Depth, in metres, of the Ely taper's horizon in the site profiles. It
+#: replaces the whole-country model's own.
+ELY_TAPER_DEPTH = 350.0
 
 app = typer.Typer()
 
@@ -334,7 +340,9 @@ def main(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     config = VelocityModelConfig.read_config(config_path)
     layers = [
-        layer
+        dataclasses.replace(layer, depth_t=ELY_TAPER_DEPTH)
+        if isinstance(layer, ElyLayerConfig)
+        else layer
         for layer in VelocityModelConfig.read_config(layers_path).layers
         if not isinstance(layer, ClampLayerConfig)
     ]

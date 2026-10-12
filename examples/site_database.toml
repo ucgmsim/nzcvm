@@ -1,6 +1,7 @@
 # The borehole grid of the published site database. The layers come from
-# examples/whole_country.toml, without its clamp layer, so the profiles carry
-# the Ely taper unclamped. There is no Backus averaging.
+# examples/whole_country.toml, without its clamp layer, so the profiles have
+# the Ely taper unclamped, with its horizon at 350 m rather than 450 m. There
+# is no Backus averaging.
 #
 #     uv run scripts/site_database.py examples/site_database.toml \
 #         examples/whole_country.toml sites
