@@ -409,7 +409,9 @@ class LatticeWindow:
 
 
 def read_lattice_window(
-    surface_path: Path, bbox: tuple[float, float, float, float] | None = None
+    surface_path: Path,
+    bbox: tuple[float, float, float, float] | None = None,
+    align: int = 1,
 ) -> LatticeWindow:
     """Read the nodes of a Zarr lattice surface covering *bbox*.
 
@@ -422,6 +424,8 @@ def read_lattice_window(
     bbox :
         ``(min_lat, max_lat, min_lon, max_lon)``. If given, read only the
         nodes covering it.
+    align :
+        Start and stop the window on node indices that are multiples of this.
 
     Returns
     -------
@@ -457,14 +461,17 @@ def read_lattice_window(
             np.empty((0, 0), np.float32), surface.origin, surface.step_i, surface.step_j
         )
         fi, fj = whole.fractional_index(np.asarray(x), np.asarray(y))
-        i_window = slice(
-            int(np.clip(np.floor(fi.min()) - 1, 0, ni)),
-            int(np.clip(np.ceil(fi.max()) + 2, 0, ni)),
-        )
-        j_window = slice(
-            int(np.clip(np.floor(fj.min()) - 1, 0, nj)),
-            int(np.clip(np.ceil(fj.max()) + 2, 0, nj)),
-        )
+
+        # Start and stop on multiples of *align*, so blocks of that many
+        # nodes averaged from any window line up and are whole, except at the
+        # surface's own edge.
+        def aligned(low: float, high: float, size: int) -> slice:
+            start = int(np.clip(np.floor(low) - 1, 0, size)) // align * align
+            stop = -(-int(np.clip(np.ceil(high) + 2, 0, size)) // align) * align
+            return slice(start, min(stop, size))
+
+        i_window = aligned(fi.min(), fi.max(), ni)
+        j_window = aligned(fj.min(), fj.max(), nj)
     i0 = i_window.start or 0
     j0 = j_window.start or 0
     return LatticeWindow(
@@ -506,6 +513,10 @@ def read_surface_window(
     """
     if surface_path.suffix != ".zarr":
         return read_surface_file(surface_path, bbox=bbox)
-    window = read_lattice_window(surface_path, bbox)
-    factor = 1 if spacing is None else max(1, round(spacing / window.spacing))
+    surface = Surface.load(surface_path)
+    node_spacing = min(np.linalg.norm(surface.step_i), np.linalg.norm(surface.step_j))
+    factor = 1 if spacing is None else max(1, round(spacing / node_spacing))
+    # Blocks aligned to the whole surface average the same nodes whichever
+    # basin reads them, so basins that share a surface agree on it.
+    window = read_lattice_window(surface_path, bbox, align=factor)
     return window.coarsened(factor).grid()

@@ -267,3 +267,39 @@ def test_loaded_surface_reads_lazily_and_matches_memory(tmp_path) -> None:
         )
     restored = pickle.loads(pickle.dumps(loaded))
     np.testing.assert_array_equal(restored.transform(x, y), loaded.transform(x, y))
+
+
+def test_windows_average_aligned_blocks(tmp_path) -> None:
+    """Overlapping windows of one surface average the same blocks."""
+    from nzcvm.models.surface import read_surface_window
+
+    rng = np.random.default_rng(1)
+    values = rng.uniform(0.0, 100.0, (60, 60)).astype(np.float32)
+    # Over the synthetic domain's longitude and latitude in NZTM.
+    origin = (1_550_000.0, 5_150_000.0)
+    path = tmp_path / "rough.zarr"
+    regular_mesh("rough", values, origin, (0.0, 100.0), (100.0, 0.0)).to_zarr(path)
+    to_lon_lat = __import__("pyproj").Transformer.from_crs(2193, 4326, always_xy=True)
+
+    def bbox(x0, y0, x1, y1):
+        (lon0, lon1), (lat0, lat1) = to_lon_lat.transform([x0, x1], [y0, y1])
+        return (lat0, lat1, lon0, lon1)
+
+    a = read_surface_window(
+        path, bbox(1_551_000.0, 5_151_000.0, 1_554_000.0, 5_154_000.0), 300.0
+    )
+    b = read_surface_window(
+        path, bbox(1_551_700.0, 5_151_400.0, 1_555_000.0, 5_155_000.0), 300.0
+    )
+    keys_a = {
+        (round(x), round(y)): v
+        for x, y, v in zip(a.x.ravel(), a.y.ravel(), a.values.ravel())
+    }
+    shared = [
+        (keys_a[(round(x), round(y))], v)
+        for x, y, v in zip(b.x.ravel(), b.y.ravel(), b.values.ravel())
+        if (round(x), round(y)) in keys_a
+    ]
+    assert len(shared) > 4
+    from_a, from_b = np.array(shared).T
+    np.testing.assert_allclose(from_b, from_a)
