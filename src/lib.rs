@@ -10,10 +10,8 @@ pub mod quality;
 pub mod query;
 pub mod real;
 pub mod simplex;
-pub mod surface;
 pub mod tin;
 mod tree_query;
-pub mod triangle;
 use pyo3::prelude::*;
 
 #[pymodule]
@@ -26,7 +24,6 @@ mod nzcvm {
     use crate::quality::Quality;
     use crate::query::Query;
     use crate::real::Real;
-    use crate::surface::SurfaceModel;
     use crate::tin::{self, TinSurface};
 
     use nalgebra::{Affine3, Matrix4, Point2, Point3};
@@ -572,101 +569,6 @@ mod nzcvm {
         }
     }
 
-    /// Python-facing surface model for 2D elevation/property interpolation.
-    #[pyclass]
-    pub struct PySurfaceModel {
-        pub inner: Option<SurfaceModel>,
-    }
-
-    /// Create a [`PySurfaceModel`] from raw NumPy arrays.
-    ///
-    /// # Arguments
-    /// * `vertices_py` – `(N, 2)` array of (x, y) coordinates.
-    /// * `faces_py`    – `(M, 3)` array of triangle vertex indices.
-    /// * `z_py`        – `(N,)` array of values (e.g. elevation) at each vertex.
-    #[pyfunction]
-    pub fn surface_model(
-        vertices_py: PyReadonlyArray2<Real>,
-        faces_py: PyReadonlyArray2<usize>,
-        z_py: PyReadonlyArray1<Real>,
-    ) -> PyResult<PySurfaceModel> {
-        let vertices = vertices_py
-            .as_array()
-            .axis_iter(Axis(0))
-            .map(|a| Point2::new(a[0], a[1]))
-            .collect();
-
-        let faces = faces_py
-            .as_array()
-            .axis_iter(Axis(0))
-            .map(|a| Point3::new(a[0], a[1], a[2]))
-            .collect();
-
-        let z = z_py.as_array().to_vec();
-
-        Ok(PySurfaceModel {
-            inner: Some(SurfaceModel::new(vertices, faces, z)),
-        })
-    }
-
-    #[pymethods]
-    impl PySurfaceModel {
-        /// Query the surface at (x, y) to get the interpolated value.
-        pub fn query(&self, x: Real, y: Real) -> PyResult<Option<Real>> {
-            let inner = self
-                .inner
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("SurfaceModel has been consumed"))?;
-            Ok(inner.query(Point2::new(x, y)))
-        }
-
-        /// Query the surface for many points at once, returning a 1D float array.
-        ///
-        /// `xy` is an `(N, 2)` float array with columns `[x, y]`.
-        ///
-        /// Returns an `(N,)` float array. Points outside the surface are NaN, so a
-        /// caller cannot mistake a miss for a real value of zero.
-        pub fn query_many<'py>(
-            &self,
-            py: Python<'py>,
-            xy: PyReadonlyArray2<Real>,
-        ) -> PyResult<Bound<'py, PyArray1<Real>>> {
-            let inner = self
-                .inner
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("SurfaceModel has been consumed"))?;
-
-            // Capture the input view
-            let coords = xy.as_array();
-            let n = coords.nrows();
-
-            // Every point starts as a miss and is overwritten only on a hit.
-            let mut buf = Array1::<Real>::from_elem(n, Real::NAN);
-
-            // Detach from GIL to allow multi-threaded Python to keep moving
-            // (or to allow Rayon par_iter if you decide to add it later)
-            py.detach(|| {
-                azip!((out in &mut buf, row in coords.rows()) {
-                    let pt = Point2::new(row[0], row[1]);
-                    if let Some(val) = inner.query(pt) {
-                        *out = val;
-                    }
-                });
-            });
-
-            Ok(buf.into_pyarray(py))
-        }
-
-        /// Return a serialisable Python dict describing this surface.
-        pub fn view<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-            let inner = self
-                .inner
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("SurfaceModel has been consumed"))?;
-            pythonize(py, &inner.view()).map_err(|e| e.into())
-        }
-    }
-
     /// Vectorised Porter-Duff "over" blend of two ``(N, 6)`` quality arrays.
     ///
     /// Each row of *lhs* (foreground) is composited over the corresponding row
@@ -856,6 +758,36 @@ mod nzcvm {
             });
             Ok((result.into_pyarray(py), outside.into_pyarray(py)))
         }
+
+        /// Interpolate barycentrically at many points, over the two triangles
+        /// of each cell either side of its ``[j, k]``–``[j + 1, k + 1]``
+        /// diagonal. See [`StructuredGrid::query_triangulated`].
+        ///
+        /// Returns the ``(N,)`` interpolated values, NaN for points outside
+        /// the grid.
+        pub fn query_triangulated_many<'py>(
+            &self,
+            py: Python<'py>,
+            x: PyReadonlyArray1<f64>,
+            y: PyReadonlyArray1<f64>,
+        ) -> PyResult<Bound<'py, PyArray1<f64>>> {
+            let x = x.as_array();
+            let y = y.as_array();
+            if x.len() != y.len() {
+                return Err(PyValueError::new_err(format!(
+                    "x and y must have the same length; got x={}, y={}",
+                    x.len(),
+                    y.len(),
+                )));
+            }
+            let mut result = Array1::<f64>::zeros(x.len());
+            py.detach(|| {
+                azip!((r in &mut result, &px in &x, &py in &y) {
+                    *r = self.inner.query_triangulated(px, py);
+                });
+            });
+            Ok(result.into_pyarray(py))
+        }
     }
 
     /// Python-facing coastline for signed-distance queries.
@@ -936,13 +868,11 @@ mod nzcvm {
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<PyMeshModel>()?;
-        m.add_class::<PySurfaceModel>()?;
         m.add_class::<PyCoastline>()?;
         m.add_class::<PyModelTree>()?;
         m.add_class::<QueryParams>()?;
         m.add_class::<QueryCoordinates>()?;
         m.add_class::<PyMeshModelBuilder>()?;
-        m.add_function(wrap_pyfunction!(surface_model, m)?)?;
         m.add_function(wrap_pyfunction!(coastline, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;
         m.add_function(wrap_pyfunction!(blend_many, m)?)?;

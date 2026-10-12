@@ -21,102 +21,11 @@ pub trait Contains<T: BHValue, const D: usize, Data> {
     fn contains(&self, point: &Point<T, D>) -> Option<Data>;
 }
 
-const SMALL_VEC_SIZE: usize = 16;
 const SMALL_VEC_RAY_SIZE: usize = 8;
 /// Stack capacity for the stats iterator.  Larger than `SMALL_VEC_RAY_SIZE`
 /// because diagnostic traversals visit every matching leaf (no early-exit on
 /// alpha saturation) so the stack may grow deeper.
 const SMALL_VEC_STATS_SIZE: usize = 16;
-
-pub struct ContainsIterator<
-    'bvh,
-    'shape,
-    T: BHValue,
-    const D: usize,
-    Data,
-    Shape: Contains<T, D, Data> + Bounded<T, D>,
-> {
-    bvh: &'bvh Bvh<T, D>,
-    point: &'bvh Point<T, D>,
-    shapes: &'shape [Shape],
-    stack: SmallVec<[usize; SMALL_VEC_SIZE]>,
-    _phantom: std::marker::PhantomData<Data>,
-}
-
-impl<'bvh, 'shape, T, const D: usize, Data, Shape> ContainsIterator<'bvh, 'shape, T, D, Data, Shape>
-where
-    T: BHValue,
-    Shape: Bounded<T, D> + Contains<T, D, Data>,
-{
-    fn new(bvh: &'bvh Bvh<T, D>, point: &'bvh Point<T, D>, shapes: &'shape [Shape]) -> Self {
-        // To avoid panic! on an empty tree, we only populate with the root node
-        // if the shapes array is non-empty.
-        let mut heap = SmallVec::new();
-        if !shapes.is_empty() {
-            heap.push(0);
-        }
-
-        Self {
-            bvh,
-            point,
-            shapes,
-            stack: heap,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<'shape, T, const D: usize, Data, Shape> Iterator
-    for ContainsIterator<'_, 'shape, T, D, Data, Shape>
-where
-    T: BHValue,
-    Shape: Bounded<T, D> + Contains<T, D, Data>,
-{
-    type Item = Data;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(heap_leader) = self.stack.pop() {
-            match self.bvh.nodes[heap_leader] {
-                BvhNode::Leaf { shape_index, .. } => {
-                    let shape = &self.shapes[shape_index];
-                    if let Some(data) = shape.contains(self.point) {
-                        return Some(data);
-                    }
-                }
-                BvhNode::Node {
-                    child_l_index,
-                    ref child_l_aabb,
-                    child_r_index,
-                    ref child_r_aabb,
-                    ..
-                } => {
-                    if child_l_aabb.contains(self.point) {
-                        self.stack.push(child_l_index);
-                    }
-                    if child_r_aabb.contains(self.point) {
-                        self.stack.push(child_r_index);
-                    }
-                }
-            }
-        }
-        None
-    }
-}
-
-pub fn contains_point_iterator<
-    'bvh,
-    'shape,
-    T: BHValue,
-    const D: usize,
-    Data,
-    Shape: Contains<T, D, Data> + Bounded<T, D>,
->(
-    bvh_tree: &'bvh Bvh<T, D>,
-    shapes: &'shape [Shape],
-    point: &'bvh Point<T, D>,
-) -> ContainsIterator<'bvh, 'shape, T, D, Data, Shape> {
-    ContainsIterator::new(bvh_tree, point, shapes)
-}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TraversalStats {

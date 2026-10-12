@@ -216,26 +216,6 @@ DEFAULT_STRUCTURED_ENCODING_SETTINGS = {
 }
 
 
-def triangulate(mesh: StructuredMesh) -> np.ndarray:
-    nx = mesh.sizes["i"]
-    ny = mesh.sizes["j"]  # This is the stride multiplier for row-major layout
-
-    # Generate the 2D grids
-    ii, jj = np.meshgrid(np.arange(nx - 1), np.arange(ny - 1), indexing="ij")
-
-    # Use ny (the size of j) instead of nx
-    p00 = (ii * ny + jj).ravel()
-    p10 = ((ii + 1) * ny + jj).ravel()
-    p11 = ((ii + 1) * ny + (jj + 1)).ravel()
-    p01 = (ii * ny + (jj + 1)).ravel()
-
-    tri1 = np.stack((p00, p10, p11), axis=1)
-    tri2 = np.stack((p00, p11, p01), axis=1)
-
-    faces = np.vstack((tri1, tri2)).astype(np.uint64)
-    return faces
-
-
 def make_mesh(
     name: str,
     points: np.ndarray,
