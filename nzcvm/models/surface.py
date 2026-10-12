@@ -83,7 +83,9 @@ class Surface:
         Surface
             The surface, ready to interpolate.
         """
-        return cls.from_dataset(xr.open_dataset(path, engine="zarr", chunks=None))
+        # cache=False, or one read of the whole array would keep it all.
+        dataset = xr.open_dataset(path, engine="zarr", chunks=None, cache=False)
+        return cls.from_dataset(dataset)
 
     def to_frame(self, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """NZTM points ``(x, y)`` in the surface's frame."""
@@ -97,6 +99,16 @@ class Surface:
             linear, np.stack([x - offset[0], y - offset[1]])
         )
         return nztm_x, nztm_y
+
+    def __dask_tokenize__(self) -> object:
+        """A token for dask that doesn't read the surface.
+
+        Grid builders hand :meth:`transform` to dask, which tokenizes it to
+        name tasks. Left to itself, dask hashes every value of a lazily
+        indexed surface, reading all of it. A surface doesn't change once
+        loaded. The object itself identifies it.
+        """
+        return type(self).__name__, id(self)
 
     @property
     def n_points(self) -> int:

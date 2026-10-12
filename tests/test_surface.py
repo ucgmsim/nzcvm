@@ -319,3 +319,22 @@ def test_windows_average_aligned_blocks(tmp_path) -> None:
     assert len(shared) > 4
     from_a, from_b = np.array(shared).T
     np.testing.assert_allclose(from_b, from_a)
+
+
+def test_tokenizing_reads_no_values(tmp_path, monkeypatch) -> None:
+    """dask tokenizes Surface.transform without reading the surface."""
+    from dask.base import tokenize
+    from xarray.core import indexing
+
+    path = tmp_path / "sloped.zarr"
+    _unit_mesh("sloped", _sloped_values()).to_zarr(path)
+    surface = Surface.load(path)
+    reads = []
+    original = indexing.LazilyIndexedArray.get_duck_array
+    monkeypatch.setattr(
+        indexing.LazilyIndexedArray,
+        "get_duck_array",
+        lambda self: reads.append(self) or original(self),
+    )
+    assert tokenize(surface.transform) == tokenize(surface.transform)
+    assert not reads
