@@ -37,24 +37,26 @@ pub struct TraversalStats {
 // Priority-ray traversal
 // ---------------------------------------------------------------------------
 
-/// Tests whether a `DQ`-dimensional query point lies within the first `DQ`
-/// dimensions of a `DBVH`-dimensional AABB, and whether the subtree's
-/// priority range overlaps `[priority_lo, priority_hi]`.
+/// Tests whether a query point lies within the first `DBVH - 1` dimensions
+/// of a `DBVH`-dimensional AABB, and whether the subtree's priority range
+/// overlaps `[priority_lo, priority_hi]`.  The point may carry more than
+/// `DBVH - 1` coordinates: the AABB tests only the leading ones, and the
+/// shapes' containment tests see them all.
 ///
-/// Returns `Some(aabb.min[DQ])` — the minimum value along the extra
+/// Returns `Some(aabb.min[DBVH - 1])` — the minimum value along the last
 /// dimension (i.e. the minimum priority reachable through this subtree) —
 /// on hit, or `None` on a spatial miss or priority-range miss.
 ///
 /// This implements the AABB intersection test for the conceptual ray
-/// `origin = (p[0], …, p[DQ-1], 0)`, `direction = (0, …, 0, 1)`.
+/// `origin = (p[0], …, p[DBVH-2], 0)`, `direction = (0, …, 0, 1)`.
 ///
 /// For a leaf at priority `p` the AABB's priority dimension is `[p, p + 0.5]`.
 /// For an internal node it spans `[min_priority_in_subtree, max_priority_in_subtree + 0.5]`.
 /// The subtree is pruned when:
 /// - its minimum priority exceeds `priority_hi`, or
-/// - its maximum priority (= `aabb.max[DQ] - 0.5`) is less than `priority_lo`
-///   (equivalently `aabb.max[DQ] <= priority_lo`, since priorities are integers
-///   and the extent is exactly `0.5`).
+/// - its maximum priority (= `aabb.max[DBVH - 1] - 0.5`) is less than
+///   `priority_lo` (equivalently `aabb.max[DBVH - 1] <= priority_lo`, since
+///   priorities are integers and the extent is exactly `0.5`).
 #[inline]
 fn priority_aabb_hit_bounded<T: BHValue, const DBVH: usize, const DQ: usize>(
     point: &Point<T, DQ>,
@@ -62,13 +64,14 @@ fn priority_aabb_hit_bounded<T: BHValue, const DBVH: usize, const DQ: usize>(
     priority_lo: T,
     priority_hi: T,
 ) -> Option<T> {
-    for i in 0..DQ {
+    let priority_axis = DBVH - 1;
+    for i in 0..priority_axis {
         if point.coords[i] < aabb.min.coords[i] || point.coords[i] > aabb.max.coords[i] {
             return None;
         }
     }
-    let p_min = aabb.min.coords[DQ];
-    let p_max = aabb.max.coords[DQ];
+    let p_min = aabb.min.coords[priority_axis];
+    let p_max = aabb.max.coords[priority_axis];
     if p_min > priority_hi || p_max <= priority_lo {
         return None;
     }
@@ -98,7 +101,7 @@ impl Ord for Priority {
 /// Iterator over a `DBVH`-dimensional BVH that models a ray from
 /// `(point, 0)` along the `DBVH`-th axis (the *priority* dimension).
 ///
-/// Leaves are visited in ascending order of `aabb.min[DQ]` (= priority),
+/// Leaves are visited in ascending order of `aabb.min[DBVH - 1]` (= priority),
 /// so callers receive results from the highest-priority model first.
 /// At each internal node the child with the lower `t_min` (= lower minimum
 /// priority value in that subtree) is pushed on top of the stack and
@@ -170,7 +173,7 @@ where
                     let shape = &self.shapes[shape_index];
                     // Check this leaf's own priority is within bounds before
                     // running the (potentially expensive) containment test.
-                    let leaf_p = shape.aabb().min.coords[DQ];
+                    let leaf_p = shape.aabb().min.coords[DBVH - 1];
                     if leaf_p < self.priority_lo || leaf_p > self.priority_hi {
                         continue;
                     }
@@ -296,7 +299,7 @@ where
             match self.bvh.nodes[node_idx] {
                 BvhNode::Leaf { shape_index, .. } => {
                     let shape = &self.shapes[shape_index];
-                    let leaf_p = shape.aabb().min.coords[DQ];
+                    let leaf_p = shape.aabb().min.coords[DBVH - 1];
                     if leaf_p < self.priority_lo || leaf_p > self.priority_hi {
                         continue;
                     }

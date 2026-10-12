@@ -60,7 +60,7 @@ def _mesh_model(
     qualities = np.tile(
         np.array([rho, vp, vs, qp, qs, alpha], dtype=np.float32), (4, 1)
     )
-    builder = _nzcvm.MeshModelBuilder(vertices, faces, np.uint8(priority))
+    builder = _nzcvm.MeshModelBuilder(vertices, faces, np.uint8(priority), "elevation")
     if name is not None:
         builder.name(name)
     return builder.interpolated(qualities)

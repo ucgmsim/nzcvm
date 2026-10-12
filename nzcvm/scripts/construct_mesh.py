@@ -21,15 +21,14 @@ from nzcvm.models.mesh import (
     ModelType,
     TetrahedralMesh,
     TetrahedralMeshSchema,
+    Vertical,
     make_mesh,
     mesh_encoding,
 )
 from nzcvm.models.surface import (
-    LatticeWindow,
     Surface,
     SurfaceGrid,
     median_spacing,
-    read_lattice_window,
     read_surface_window,
 )
 from nzcvm.nzcvm import adaptive_tin  # ty: ignore[unresolved-import]
@@ -161,6 +160,7 @@ def construct_volumetric_mesh(
 
     mesh = make_mesh(
         name=name,
+        vertical=Vertical.DEPTH,
         points=mesh_vertices,
         connectivity=tetra,
         cell_data={
@@ -401,70 +401,27 @@ def prism_tetra(triangles: np.ndarray) -> np.ndarray:
     )
 
 
-def terrain_cover(window: LatticeWindow, triangulation: Triangulation) -> np.ndarray:
-    """The depth of the highest terrain in *window* near each vertex.
+def depth_below(surface: SurfaceGrid, topography: SurfaceGrid) -> SurfaceGrid:
+    """*surface* as depth below *topography*, at *surface*'s own nodes.
 
-    "Near" is within the longest edge touching the vertex. Every point of a
-    triangle lies that close to each of its corners, so a top surface at or
-    above this cover at every vertex interpolates to at or above the terrain
-    everywhere in the triangle.
+    Both hold depth (+z down), so the depth below the topography is their
+    difference. The topography extends its edge past its own grid.
 
     Parameters
     ----------
-    window :
-        The full-resolution terrain, as depth (+z down).
-    triangulation :
-        The mesh's triangulation.
+    surface :
+        The surface to convert.
+    topography :
+        The topography to measure depth from.
 
     Returns
     -------
-    numpy.ndarray
-        Depth of the highest terrain near each vertex, NaN where the window
-        has none.
+    SurfaceGrid
+        Depth of *surface* below *topography*.
     """
-    vertices, triangles = triangulation.vertices, triangulation.triangles
-    edges = np.concatenate(
-        [triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]]
-    )
-    lengths = np.linalg.norm(vertices[edges[:, 0]] - vertices[edges[:, 1]], axis=1)
-    radius = np.zeros(len(vertices))
-    np.maximum.at(radius, edges[:, 0], lengths)
-    np.maximum.at(radius, edges[:, 1], lengths)
-    # Between nodes the terrain interpolates, so allow a cell either side.
-    reach = radius + 2 * window.spacing
-    fi, fj = window.fractional_index(vertices[:, 0], vertices[:, 1])
-
-    # Level k holds the shallowest depth in each block of 2^k x 2^k nodes. A
-    # vertex reads the 3 x 3 blocks around its own at the first level whose
-    # blocks are at least its reach across, which covers everything within
-    # its reach.
-    level = np.where(np.isnan(window.values), np.inf, window.values)
-    cover = np.full(len(vertices), np.inf)
-    pending = np.ones(len(vertices), dtype=bool)
-    block = 1
-    while pending.any():
-        ready = pending & (block * window.spacing >= reach)
-        if level.shape == (1, 1):
-            ready = pending
-        if ready.any():
-            bi = np.clip(np.floor(fi[ready] / block).astype(int), 0, level.shape[0] - 1)
-            bj = np.clip(np.floor(fj[ready] / block).astype(int), 0, level.shape[1] - 1)
-            nearby = np.full(ready.sum(), np.inf)
-            for di in (-1, 0, 1):
-                for dj in (-1, 0, 1):
-                    ni = np.clip(bi + di, 0, level.shape[0] - 1)
-                    nj = np.clip(bj + dj, 0, level.shape[1] - 1)
-                    nearby = np.minimum(nearby, level[ni, nj])
-            cover[ready] = nearby
-            pending &= ~ready
-        m, n = level.shape
-        padded = np.full((m + m % 2, n + n % 2), np.inf)
-        padded[:m, :n] = level
-        level = padded.reshape(padded.shape[0] // 2, 2, padded.shape[1] // 2, 2).min(
-            axis=(1, 3)
-        )
-        block *= 2
-    return np.where(np.isinf(cover), np.nan, cover)
+    x, y = np.asarray(surface.x), np.asarray(surface.y)
+    ground, _ = topography(x.ravel(), y.ravel(), clamp=True)
+    return SurfaceGrid(x, y, np.asarray(surface.values) - ground.reshape(x.shape))
 
 
 def profile_mesh(
@@ -526,6 +483,7 @@ def profile_mesh(
     profile = {f: model[f].to_numpy(dtype=np.float32) for f in fields}
     return make_mesh(
         name=name,
+        vertical=Vertical.DEPTH,
         points=vertices,
         connectivity=tetra,
         cell_data={
@@ -766,9 +724,7 @@ def main(
         bool,
         typer.Option(
             help="If true, pad the top layer (useful to prevent topography peek "
-            "through). A Zarr topography meshes at the basement's spacing, and "
-            "the pad also rises over its full-resolution highest point near "
-            "each mesh vertex."
+            "through)."
         ),
     ] = True,
     layered: Annotated[
@@ -832,44 +788,41 @@ def main(
         corners_lon.max(),
     )
 
-    # The basement resolves the basin no finer than its own node spacing, so
-    # a Zarr topography or top surface averages to that spacing too.
+    # The mesh describes a basin in depth below the topography, so each
+    # surface becomes depth at its own nodes, against the topography averaged
+    # to the basement's node spacing: the basement resolves the basin no finer.
     bot_grid = read_surface_window(bottom_surface, buffered_bbox)
     spacing = median_spacing(bot_grid)
     print(f"Meshing surfaces at the basement's spacing of {spacing:.0f} m")
     topo_grid = read_surface_window(topography, buffered_bbox, spacing)
-    top_grid = read_surface_window(top_surface, buffered_bbox, spacing)
-    surfaces = [(bot_grid, tolerance)]
-    if top_surface != bottom_surface:
-        surfaces.append((top_grid, tolerance))
-    # Depth below the topography picks the profile layer, so the topography
-    # matters only when the model has more than one layer.
-    if topography not in (top_surface, bottom_surface) and (layered or len(model) > 1):
-        surfaces.append((topo_grid, tolerance))
+    bot_depth = depth_below(bot_grid, topo_grid)
+    # A top surface that's the topography is depth 0 everywhere.
+    top_depth = (
+        None
+        if top_surface == topography
+        else depth_below(
+            read_surface_window(top_surface, buffered_bbox, spacing), topo_grid
+        )
+    )
+    surfaces = [(bot_depth, tolerance)]
+    if top_depth is not None and top_surface != bottom_surface:
+        surfaces.append((top_depth, tolerance))
     # When smoothing, cap the edge length to keep a decent smoothing
     # resolution.  Otherwise, only the tolerance limits it.
     max_edge = SMOOTHING_MAX_EDGE if will_smooth else None
     triangulation = triangulate_polygon(poly, surfaces, max_edge)
-    mesh_top = interpolate_surface(
-        top_grid, triangulation.vertices, label="top surface"
-    )
     mesh_bottom = interpolate_surface(
-        bot_grid, triangulation.vertices, label="bottom surface"
+        bot_depth, triangulation.vertices, label="bottom surface"
+    )
+    mesh_top = (
+        np.zeros_like(mesh_bottom)
+        if top_depth is None
+        else interpolate_surface(top_depth, triangulation.vertices, label="top surface")
     )
     mesh_top, mesh_bottom = enforce_mesh_constraints(mesh_top, mesh_bottom)
-    mesh_topography = interpolate_surface(
-        topo_grid, triangulation.vertices, label="topography"
-    )
-    padded_top = None
-    if pad_top:
-        padded_top = mesh_top - PAD_DEPTH
-        if topography.suffix == ".zarr":
-            # The basin meshes averaged topography, and the full surface
-            # rises above it in places. Lift the top over it everywhere.
-            cover = terrain_cover(
-                read_lattice_window(topography, buffered_bbox), triangulation
-            )
-            padded_top = np.fmin(padded_top, cover)
+    # Depth starts at the topography itself.
+    mesh_topography = np.zeros_like(mesh_top)
+    padded_top = mesh_top - PAD_DEPTH if pad_top else None
 
     name = output.stem
     if layered:

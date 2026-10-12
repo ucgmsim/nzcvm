@@ -8,7 +8,7 @@ and structured grids (topographic surfaces).
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 from typing import Any, Literal
 
 import numpy as np
@@ -23,6 +23,19 @@ I = Literal["i"]
 J = Literal["j"]
 K = Literal["k"]
 L = Literal["layer"]
+
+
+class Vertical(StrEnum):
+    """The coordinate a mesh's vertex ``z`` holds (``vertical`` attribute).
+
+    Both run positive down. A query passes each point's elevation and its
+    depth below the topography, and a mesh reads the one its ``z`` stores.
+    """
+
+    #: Negated elevation, fixed in space: tomography.
+    ELEVATION = "elevation"
+    #: Depth below the topography, so the mesh follows the terrain: basins.
+    DEPTH = "depth"
 
 
 class ModelType(IntEnum):
@@ -95,6 +108,8 @@ DEPTH_PROFILE_VARIABLES = tuple(
 @dataclass
 class TetrahedralMeshSchema(AsDataset):
     name: Attr[str]
+    #: A :class:`Vertical`: what the vertex ``z`` holds.
+    vertical: Attr[str]
 
     x: Data[tuple[I,], np.float32]
     y: Data[tuple[I,], np.float32]
@@ -264,6 +279,7 @@ DEFAULT_STRUCTURED_ENCODING_SETTINGS = {"z": {"compressors": MEDIUM_COMPRESSOR}}
 
 def make_mesh(
     name: str,
+    vertical: Vertical,
     points: np.ndarray,
     connectivity: np.ndarray,
     cell_data: dict[str, np.ndarray],
@@ -279,6 +295,9 @@ def make_mesh(
         Optional human-readable name for the model.  Stored in
         ``field_data["name"]`` when provided so it survives VTKHDF
         round-trips and reaches :func:`~nzcvm.model.MeshModel`.
+    vertical :
+        Whether vertex ``z`` stores negated elevation or depth below the
+        topography.
     points :
         ``(N, 3)`` float32 array of vertex coordinates.
     connectivity :
@@ -308,6 +327,7 @@ def make_mesh(
 
     mesh = TetrahedralMeshSchema.new(
         name=name,
+        vertical=str(vertical),
         x=points[..., 0],
         y=points[..., 1],
         z=points[..., 2],

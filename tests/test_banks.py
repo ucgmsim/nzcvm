@@ -80,9 +80,9 @@ def query_point(basement_h5: Path) -> tuple[float, float]:
 
 @pytest.fixture()
 def dem_zarr(tmp_path: Path, query_point: tuple[float, float]) -> Path:
-    """Flat DEM at elevation 500 m, covering the query point with margin."""
+    """Flat DEM at elevation 100 m (z == -100), covering the query point."""
     x, y = query_point
-    dset = _flat_dem_surface(cx=x, cy=y, side=20_000.0, z=500.0)
+    dset = _flat_dem_surface(cx=x, cy=y, side=20_000.0, z=-100.0)
     path = tmp_path / "dem.zarr"
     dset.to_zarr(path, mode="w")
     return path
@@ -104,15 +104,18 @@ def _mesh_dataset(x: float, y: float, z_values: list[float], qp_qs: bool) -> xr.
     return xr.Dataset(data_vars, coords={"p": np.arange(n)})
 
 
-# With the preceding fixtures: dem elevation is 500, bpv basement z is -50.
-# dem_depth = (z - 500).clip(min=0).
-# bpv_depth = (z - (-50)).clip(min=0).
-# masked point (z=200): dem_depth=0 (<1000), bpv_depth=250 (<350)      -> True
-# unmasked, dem-only culprit (z=2000): dem_depth=1500 (>=1000)         -> False
-# unmasked, bpv-only culprit (z=400): dem_depth=0 (<1000), bpv_depth=450 (>=350) -> False
+# The mesh is depth-queried, so its z is depth below the DEM. With the
+# preceding fixtures the DEM is at elevation 100 and the BPV basement at
+# elevation 50, so the basement lies 50 m below the DEM.
+# dem_depth = z.clip(min=0).
+# bpv_depth = (z - 50).clip(min=0).
+# masked point (z=200): dem_depth=200 (<1000), bpv_depth=150 (<350)      -> True
+# unmasked, dem-only culprit (z=2000): dem_depth=2000 (>=1000)           -> False
+# unmasked, bpv-only culprit (z=450): dem_depth=450 (<1000), bpv_depth=400 (>=350) -> False
 _Z_MASKED = 200.0
 _Z_FAR_FROM_DEM = 2000.0
-_Z_FAR_FROM_BPV = 400.0
+_Z_FAR_FROM_BPV = 450.0
+_BPV_DEPTH = 50.0
 
 
 def _run_main(
@@ -178,8 +181,8 @@ def test_main_applies_taper_inside_mask_and_full_values_outside(
 
     # The masked point gets the Ely GTL taper, computed independently here
     # from the same depth/vs30 relation the script uses.
-    dem_depth = max(_Z_MASKED - 500.0, 0.0)
-    bpv_depth = max(_Z_MASKED - (-50.0), 0.0)
+    dem_depth = max(_Z_MASKED, 0.0)
+    bpv_depth = max(_Z_MASKED - _BPV_DEPTH, 0.0)
     vs30_taper_depth = banks.VS30_TAPER_DEPTH
     vs_bpv_top = (
         banks.VS0 + (banks.VS_DEPTH - banks.VS0) * (dem_depth / vs30_taper_depth)

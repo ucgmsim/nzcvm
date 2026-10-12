@@ -24,7 +24,7 @@ from nzcvm.models.mesh import (
     mesh_encoding,
 )
 from nzcvm.models.model import MeshModel
-from nzcvm.models.surface import LatticeWindow, SurfaceGrid
+from nzcvm.models.surface import SurfaceGrid
 from nzcvm.scripts import construct_mesh
 from nzcvm.scripts.construct_mesh import (
     PAD_DEPTH,
@@ -312,46 +312,9 @@ def test_max_edge_caps_triangle_size() -> None:
     assert edges.max() <= 300.0 + 1e-6
 
 
-def _rough_window(seed: int = 0) -> LatticeWindow:
-    """A 30 m lattice of rough terrain (depth, +z down) over [0, 3000]^2."""
-    rng = np.random.default_rng(seed)
-    values = (-200.0 * rng.random((101, 101))).astype(np.float32)
-    return LatticeWindow(
-        values, np.array([0.0, 0.0]), np.array([30.0, 0.0]), np.array([0.0, 30.0])
-    )
-
-
-def test_terrain_cover_puts_the_top_above_the_terrain() -> None:
-    """A top at the cover interpolates at or above every terrain node."""
-    window = _rough_window()
-    vertices = np.array(
-        [[0.0, 0.0], [3000.0, 0.0], [3000.0, 3000.0], [0.0, 3000.0], [1400.0, 1700.0]]
-    )
-    triangles = np.array([[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]])
-    triangulation = construct_mesh.Triangulation(vertices, triangles)
-    cover = construct_mesh.terrain_cover(window, triangulation)
-
-    i, j = np.meshgrid(np.arange(101), np.arange(101), indexing="ij")
-    nodes = np.c_[30.0 * i.ravel(), 30.0 * j.ravel()]
-    for a, b, c in triangles:
-        corners = vertices[[a, b, c]]
-        basis = np.linalg.inv(
-            np.column_stack([corners[1] - corners[0], corners[2] - corners[0]])
-        )
-        w1, w2 = basis @ (nodes - corners[0]).T
-        inside = (w1 >= -1e-9) & (w2 >= -1e-9) & (w1 + w2 <= 1 + 1e-9)
-        top = (1 - w1 - w2) * cover[a] + w1 * cover[b] + w2 * cover[c]
-        # Depth is +z down, so "above" is shallower.
-        assert (top[inside] <= window.values.ravel()[inside] + 1e-6).all()
-
-
-def test_terrain_cover_finds_a_spike_between_vertices() -> None:
-    window = _rough_window()
-    window.values[50, 50] = -5000.0
-    vertices = np.array([[0.0, 0.0], [3000.0, 0.0], [3000.0, 3000.0], [0.0, 3000.0]])
-    triangulation = construct_mesh.Triangulation(
-        vertices, np.array([[0, 1, 2], [0, 2, 3]])
-    )
-    np.testing.assert_array_equal(
-        construct_mesh.terrain_cover(window, triangulation), -5000.0
-    )
+def test_depth_below_measures_from_the_topography() -> None:
+    x, y = np.meshgrid(np.arange(4.0), np.arange(3.0), indexing="ij")
+    topography = SurfaceGrid(x, y, -10.0 - x)  # rising to the east
+    basement = SurfaceGrid(x, y, np.full_like(x, 200.0))
+    depth = construct_mesh.depth_below(basement, topography)
+    np.testing.assert_allclose(depth.values, 210.0 + x)
