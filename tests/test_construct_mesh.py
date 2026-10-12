@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 import shapely
 import xarray as xr
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from nzcvm.models.mesh import (
@@ -85,12 +85,11 @@ def _mesh(
         "square",
         shapely.box(0.0, 0.0, SIDE, SIDE),
         _square(),
-        TOPOGRAPHY,
         TOPOGRAPHY.copy(),
         TOPOGRAPHY + THICKNESS if bottom is None else bottom,
         model,
         culling_volume=1e-3,
-        padded_top=TOPOGRAPHY - PAD_DEPTH if pad_top else None,
+        pad_top=pad_top,
         priority=3,
     )
 
@@ -109,11 +108,10 @@ def test_one_layer_of_depth_profile_tetrahedra() -> None:
     assert mesh.has_depth_profile
 
 
-def test_vertex_depth_is_below_topography() -> None:
+def test_vertex_depth_is_its_z() -> None:
+    """A basin mesh is in depth below the topography, so depth is z."""
     mesh = _mesh()
-    np.testing.assert_allclose(
-        mesh.depth.values, mesh.z.values - _topography(mesh.x.values, mesh.y.values)
-    )
+    np.testing.assert_allclose(mesh.depth.values, mesh.z.values)
 
 
 # Avoid the layer boundaries, where rounding picks either layer.
@@ -125,11 +123,14 @@ depths = st.floats(min_value=1.0, max_value=THICKNESS - 1.0).filter(
 
 @given(x=interior, y=interior, depth=depths)
 def test_query_evaluates_profile_at_depth(x: float, y: float, depth: float) -> None:
-    model = MeshModel.from_mesh(_mesh())
+    """A basin's z is depth below the topography. The profile reads it."""
     z = _topography_at(x, y) + depth
+    # Avoid the layer boundaries, where rounding picks either layer.
+    assume(abs(z - 100.0) > 0.5 and abs(z - 300.0) > 0.5)
+    model = MeshModel.from_mesh(_mesh())
     quality = model.query(x, y, z)
     assert quality is not None
-    assert quality.vs == pytest.approx(_expected_vs(np.array(depth)))
+    assert quality.vs == pytest.approx(_expected_vs(np.array(z)))
     assert quality.alpha == pytest.approx(1.0)
 
 
@@ -192,12 +193,11 @@ def test_layered_mesh_round_trips_through_zarr(tmp_path: Path) -> None:
     """``--layered`` meshes have no depth profile and still write and query."""
     layers = construct_mesh.slice_with_model(
         _square(),
-        TOPOGRAPHY,
         TOPOGRAPHY.copy(),
         TOPOGRAPHY + THICKNESS,
         PROFILE,
         culling_volume=1e-3,
-        padded_top=None,
+        pad_top=False,
     )
     mesh = construct_mesh.construct_volumetric_mesh(
         "layered", shapely.box(0.0, 0.0, SIDE, SIDE), layers, priority=3

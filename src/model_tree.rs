@@ -133,6 +133,12 @@ impl Contains<Real, 4, (u8, Quality)> for TreeModel {
             Vertical::Elevation => query_point.z,
             Vertical::Depth => query_point.w,
         };
+        // The tree prunes on the horizontal alone, so reject a point outside
+        // the model's vertical extent here, before searching its mesh.
+        let aabb = self.model.aabb3();
+        if vertical < aabb.min.z || vertical > aabb.max.z {
+            return None;
+        }
         let point = Point3::new(query_point.x, query_point.y, vertical);
         self.model.query(point).map(|q| (self.priority, q))
     }
