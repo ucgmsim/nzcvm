@@ -2,8 +2,8 @@
 
 Each test reads the written file back through the production reader that
 consumes it.
-``just synthetic`` builds the basin meshes themselves, since that goes through
-gmsh and runs far too slowly for a unit test.
+``just synthetic`` builds the basin meshes themselves, and
+``test_construct_mesh.py`` covers the meshing.
 """
 
 from __future__ import annotations

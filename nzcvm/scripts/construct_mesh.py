@@ -1,35 +1,42 @@
-"""Construct a tetrahedral volumetric mesh for a basin model using adaptive topography gradient logic."""
+"""Construct a tetrahedral volumetric mesh for a basin model from an error-bounded triangulation."""
 
 import gzip
 import itertools
-import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, TextIO
+from typing import Annotated
 
 import h5py
 import numpy as np
 import pandas as pd
 import pyproj
+import scipy.ndimage
 import shapely
 import shapely.ops
 import typer
 import xarray as xr
 
 from nzcvm.models.mesh import (
-    DEFAULT_ENCODING_SETTINGS,
+    ModelType,
     TetrahedralMesh,
     TetrahedralMeshSchema,
     make_mesh,
+    mesh_encoding,
 )
 from nzcvm.models.surface import SurfaceGrid, read_surface_file
-from nzcvm.scripts._extras import missing_extra
+from nzcvm.nzcvm import adaptive_tin  # ty: ignore[unresolved-import]
 
 TRANSFORMER = pyproj.Transformer.from_crs(4326, 2193, always_xy=True)
 INV_TRANSFORMER = pyproj.Transformer.from_crs(2193, 4326, always_xy=True)
 
 PAD_DEPTH = 50.0
+#: Default vertical tolerance (m) of the basin triangulation.
+TOLERANCE = 5.0
+#: Samples per grid cell edge at which the triangulation checks each surface.
+SAMPLES_PER_CELL = 2
+#: Longest triangle edge (m) when smoothing the basin boundary.
+SMOOTHING_MAX_EDGE = 1000.0
 
 app = typer.Typer(help="Construct a volumetric tetrahedral mesh for a basin model.")
 
@@ -52,73 +59,13 @@ def preprocess_polygon(poly: shapely.Polygon) -> shapely.Polygon:
 
 
 @dataclass
-class PolyData:
-    vertices: np.ndarray
-    segments: np.ndarray
-
-
-@dataclass
 class Triangulation:
+    """A planar triangulation of the basin outline."""
+
+    #: ``(V, 2)`` vertex positions (NZTM).
     vertices: np.ndarray
+    #: ``(T, 3)`` vertex indices of each triangle.
     triangles: np.ndarray
-
-
-def extract_poly_data(poly: shapely.Polygon) -> PolyData:
-    vertices = np.array(poly.exterior.coords)[:-1]
-    idx = np.arange(len(vertices), dtype=np.int64)
-    segments = np.stack((idx, (idx + 1) % len(vertices)), axis=1) + 1
-    return PolyData(vertices, segments)
-
-
-def write_poly_file(poly: PolyData, buffer: TextIO) -> None:
-    buffer.write(f"{len(poly.vertices)} 2 0 0\n")
-    vertex_columns = np.column_stack((np.arange(len(poly.vertices)) + 1, poly.vertices))
-    np.savetxt(buffer, vertex_columns, ["%d", "%10.5f", "%10.5f"])
-    buffer.write(f"{len(poly.segments)} 0\n")
-    segment_columns = np.column_stack(
-        (np.arange(len(poly.segments)) + 1, poly.segments)
-    )
-    np.savetxt(buffer, segment_columns, "%d")
-    buffer.write("0")
-
-
-def read_vertices(handle: TextIO | Path) -> np.ndarray:
-    return np.genfromtxt(
-        handle,
-        skip_header=1,
-        dtype=[
-            ("vertex", np.int64),
-            ("x", np.float64),
-            ("y", np.float64),
-            ("boundary", np.int64),
-        ],
-    )
-
-
-def read_triangles(handle: TextIO | Path) -> np.ndarray:
-    return np.genfromtxt(
-        handle,
-        skip_header=1,
-        dtype=[
-            ("vertex", np.int64),
-            ("i", np.int64),
-            ("j", np.int64),
-            ("k", np.int64),
-        ],
-    )
-
-
-def construct_mesh_tetra(triangles: np.ndarray) -> np.ndarray:
-    i = 2 * (triangles["i"] - 1)
-    i1 = i + 1
-    j = 2 * (triangles["j"] - 1)
-    j1 = j + 1
-    k = 2 * (triangles["k"] - 1)
-    k1 = k + 1
-    tets_1 = np.stack((i, i1, j1, k1), axis=1)
-    tets_2 = np.stack((i, j, j1, k), axis=1)
-    tets_3 = np.stack((i, j1, k, k1), axis=1)
-    return np.concatenate((tets_1, tets_2, tets_3))
 
 
 def interleave_top_and_bottom(top: np.ndarray, bottom: np.ndarray) -> np.ndarray:
@@ -126,67 +73,6 @@ def interleave_top_and_bottom(top: np.ndarray, bottom: np.ndarray) -> np.ndarray
     interleaved[::2] = top
     interleaved[1::2] = bottom
     return interleaved
-
-
-def gradient_field(grid: SurfaceGrid, error_target: float, max_h: float) -> SurfaceGrid:
-    """Compute a mesh sizing field from the spatial gradients of a surface."""
-    x, y, z = grid.x, grid.y, grid.values
-    del_y, del_x = np.gradient(z)
-
-    dx = np.gradient(x, axis=1)
-    dy = np.gradient(y, axis=0)
-    dx[dx == 0] = 1.0
-    dy[dy == 0] = 1.0
-
-    grad_x = del_x / dx
-    grad_y = del_y / dy
-    grad_mag = np.hypot(grad_x, grad_y)
-
-    # Characteristic local grid spacing (metres)
-    cell_size = np.sqrt(np.abs(dx * dy))  # geometric mean of dx, dy
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        h_field = (error_target * cell_size) / (grad_mag + 1e-8)
-
-    min_size = cell_size
-    return SurfaceGrid(x, y, np.clip(h_field, min_size, max_h))
-
-
-@dataclass
-class SizingField:
-    """A mesh sizing field combining one or more gradient fields.
-
-    Where fields overlap, the minimum h (finest resolution) wins. A point
-    outside every field takes the minimum of the fields clamped onto their
-    edges.
-
-    Example:
-        coarse = gradient_field(grid1, error_target=0.01, max_h=50000)
-        fine   = gradient_field(grid2, error_target=0.01, max_h=1000)
-        sizing_field = SizingField([coarse, fine])
-    """
-
-    fields: list[SurfaceGrid]
-
-    def __post_init__(self):
-        all_h = np.concatenate([f.values.ravel() for f in self.fields])
-        q0, q50, q100 = np.nanquantile(all_h, [0, 0.5, 1.0])
-        print(
-            f"Refinement field (min, median, max) = ({q0:.1f}, {q50:.1f}, {q100:.1f})"
-        )
-
-    def __call__(self, x: float, y: float) -> float:
-        """Return the mesh size at a point."""
-        h = []
-
-        for f in self.fields:
-            v, _ = f.query(x, y, clamp=False)
-            if not math.isnan(v):
-                h.append(v)
-
-        if not h:
-            h = [f.query(x, y)[0] for f in self.fields]
-        return min(h)
 
 
 @dataclass
@@ -249,7 +135,10 @@ def construct_volumetric_mesh(
     )
 
     model_type = np.concatenate(
-        [np.full((len(layer.tetra),), 1, dtype=np.uint8) for layer in layers]
+        [
+            np.full(len(layer.tetra), ModelType.INTERPOLATE, dtype=np.uint8)
+            for layer in layers
+        ]
     )
 
     for layer in layers:
@@ -273,98 +162,100 @@ def construct_volumetric_mesh(
     return mesh
 
 
+def surface_samples(
+    grid: SurfaceGrid, poly: shapely.Polygon, per_cell: int
+) -> tuple[np.ndarray, float]:
+    """Points at which the triangulation must fit `grid`.
+
+    The grid nodes alone miss what bilinear interpolation does between them
+    (a cell with a twist bulges at its centre), so the samples are a lattice
+    `per_cell` times finer than the grid.  The triangulation also fits the
+    surface along the outline, at the lattice spacing.
+
+    Parameters
+    ----------
+    grid : SurfaceGrid
+        The surface to sample.
+    poly : shapely.Polygon
+        Basin outline (NZTM).
+    per_cell : int
+        Samples per grid cell edge.
+
+    Returns
+    -------
+    points : np.ndarray
+        ``(N, 2)`` lattice points inside `poly`.
+    spacing : float
+        The lattice spacing (m), for sampling the outline.
+    """
+    # Sample only the cells overlapping the outline's bounding box.
+    xmin, ymin, xmax, ymax = poly.bounds
+    near = (grid.x >= xmin) & (grid.x <= xmax) & (grid.y >= ymin) & (grid.y <= ymax)
+    rows, cols = np.nonzero(near)
+    m, n = grid.x.shape
+    if len(rows):
+        r0, r1 = max(rows.min() - 1, 0), min(rows.max() + 1, m - 1)
+        c0, c1 = max(cols.min() - 1, 0), min(cols.max() + 1, n - 1)
+    else:
+        r0, r1, c0, c1 = 0, m - 1, 0, n - 1
+    lattice = np.meshgrid(
+        np.linspace(r0, r1, per_cell * (r1 - r0) + 1),
+        np.linspace(c0, c1, per_cell * (c1 - c0) + 1),
+        indexing="ij",
+    )
+    # Linear in the index along each axis is bilinear within each cell, the
+    # same map the grid interpolates with.
+    x = scipy.ndimage.map_coordinates(grid.x, lattice, order=1).ravel()
+    y = scipy.ndimage.map_coordinates(grid.y, lattice, order=1).ravel()
+    inside = shapely.contains_xy(poly, x, y)
+
+    cell_edge = min(
+        np.median(np.hypot(np.diff(grid.x, axis=axis), np.diff(grid.y, axis=axis)))
+        for axis in (0, 1)
+    )
+    return np.c_[x[inside], y[inside]], float(cell_edge / per_cell)
+
+
 def triangulate_polygon(
-    poly: shapely.Polygon, sizing_field: SizingField
+    poly: shapely.Polygon,
+    surfaces: list[tuple[SurfaceGrid, float]],
+    max_edge: float | None = None,
+    per_cell: int = SAMPLES_PER_CELL,
 ) -> Triangulation:
-    try:
-        import gmsh
-    except ImportError as err:
-        raise missing_extra("gmsh", "mesh", "basin") from err
+    """Triangulate `poly` to fit each surface within its vertical tolerance.
 
-    gmsh.initialize()
-    # gmsh.option.setNumber("General.Terminal", 0)
-    gmsh.model.add("surface_triangulation")
+    Builds an error-bounded TIN (see ``nzcvm.adaptive_tin``): the linear
+    interpolant of every surface stays within its tolerance (m) at each of
+    its :func:`surface_samples` and along the outline.  Vertices sit on
+    samples, so triangles go only where a surface bends.
 
-    coords = np.array(poly.exterior.coords)[:-1]
+    Parameters
+    ----------
+    poly : shapely.Polygon
+        Basin outline (NZTM). The triangulation keeps its vertices and splits
+        its edges where a surface needs it.
+    surfaces : list of (SurfaceGrid, float)
+        Each surface to fit, with its vertical tolerance in metres.
+    max_edge : float, optional
+        Longest edge (m) to allow, however flat the surfaces are.
+    per_cell : int
+        Samples per grid cell edge (see :func:`surface_samples`).
 
-    # Map adaptive local sizing to boundary vertices
-    point_tags = []
-    for x, y in coords:
-        r_local = sizing_field(x, y)
-        tag = gmsh.model.geo.addPoint(x, y, 0.0, meshSize=r_local)
-        point_tags.append(tag)
-
-    line_tags = []
-    num_points = len(point_tags)
-    for i in range(num_points):
-        p1 = point_tags[i]
-        p2 = point_tags[(i + 1) % num_points]
-        tag = gmsh.model.geo.addLine(p1, p2)
-        line_tags.append(tag)
-
-    cl = gmsh.model.geo.addCurveLoop(line_tags)
-    surface_tag = gmsh.model.geo.addPlaneSurface([cl])
-
-    gmsh.model.geo.synchronize()
-
-    # Callback evaluation loop providing Gmsh with local terrain constraints during triangulation
-    def mesh_size_callback(dim, tag, x, y, z, lc):
-        return sizing_field(x, y)
-
-    gmsh.model.mesh.setSizeCallback(mesh_size_callback)
-    gmsh.option.setNumber("Mesh.Algorithm", 5)
-
-    gmsh.model.mesh.generate(2)
-
-    node_tags, node_coords, _ = gmsh.model.mesh.getNodes(
-        2, surface_tag, includeBoundary=True
+    Returns
+    -------
+    Triangulation
+        The triangles covering `poly`.
+    """
+    tin_surfaces = [
+        (grid.inner, *surface_samples(grid, poly, per_cell), tolerance)
+        for grid, tolerance in surfaces
+    ]
+    boundary = np.asarray(poly.exterior.coords, dtype=np.float64)[:-1]
+    vertices, triangles = adaptive_tin(boundary, tin_surfaces, max_edge)
+    print(
+        f"Triangulated basin into {len(triangles)} triangles "
+        f"on {len(vertices)} vertices"
     )
-    node_coords = node_coords.reshape(-1, 3)
-
-    elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(2, surface_tag)
-
-    tri_type_idx = list(elem_types).index(2)
-    tri_node_tags = elem_node_tags[tri_type_idx].reshape(-1, 3)
-    tri_tags = elem_tags[tri_type_idx]
-
-    gmsh.finalize()
-
-    num_nodes = len(node_tags)
-    sort_idx = np.argsort(node_tags)
-    sorted_tags = node_tags[sort_idx]
-    sorted_coords = node_coords[sort_idx]
-
-    vertices = np.empty(
-        num_nodes,
-        dtype=[
-            ("vertex", np.int64),
-            ("x", np.float64),
-            ("y", np.float64),
-            ("boundary", np.int64),
-        ],
-    )
-    vertices["vertex"] = np.arange(1, num_nodes + 1)
-    vertices["x"] = sorted_coords[:, 0]
-    vertices["y"] = sorted_coords[:, 1]
-    vertices["boundary"] = 0
-
-    local_tri_nodes = np.searchsorted(sorted_tags, tri_node_tags) + 1
-
-    num_triangles = len(tri_tags)
-    triangles = np.empty(
-        num_triangles,
-        dtype=[
-            ("vertex", np.int64),
-            ("i", np.int64),
-            ("j", np.int64),
-            ("k", np.int64),
-        ],
-    )
-    triangles["vertex"] = np.arange(1, num_triangles + 1)
-    triangles["i"] = local_tri_nodes[:, 0]
-    triangles["j"] = local_tri_nodes[:, 1]
-    triangles["k"] = local_tri_nodes[:, 2]
-
     return Triangulation(vertices, triangles)
 
 
@@ -374,7 +265,7 @@ def interpolate_surface(
     label: str = "surface",
 ) -> np.ndarray:
     """Interpolate a surface bilinearly onto mesh vertices, warning on extrapolation."""
-    result, outside = surface(vertices["x"], vertices["y"])
+    result, outside = surface(vertices[:, 0], vertices[:, 1])
     num_extrapolated = int(np.count_nonzero(outside))
     if num_extrapolated:
         print(
@@ -453,7 +344,12 @@ def volumes(vertices: np.ndarray, tetra: np.ndarray) -> np.ndarray:
 
 def cull_mesh(
     vertices: np.ndarray, tetra: np.ndarray, culling_volume: float
-) -> tuple[np.ndarray, np.ndarray, int, int]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Drop tetrahedra at or below `culling_volume`, and the vertices left unused.
+
+    Returns the kept vertices, the re-indexed kept tetrahedra, a mask of the
+    kept vertices, and the number of tetrahedra dropped.
+    """
     volume = volumes(vertices, tetra)
     has_non_zero_volume = volume > culling_volume
     non_zero_tetra = tetra[has_non_zero_volume]
@@ -471,8 +367,103 @@ def cull_mesh(
     return (
         culled_vertices,
         culled_tetra,
-        int(len(vertices) - np.sum(has_vertex_neighbours)),
+        has_vertex_neighbours,
         int(len(tetra) - np.sum(has_non_zero_volume)),
+    )
+
+
+def prism_tetra(triangles: np.ndarray) -> np.ndarray:
+    """Split the prism under each triangle into three tetrahedra.
+
+    Vertex ``2 n`` is the top of column ``n`` and ``2 n + 1`` its bottom (see
+    :func:`interleave_top_and_bottom`).  Sorting each triangle's vertices
+    makes neighbouring prisms split their shared face along the same
+    diagonal, so the tetrahedra conform.
+    """
+    i, j, k = 2 * np.sort(triangles, axis=1).T
+    return np.concatenate(
+        (
+            np.stack((i, i + 1, j + 1, k + 1), axis=1),
+            np.stack((i, j, j + 1, k), axis=1),
+            np.stack((i, j + 1, k, k + 1), axis=1),
+        )
+    )
+
+
+def profile_mesh(
+    name: str,
+    geometry: shapely.Geometry,
+    triangulation: Triangulation,
+    topography: np.ndarray,
+    top_surface: np.ndarray,
+    bottom_surface: np.ndarray,
+    model: pd.DataFrame,
+    culling_volume: float,
+    pad_top: bool,
+    priority: int,
+) -> TetrahedralMesh:
+    """Fill the space between two surfaces with one layer of depth-profile tetrahedra.
+
+    Every tetrahedron evaluates `model` at the query point's depth below the
+    topography, so the profile's layer interfaces don't need tetrahedra of
+    their own: one prism column per triangle spans the whole basin.  As in
+    the layered meshes, the basin stops at the bottom of the model's last
+    layer.
+
+    Raises
+    ------
+    ValueError
+        If the model's layer tops decrease with depth.
+    """
+    tops = model["z"].to_numpy(dtype=np.float32)
+    # A layer whose top equals the next one's (in float32) spans no depth.
+    keep = np.r_[tops[:-1] != tops[1:], True]
+    model, tops = model[keep], tops[keep]
+    if np.any(np.diff(tops[1:]) <= 0):
+        raise ValueError("1-D model layer tops must increase with depth")
+
+    model_bottom = topography + (model["z"].iloc[-1] + model["thickness"].iloc[-1])
+    bottom_surface = np.maximum(np.minimum(bottom_surface, model_bottom), top_surface)
+    if pad_top:
+        # Raise the top where the basin has thickness so topography slightly
+        # above the top surface still lands inside the mesh.  The first
+        # profile layer extends upwards to cover it.
+        top_surface = np.where(
+            bottom_surface > top_surface, top_surface - PAD_DEPTH, top_surface
+        )
+    columns = triangulation.vertices
+    vertices = interleave_top_and_bottom(
+        np.c_[columns, top_surface], np.c_[columns, bottom_surface]
+    )
+    vertices, tetra, kept, zero_volume = cull_mesh(
+        vertices, prism_tetra(triangulation.triangles), culling_volume
+    )
+    print(
+        f"Culled {zero_volume} degenerate tetrahedra, "
+        f"leaving {len(tetra)} tetrahedra on {len(vertices)} vertices"
+    )
+
+    depth = vertices[:, 2] - np.repeat(topography, 2)[kept]
+    # The layer each vertex lies in, matching the Rust `DepthProfile::at`: a
+    # depth on a boundary belongs to the deeper layer.
+    vertex_layer = np.searchsorted(tops[1:], depth, side="right")
+    fields = ("rho", "vp", "vs", "qp", "qs")
+    profile = {f: model[f].to_numpy(dtype=np.float32) for f in fields}
+    return make_mesh(
+        name=name,
+        points=vertices,
+        connectivity=tetra,
+        cell_data={
+            "model_type": np.full(len(tetra), ModelType.DEPTH_PROFILE, dtype=np.uint8),
+            "priority": np.full(len(tetra), priority, dtype=np.uint8),
+        },
+        geometry=geometry,
+        # The vertex qualities are only for display: depth-profile
+        # tetrahedra read just the vertex alpha.
+        field_data={f: profile[f][vertex_layer] for f in fields}
+        | {"alpha": np.ones(len(vertices), dtype=np.float32)},
+        depth_profile={"depth": depth.astype(np.float32), "profile_top": tops}
+        | {f"profile_{f}": profile[f] for f in fields},
     )
 
 
@@ -486,22 +477,7 @@ def slice_with_model(
     pad_top: bool,
 ) -> list[Layer]:
     layers = []
-    tri_verts = np.stack(
-        [
-            triangulation.triangles["i"],
-            triangulation.triangles["j"],
-            triangulation.triangles["k"],
-        ],
-        axis=1,
-    )
-    tri_verts.sort(axis=1)
-
-    sorted_triangles = np.empty(len(tri_verts), dtype=triangulation.triangles.dtype)
-    sorted_triangles["i"] = tri_verts[:, 0]
-    sorted_triangles["j"] = tri_verts[:, 1]
-    sorted_triangles["k"] = tri_verts[:, 2]
-
-    tetra = construct_mesh_tetra(sorted_triangles)
+    tetra = prism_tetra(triangulation.triangles)
     emitted_layer = False
     for _, row in model.iterrows():
         z = row["z"]
@@ -522,19 +498,14 @@ def slice_with_model(
             has_thickness = bottom_of_layer > top_surface
             top_of_layer = np.where(has_thickness, top_surface - PAD_DEPTH, top_surface)
 
-        mesh_top = np.c_[
-            triangulation.vertices["x"],
-            triangulation.vertices["y"],
-            top_of_layer,
-        ]
-        mesh_bottom = np.c_[
-            triangulation.vertices["x"], triangulation.vertices["y"], bottom_of_layer
-        ]
+        mesh_top = np.c_[triangulation.vertices, top_of_layer]
+        mesh_bottom = np.c_[triangulation.vertices, bottom_of_layer]
 
         mesh_vertices = interleave_top_and_bottom(mesh_top, mesh_bottom)
-        mesh_vertices, mesh_tetra, no_neighbours, zero_volume = cull_mesh(
+        mesh_vertices, mesh_tetra, kept, zero_volume = cull_mesh(
             mesh_vertices, tetra, culling_volume
         )
+        no_neighbours = int(np.count_nonzero(~kept))
         if zero_volume or no_neighbours:
             print(
                 f"Found {zero_volume} degenerate tetra in this layer and {no_neighbours} vertices to remove"
@@ -559,15 +530,6 @@ def slice_with_model(
             continue
         top_surface = bottom_of_layer
     return layers
-
-
-def mask_surface(
-    bounds: shapely.Polygon, surface_points: np.ndarray, buffer: float
-) -> np.ndarray:
-    mask = shapely.contains_xy(
-        bounds.buffer(buffer), surface_points[:, 0], surface_points[:, 1]
-    )
-    return surface_points[mask]
 
 
 def _read_compressed_shapely_wkb(path: Path) -> shapely.Geometry:
@@ -667,15 +629,17 @@ def main(
             min=0.0,
         ),
     ] = 1e-3,
-    error_target: Annotated[
+    tolerance: Annotated[
         float,
         typer.Option(
-            "-e",
-            "--error-target",
-            help="Geometric error target for adaptive topography triangulation (e.g. 0.01 for 1%).",
+            "-t",
+            "--tolerance",
+            help="Largest vertical error (m) the triangulation may leave in "
+            "each surface, checked on a lattice twice as fine as the surface's "
+            "grid and along the outline (lower = finer).",
             min=0.0,
         ),
-    ] = 0.01,
+    ] = TOLERANCE,
     smoothing: Annotated[
         float,
         typer.Option(
@@ -729,6 +693,15 @@ def main(
             help="If true, pad the top layer (useful to prevent topography peek through)."
         ),
     ] = True,
+    layered: Annotated[
+        bool,
+        typer.Option(
+            help="Slice the basin into one tetrahedral layer per 1-D model layer "
+            "and interpolate vertex qualities, instead of evaluating the model "
+            "as a depth profile.  Many times larger; only needed when the "
+            "vertex qualities are rewritten afterwards (see banks.py)."
+        ),
+    ] = False,
 ) -> None:
     """Entry point for the ``nzcvm construct-mesh`` command."""
 
@@ -784,18 +757,17 @@ def main(
     topo_grid = read_surface_file(topography, bbox=buffered_bbox)
     top_grid = read_surface_file(top_surface, bbox=buffered_bbox)
     bot_grid = read_surface_file(bottom_surface, bbox=buffered_bbox)
-    print("Computing topography gradient adaptive sizing field...")
-    # When smoothing, cap the cell size to 1000.0 km to keep a decent smoothing resolution.
-    # Otherwise, the only limit is geometry.
-    max_h = 1000.0 if will_smooth else 50000.0
-    grids = [topo_grid, bot_grid]
-    if topography != top_surface:
-        grids.append(top_grid)
-    sizing_field = SizingField(
-        [gradient_field(g, max_h=max_h, error_target=error_target) for g in grids]
-    )
-
-    triangulation = triangulate_polygon(poly, sizing_field)
+    surfaces = [(bot_grid, tolerance)]
+    if top_surface != bottom_surface:
+        surfaces.append((top_grid, tolerance))
+    # Depth below the topography picks the profile layer, so the topography
+    # matters only when the model has more than one layer.
+    if topography not in (top_surface, bottom_surface) and (layered or len(model) > 1):
+        surfaces.append((topo_grid, tolerance))
+    # When smoothing, cap the edge length to keep a decent smoothing
+    # resolution.  Otherwise, only the tolerance limits it.
+    max_edge = SMOOTHING_MAX_EDGE if will_smooth else None
+    triangulation = triangulate_polygon(poly, surfaces, max_edge)
     mesh_top = interpolate_surface(
         top_grid, triangulation.vertices, label="top surface"
     )
@@ -807,18 +779,33 @@ def main(
         topo_grid, triangulation.vertices, label="topography"
     )
 
-    print("Slicing model into volumetric mesh")
-    layers = slice_with_model(
-        triangulation,
-        mesh_topography,
-        mesh_top,
-        mesh_bottom,
-        model,
-        culling_volume,
-        pad_top=pad_top,
-    )
     name = output.stem
-    mesh = construct_volumetric_mesh(name, poly, layers, priority)
+    if layered:
+        print("Slicing model into volumetric mesh")
+        layers = slice_with_model(
+            triangulation,
+            mesh_topography,
+            mesh_top,
+            mesh_bottom,
+            model,
+            culling_volume,
+            pad_top=pad_top,
+        )
+        mesh = construct_volumetric_mesh(name, poly, layers, priority)
+    else:
+        print("Filling basin with depth-profile tetrahedra")
+        mesh = profile_mesh(
+            name,
+            poly,
+            triangulation,
+            mesh_topography,
+            mesh_top,
+            mesh_bottom,
+            model,
+            culling_volume,
+            pad_top=pad_top,
+            priority=priority,
+        )
 
     if smoothing > 0:
         print("Applying smoothing boundary")
@@ -833,6 +820,6 @@ def main(
         mesh["alpha"].loc[:] = alpha
 
     print(mesh)
-    mesh.to_zarr(output, mode="w", encoding=DEFAULT_ENCODING_SETTINGS)
-    nbytes = output.stat().st_size
+    mesh.to_zarr(output, mode="w", encoding=mesh_encoding(mesh))
+    nbytes = sum(f.stat().st_size for f in output.rglob("*") if f.is_file())
     print(f"Saved model with size {nbytes / (1024**2):.1f} MB")

@@ -1,3 +1,4 @@
+use crate::barycentric::interpolate;
 use crate::real::Real;
 use crate::tree_query::contains_point_iterator; // Assumed 2D iterator
 use crate::triangle::Triangle; // Assumed 2D equivalent of Simplex
@@ -68,10 +69,8 @@ impl SurfaceModel {
             .map(|tri| {
                 let bary = tri.barycentric_coordinates(&point);
                 let model = self.model_map[tri.id];
-                let z0 = self.z[model.x];
-                let z1 = self.z[model.y];
-                let z2 = self.z[model.z];
-                bary.x * z0 + bary.y * z1 + bary.z * z2
+                let z = [model.x, model.y, model.z].map(|v| self.z[v]);
+                interpolate(z, bary.coords.into())
             })
     }
 

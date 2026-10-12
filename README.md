@@ -58,13 +58,12 @@ optional extra, and say which one when it's missing:
 | Extra    | Installs                         | Needed for           |
 |----------|----------------------------------|----------------------|
 | `vis`    | pyvista                          | `nzcvm view`         |
-| `mesh`   | gmsh                             | `nzcvm basin`        |
 | `raster` | rioxarray (rasterio, GDAL)       | `nzcvm convert-tiff` |
 | `bench`  | geopandas, joblib, platformdirs  | `nzcvm tree-stats`   |
 
 ```sh
 pip install 'nzcvm[vis]'     # also installs pyvista
-uv sync --extra mesh         # in a checkout
+uv sync --extra raster       # in a checkout
 uv sync --all-extras         # everything
 ```
 
@@ -116,6 +115,16 @@ Useful `generate` options:
 | `--progress`     | tqdm progress bar (not compatible with `--distributed`)         |
 | `--monitor`      | Log CPU/memory usage while running                              |
 | `--log-level`    | `DEBUG` / `INFO` / `WARNING` (default `WARNING`)                |
+
+`nzcvm basin main` triangulates the basin outline with an error-bounded
+triangulated irregular network. Greedy insertion picks vertices from the
+surface samples until linear interpolation of each surface is within
+`--tolerance` metres (default 5) at a lattice twice as fine as the surface's
+grid and along the outline, so planar regions, however steep, get no
+vertices. It then extrudes one prism column per triangle between the top and
+bottom surfaces, split into three depth-profile tetrahedra. The triangulation
+keeps the outline's own vertices, so on small basins `--simplification`
+(metres) bounds the size as much as the tolerance does.
 
 ---
 
@@ -545,6 +554,20 @@ mesh. `ModelTree` combines many meshes into a priority-ordered BVH tree and
 handles alpha-composited queries. `Surface` interpolates values from a 2-D
 triangular surface mesh (used for the DEM and the Vs30 map). `mesh` provides
 the tetrahedral and structured mesh dataclasses and their I/O.
+
+Each mesh has one field type, its `model_type`, which turns a query point
+into a quality: `INTERPOLATE` (barycentric interpolation of the vertex
+qualities, used by tomography) or `DEPTH_PROFILE`. A depth-profile
+mesh interpolates the depth below the topography from a tetrahedron's
+vertices, then looks that depth up in the mesh's 1-D profile. Basin meshes
+use depth profiles, so one layer of tetrahedra spans the basin however many
+layers the 1-D model has.
+
+In Rust, `TetMesh` holds the connectivity and locates the tetrahedron that
+contains a point. A `Field` (`Interpolated`, `Profiled`, or `Constant` for
+in-memory meshes) turns the point's barycentric coordinates in that
+tetrahedron into a quality, and `MeshModel<F>` pairs one of each. `ModelTree` holds `TreeModel`s: a `MeshModel<AnyField>` with its
+priority and name.
 
 ### `nzcvm.layers`
 

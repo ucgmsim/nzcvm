@@ -1,3 +1,4 @@
+pub mod barycentric;
 pub mod blend;
 pub mod coastline;
 pub mod compact_bvh;
@@ -10,6 +11,7 @@ pub mod query;
 pub mod real;
 pub mod simplex;
 pub mod surface;
+pub mod tin;
 mod tree_query;
 pub mod triangle;
 use pyo3::prelude::*;
@@ -18,15 +20,16 @@ use pyo3::prelude::*;
 mod nzcvm {
     use crate::coastline::{Coastline, Segment};
     use crate::grid::StructuredGrid;
-    use crate::mesh::{MeshModel, MeshModelError};
-    use crate::model::{ConstantModel, InterpolateModel, Model};
-    use crate::model_tree::ModelTree;
+    use crate::mesh::MeshModel;
+    use crate::model::{AnyField, DepthProfile, Interpolated, Profiled};
+    use crate::model_tree::{ModelTree, TreeModel};
     use crate::quality::Quality;
     use crate::query::Query;
     use crate::real::Real;
     use crate::surface::SurfaceModel;
+    use crate::tin::{self, TinSurface};
 
-    use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
+    use nalgebra::{Affine3, Matrix4, Point2, Point3};
     use ndarray::{Array1, Array2, Axis, array, azip};
     use numpy::{
         IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
@@ -112,7 +115,7 @@ mod nzcvm {
     /// Consumed (moved into a [`ModelTree`]) when passed to [`model_tree`].
     #[pyclass]
     pub struct PyMeshModel {
-        inner: Option<MeshModel>,
+        inner: Option<TreeModel>,
     }
 
     /// Python-facing velocity model (a compiled [`ModelTree`]).
@@ -121,123 +124,163 @@ mod nzcvm {
         pub inner: ModelTree,
     }
 
-    /// Create a [`PyMeshModel`] from raw NumPy arrays.
+    /// A mesh's vertices and faces.
+    type Geometry = (Vec<Point3<Real>>, Vec<[u32; 4]>);
+
+    /// Builds a [`PyMeshModel`] from a mesh's geometry and its quality field.
     ///
-    /// # Arguments
+    /// Set the options, then finish with the method for the mesh's field,
+    /// which consumes the builder:
     ///
-    /// * `vertices_py`   – `(N, 3)` float array of vertex coordinates.
-    /// * `faces_py`      – `(M, 4)` integer array of tetrahedral cell indices.
-    /// * `types_py`      – `(M,)` u8 array: `0` = constant, `1` = interpolate.
-    /// * `models_py`     – flat integer look-up array whose stride varies with
-    ///   model type.  For each entry in `types_py`:
-    ///   - type `0` (constant): consume **1** index — the quality index.
-    ///   - type `1` (interpolate): consume **4** indices — the four vertex
-    ///     quality indices stored in `(x, y, z, w)` order matching the
-    ///     corresponding simplex vertices.
-    ///   The total length of `models_py` must equal
-    ///   `sum(1 if t==0 else 4 for t in types_py)`.
-    /// * `qualities_py`  – `(Q, 6)` array of quality values indexed by `models_py`.
-    /// * `priority`      – model priority (lower number = higher priority).
-    /// * `transform_py`  – optional 4×4 world-to-local affine transform.
-    /// * `name`          – optional human-readable name for the model.
-    #[pyfunction]
-    #[pyo3(signature = (vertices_py, faces_py, types_py, models_py, qualities_py, priority, transform_py, name=None))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn mesh_model(
-        vertices_py: PyReadonlyArray2<Real>,
-        faces_py: PyReadonlyArray2<usize>,
-        types_py: PyReadonlyArray1<u8>,
-        models_py: PyReadonlyArray1<usize>,
-        qualities_py: PyReadonlyArray2<Real>,
+    /// ```python
+    /// MeshModelBuilder(vertices, faces, priority).name("crust").interpolated(qualities)
+    /// ```
+    ///
+    /// Each field has its own finishing method, so the field types are
+    /// defined once, here; the file format's model types map onto them in
+    /// Python.  (Constant fields have no file format, so no method.)
+    #[pyclass(name = "MeshModelBuilder")]
+    pub struct PyMeshModelBuilder {
+        /// Taken by the finishing method.
+        geometry: Option<Geometry>,
         priority: u8,
-        transform_py: Option<PyReadonlyArray2<Real>>,
-        name: Option<String>,
-    ) -> PyResult<PyMeshModel> {
-        let vertices = vertices_py
-            .as_array()
-            .axis_iter(Axis(0))
-            .map(|a| Point3::new(a[0], a[1], a[2]))
-            .collect();
-        let faces = faces_py
-            .as_array()
-            .axis_iter(Axis(0))
-            .map(|a| Point4::new(a[0], a[1], a[2], a[3]))
-            .collect();
+        transform: Option<Affine3<Real>>,
+        name: String,
+    }
 
-        // Build Vec<Quality> from the (N, 6) numpy array.
-        let qualities: Vec<Quality> = qualities_py
-            .as_array()
-            .axis_iter(Axis(0))
-            .map(Quality::from)
-            .collect();
-
-        // Quality indices are stored as u32 inside the compiled model.
-        if qualities.len() > u32::MAX as usize {
-            return Err(PyValueError::new_err(format!(
-                "Too many qualities for a single mesh model: {}",
-                qualities.len()
-            )));
+    #[pymethods]
+    impl PyMeshModelBuilder {
+        /// Start a mesh model.
+        ///
+        /// Parameters
+        /// ----------
+        /// vertices :
+        ///     ``(N, 3)`` float array of vertex coordinates.
+        /// faces :
+        ///     ``(M, 4)`` integer array of tetrahedral cell indices.
+        /// priority :
+        ///     Model priority (lower number = higher priority).
+        #[new]
+        fn new(
+            vertices: PyReadonlyArray2<Real>,
+            faces: PyReadonlyArray2<usize>,
+            priority: u8,
+        ) -> PyResult<Self> {
+            let vertices = vertices
+                .as_array()
+                .axis_iter(Axis(0))
+                .map(|a| Point3::new(a[0], a[1], a[2]))
+                .collect();
+            let faces = faces
+                .as_array()
+                .axis_iter(Axis(0))
+                .map(|a| {
+                    let index = |k: usize| u32::try_from(a[k]);
+                    Ok([index(0)?, index(1)?, index(2)?, index(3)?])
+                })
+                .collect::<Result<Vec<[u32; 4]>, std::num::TryFromIntError>>()
+                .map_err(|_| PyValueError::new_err("vertex indices must fit in 32 bits"))?;
+            Ok(Self {
+                geometry: Some((vertices, faces)),
+                priority,
+                transform: None,
+                name: String::new(),
+            })
         }
 
-        let types = types_py.as_array();
-        let mut models_vec = Vec::with_capacity(types.len());
-        let model_idx = models_py.as_array();
-        let mut idx = 0;
-        for model_type in types.iter() {
-            match model_type {
-                0 => {
-                    models_vec.push(Model::from(ConstantModel {
-                        quality: model_idx[idx] as u32,
-                    }));
-                    idx += 1;
-                }
-                1 => {
-                    models_vec.push(Model::from(InterpolateModel {
-                        qualities: Point4::new(
-                            model_idx[idx] as u32,
-                            model_idx[idx + 1] as u32,
-                            model_idx[idx + 2] as u32,
-                            model_idx[idx + 3] as u32,
-                        ),
-                    }));
-                    idx += 4;
-                }
-                _ => {
-                    return Err(PyValueError::new_err(format!(
-                        "Invalid model type {}",
-                        model_type
-                    )));
-                }
+        /// Set the 4×4 world-to-local affine transform.
+        fn transform<'py>(
+            mut slf: PyRefMut<'py, Self>,
+            transform: PyReadonlyArray2<'py, Real>,
+        ) -> PyRefMut<'py, Self> {
+            slf.transform = Some(Affine3::from_matrix_unchecked(Matrix4::from_iterator(
+                transform.as_array().iter().cloned(),
+            )));
+            slf
+        }
+
+        /// Set the human-readable name (empty by default).
+        fn name(mut slf: PyRefMut<'_, Self>, name: String) -> PyRefMut<'_, Self> {
+            slf.name = name;
+            slf
+        }
+
+        /// Finish with barycentric interpolation of the ``(N, 6)`` quality of
+        /// each vertex.
+        fn interpolated(&mut self, qualities: PyReadonlyArray2<Real>) -> PyResult<PyMeshModel> {
+            let qualities = qualities
+                .as_array()
+                .axis_iter(Axis(0))
+                .map(Quality::from)
+                .collect();
+            self.build(Interpolated::new(qualities).into())
+        }
+
+        /// Finish with a 1-D depth profile, evaluated at the barycentrically
+        /// interpolated depth below the profile's reference surface.
+        ///
+        /// Parameters
+        /// ----------
+        /// alpha :
+        ///     ``(N,)`` alpha of each vertex.
+        /// depth :
+        ///     ``(N,)`` depth of each vertex below the reference surface.
+        /// tops :
+        ///     ``(L,)`` depth of the top of each layer, strictly increasing
+        ///     after the first, which is ignored: the first layer extends
+        ///     upwards without limit.
+        /// layers :
+        ///     ``(L, 5)`` ``[rho, vp, vs, qp, qs]`` of each layer.
+        fn depth_profile(
+            &mut self,
+            alpha: PyReadonlyArray1<Real>,
+            depth: PyReadonlyArray1<Real>,
+            tops: PyReadonlyArray1<Real>,
+            layers: PyReadonlyArray2<Real>,
+        ) -> PyResult<PyMeshModel> {
+            let layers = layers.as_array();
+            if layers.ncols() != 5 {
+                return Err(PyValueError::new_err(format!(
+                    "profile qualities must have 5 columns [rho, vp, vs, qp, qs], got {}",
+                    layers.ncols()
+                )));
             }
+            let layers = layers
+                .rows()
+                .into_iter()
+                .map(|r| Quality {
+                    rho: r[0],
+                    vp: r[1],
+                    vs: r[2],
+                    qp: r[3],
+                    qs: r[4],
+                    alpha: 1.0,
+                })
+                .collect();
+            let profile = DepthProfile::new(&tops.as_array().to_vec(), layers)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let (alpha, depth) = (alpha.as_array(), depth.as_array());
+            if alpha.len() != depth.len() {
+                return Err(PyValueError::new_err(
+                    "depth profile needs one alpha and one depth per vertex",
+                ));
+            }
+            let vertices = depth.iter().zip(alpha).map(|(&d, &a)| [d, a]).collect();
+            self.build(Profiled::new(vertices, profile).into())
         }
-        if idx != model_idx.len() {
-            return Err(PyValueError::new_err(format!(
-                "Invalid model types detected (did not read all models from model array using types given). idx = {}, models len = {}",
-                idx,
-                model_idx.len()
-            )));
-        }
+    }
 
-        let transform = transform_py.map(|arr| {
-            Affine3::from_matrix_unchecked(Matrix4::from_iterator(arr.as_array().iter().cloned()))
-        });
-        let mesh_model = MeshModel::new(
-            vertices,
-            faces,
-            models_vec,
-            qualities,
-            priority,
-            transform,
-            name.clone().unwrap_or_default(),
-        );
-        match mesh_model {
-            Ok(mesh_model) => Ok(PyMeshModel {
-                inner: Some(mesh_model),
-            }),
-            Err(MeshModelError::DegenerateSimplex) => Err(PyValueError::new_err(format!(
-                "Degenerate simplex encountered in model: {}",
-                name.clone().unwrap_or_default()
-            ))),
+    impl PyMeshModelBuilder {
+        fn build(&mut self, field: AnyField) -> PyResult<PyMeshModel> {
+            let name = std::mem::take(&mut self.name);
+            let (vertices, faces) = self.geometry.take().ok_or_else(|| {
+                PyValueError::new_err("MeshModelBuilder has already built a model")
+            })?;
+            let model = MeshModel::new(vertices, faces, field, self.transform)
+                .map_err(|e| PyValueError::new_err(format!("Model {name:?}: {e}")))?;
+            Ok(PyMeshModel {
+                inner: Some(TreeModel::new(model, self.priority, name)),
+            })
         }
     }
 
@@ -288,6 +331,7 @@ mod nzcvm {
             })?;
             let pt = Point3::new(x, y, z);
             inner
+                .model
                 .query(pt)
                 .map(|q| pythonize(py, &q).map_err(|e| e.into()))
                 .transpose()
@@ -308,7 +352,7 @@ mod nzcvm {
             let inner = self.inner.as_ref().ok_or_else(|| {
                 PyValueError::new_err("MeshModel has been consumed by model_tree()")
             })?;
-            let b = inner.aabb3();
+            let b = inner.model.aabb3();
             let min = array![b.min.x, b.min.y, b.min.z];
             let max = array![b.max.x, b.max.y, b.max.z];
             Ok((min.into_pyarray(py), max.into_pyarray(py)))
@@ -693,6 +737,80 @@ mod nzcvm {
         .map_err(PyValueError::new_err)
     }
 
+    /// One surface for [`adaptive_tin`]: the surface's grid, the `(N, 2)`
+    /// points to fit it at, the spacing to fit it at along the boundary, and
+    /// the vertical tolerance.
+    type TinSurfaceArgs<'py> = (
+        PyRef<'py, PyStructuredGrid>,
+        PyReadonlyArray2<'py, f64>,
+        f64,
+        f64,
+    );
+
+    /// Vertices and triangles returned by [`adaptive_tin`].
+    type TinArrays<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>);
+
+    /// Triangulate a polygon to fit gridded surfaces within vertical tolerances.
+    ///
+    /// See [`crate::tin::adaptive_tin`].
+    ///
+    /// Parameters
+    /// ----------
+    /// boundary :
+    ///     ``(B, 2)`` polygon vertices, without repeating the first.
+    /// surfaces :
+    ///     ``(grid, samples, boundary_spacing, tolerance)`` per surface: the
+    ///     surface's ``StructuredGrid``, ``(N, 2)`` positions inside the
+    ///     polygon where the TIN must fit it, the spacing of the points along
+    ///     the boundary where it must also fit it, and the largest vertical
+    ///     error to leave there.
+    /// max_edge :
+    ///     Optional longest edge length.
+    ///
+    /// Returns
+    /// -------
+    /// vertices, triangles :
+    ///     ``(V, 2)`` vertex positions and ``(T, 3)`` counter-clockwise vertex
+    ///     indices of the triangles inside the polygon.
+    #[pyfunction]
+    #[pyo3(signature = (boundary, surfaces, max_edge=None))]
+    pub fn adaptive_tin<'py>(
+        py: Python<'py>,
+        boundary: PyReadonlyArray2<'py, f64>,
+        surfaces: Vec<TinSurfaceArgs<'py>>,
+        max_edge: Option<f64>,
+    ) -> PyResult<TinArrays<'py>> {
+        let points = |a: ndarray::ArrayView2<f64>| -> Vec<spade::Point2<f64>> {
+            a.rows()
+                .into_iter()
+                .map(|r| spade::Point2::new(r[0], r[1]))
+                .collect()
+        };
+        let boundary = points(boundary.as_array());
+        let surfaces: Vec<TinSurface> = surfaces
+            .iter()
+            .map(|(grid, samples, spacing, tolerance)| {
+                TinSurface::new(
+                    &grid.inner,
+                    &points(samples.as_array()),
+                    *spacing,
+                    *tolerance,
+                )
+            })
+            .collect();
+        let tin = py
+            .detach(|| tin::adaptive_tin(&boundary, &surfaces, max_edge))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let vertices = Array2::from_shape_fn((tin.vertices.len(), 2), |(i, k)| {
+            let p = tin.vertices[i];
+            if k == 0 { p.x } else { p.y }
+        });
+        let triangles = Array2::from_shape_fn((tin.triangles.len(), 3), |(i, k)| {
+            tin.triangles[i][k] as i64
+        });
+        Ok((vertices.into_pyarray(py), triangles.into_pyarray(py)))
+    }
+
     /// Interpolated values and outside-grid mask returned by
     /// [`PyStructuredGrid::query_many`].
     type QueryManyResult<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<bool>>);
@@ -823,13 +941,14 @@ mod nzcvm {
         m.add_class::<PyModelTree>()?;
         m.add_class::<QueryParams>()?;
         m.add_class::<QueryCoordinates>()?;
-        m.add_function(wrap_pyfunction!(mesh_model, m)?)?;
+        m.add_class::<PyMeshModelBuilder>()?;
         m.add_function(wrap_pyfunction!(surface_model, m)?)?;
         m.add_function(wrap_pyfunction!(coastline, m)?)?;
         m.add_function(wrap_pyfunction!(model_tree, m)?)?;
         m.add_function(wrap_pyfunction!(blend_many, m)?)?;
         m.add_class::<PyStructuredGrid>()?;
         m.add_function(wrap_pyfunction!(structured_grid, m)?)?;
+        m.add_function(wrap_pyfunction!(adaptive_tin, m)?)?;
 
         Ok(())
     }

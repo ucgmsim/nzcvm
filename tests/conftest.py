@@ -57,19 +57,13 @@ def _mesh_model(
         dtype=np.float32,
     )
     faces = np.array([[0, 1, 2, 3]], dtype=np.uint64)
-    types = np.array([0], dtype=np.uint8)
-    idx = np.array([0], dtype=np.uint64)
-    qualities = np.array([[rho, vp, vs, qp, qs, alpha]], dtype=np.float32)
-    return _nzcvm.mesh_model(
-        vertices,
-        faces,
-        types,
-        idx,
-        qualities,
-        np.uint8(priority),
-        None,
-        name,
+    qualities = np.tile(
+        np.array([rho, vp, vs, qp, qs, alpha], dtype=np.float32), (4, 1)
     )
+    builder = _nzcvm.MeshModelBuilder(vertices, faces, np.uint8(priority))
+    if name is not None:
+        builder.name(name)
+    return builder.interpolated(qualities)
 
 
 @pytest.fixture()
