@@ -17,8 +17,8 @@ the virtual stations. ``--all-stations`` takes every station instead.
 
 Every profile goes down to ``--depth`` at ``--resolution`` spacing. A station
 whose profile never reaches Vs = 2.5 km/s has its profile re-run twice as
-deep, again and again, until it does, so its rows in ``profiles.parquet``
-reach further than the rest. The build fails if any station still misses
+deep, again and again, until it does. Its rows in ``profiles.parquet`` reach
+further than the rest. The build fails if any station still misses
 2.5 km/s at ``--max-depth``.
 
 The script builds the grid and query pipeline once for every station, which

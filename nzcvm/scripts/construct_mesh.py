@@ -316,8 +316,8 @@ def uniform_model(
     Without *layer_bottoms* the profile is one layer that covers any depth.
     With them, it's one layer per bottom depth, from the topography down,
     laid out as :func:`read_layered_model` would read the same layers from a
-    file. ``--layered`` slices a mesh at each layer, so the layers give the
-    mesh vertical resolution for a later pass (``banks.py``) to rewrite.
+    file. ``--layered`` slices a mesh at each layer. The layers give the mesh
+    vertical resolution for a later pass (``banks.py``) to rewrite.
     """
     if layer_bottoms is not None:
         bottom_depth = np.asarray(layer_bottoms, dtype=float)
