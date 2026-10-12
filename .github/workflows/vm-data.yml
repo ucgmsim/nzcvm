@@ -90,6 +90,8 @@ jobs:
         uses: AnimMouse/setup-rclone@26ef2133e09fd383329a1d4c1fbe6a71db1976c9
         with:
           rclone_config: ${{ secrets.RCLONE_CONFIG }}
+          # The secret holds the config as plain text, not base64.
+          disable_base64: true
 
       - name: Download resources and stations
         run: |
