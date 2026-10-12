@@ -7,7 +7,8 @@ and structured grids (topographic surfaces).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from enum import IntEnum
 from typing import Any, Literal
 
 import numpy as np
@@ -21,6 +22,16 @@ from nzcvm.xarray import encode
 I = Literal["i"]
 J = Literal["j"]
 K = Literal["k"]
+L = Literal["layer"]
+
+
+class ModelType(IntEnum):
+    """How a mesh turns a query point into a quality (``model_type``)."""
+
+    #: Barycentric interpolation of the four vertex qualities.
+    INTERPOLATE = 1
+    #: The mesh's 1-D depth profile, evaluated at the interpolated depth.
+    DEPTH_PROFILE = 2
 
 
 def _encode_geometry_attr(value: Any) -> Any:
@@ -44,8 +55,41 @@ class TetrahedralMesh(xr.Dataset):
     __slots__ = ()
 
     @property
-    def models(self):
-        return self.connectivity
+    def has_depth_profile(self) -> bool:
+        """Whether the mesh has a depth profile (see :class:`DepthProfileSchema`)."""
+        return any(name in self.data_vars for name in DEPTH_PROFILE_VARIABLES)
+
+
+@dataclass
+class DepthProfileSchema(AsDataset):
+    """The optional depth-profile variables of a :class:`TetrahedralMesh`.
+
+    Tetrahedra of type :attr:`ModelType.DEPTH_PROFILE` evaluate a 1-D
+    profile at the query point's depth below a reference surface (normally
+    the topography).  The depth comes from barycentric interpolation of the
+    per-vertex ``depth``; layer ``n`` spans ``[profile_top[n],
+    profile_top[n + 1])``, the first layer extends upwards without limit and
+    the last downwards without limit.
+    """
+
+    #: Depth of each vertex below the reference surface (m).
+    depth: Data[tuple[I], np.float32]
+    #: Depth of the top of each layer (m), strictly increasing.
+    profile_top: Data[tuple[L], np.float32]
+    profile_rho: Data[tuple[L], np.float32]
+    profile_vp: Data[tuple[L], np.float32]
+    profile_vs: Data[tuple[L], np.float32]
+    profile_qp: Data[tuple[L], np.float32]
+    profile_qs: Data[tuple[L], np.float32]
+
+    i: Coord[I, np.uint64]
+    layer: Coord[L, np.uint64]
+
+
+#: Names of the depth-profile data variables.
+DEPTH_PROFILE_VARIABLES = tuple(
+    f.name for f in fields(DepthProfileSchema) if f.name not in ("i", "layer")
+)
 
 
 @dataclass
@@ -77,15 +121,31 @@ class TetrahedralMeshSchema(AsDataset):
 
     @classmethod
     def from_dataset(cls, dataset: xr.Dataset) -> TetrahedralMesh:
-        """Parses, validates, and builds a Grid from a standard xr.Dataset."""
+        """Parses, validates, and builds a Grid from a standard xr.Dataset.
+
+        The depth-profile variables are optional; when any is present they
+        must all be present and :class:`DepthProfileSchema` checks them together.
+        """
         dataset = encode(dataset, attr_hook=_decode_geometry_attr)
-        return cls.new(**dataset.data_vars, **dataset.coords, **dataset.attrs)  # ty: ignore[invalid-argument-type]
+        profile_names = [name for name in DEPTH_PROFILE_VARIABLES if name in dataset]
+        core = dataset.drop_vars([*profile_names, "layer"], errors="ignore")
+        mesh = cls.new(**core.data_vars, **core.coords, **core.attrs)  # ty: ignore[invalid-argument-type]
+        if not profile_names:
+            return mesh
+        profile = DepthProfileSchema.new(
+            **dataset[profile_names].data_vars,  # ty: ignore[invalid-argument-type]
+            i=dataset.i,
+            layer=dataset.layer,
+        )
+        return mesh.merge(profile)
 
 
 MEDIUM_COMPRESSOR = [Blosc(cname="zstd", clevel=5, shuffle=True)]
 HIGH_COMPRESSOR = [Blosc(cname="zstd", clevel=7, shuffle=True)]
 
-DEFAULT_ENCODING_SETTINGS = {
+#: Compression for each tetrahedral mesh variable.  Use :func:`mesh_encoding`
+#: to get the settings for a particular mesh.
+ENCODING_SETTINGS = {
     "x": {"compressors": MEDIUM_COMPRESSOR},
     "y": {"compressors": MEDIUM_COMPRESSOR},
     "z": {"compressors": MEDIUM_COMPRESSOR},
@@ -98,7 +158,30 @@ DEFAULT_ENCODING_SETTINGS = {
     "qp": {"compressors": HIGH_COMPRESSOR},
     "qs": {"compressors": HIGH_COMPRESSOR},
     "alpha": {"compressors": HIGH_COMPRESSOR},
+    "depth": {"compressors": MEDIUM_COMPRESSOR},
+    **{
+        name: {"compressors": HIGH_COMPRESSOR}
+        for name in DEPTH_PROFILE_VARIABLES
+        if name.startswith("profile_")
+    },
 }
+
+
+def mesh_encoding(mesh: xr.Dataset) -> dict[str, dict[str, Any]]:
+    """Return the ``to_zarr`` encoding for the variables `mesh` has.
+
+    Parameters
+    ----------
+    mesh : xr.Dataset
+        The mesh to write.
+
+    Returns
+    -------
+    dict
+        :data:`ENCODING_SETTINGS` restricted to the variables in `mesh`, so
+        optional variables a mesh lacks don't make the write fail.
+    """
+    return {k: v for k, v in ENCODING_SETTINGS.items() if k in mesh.data_vars}
 
 
 class StructuredMesh(xr.Dataset):
@@ -160,6 +243,7 @@ def make_mesh(
     cell_data: dict[str, np.ndarray],
     field_data: dict[str, np.ndarray],
     geometry: shapely.Geometry | None,
+    depth_profile: dict[str, np.ndarray] | None = None,
 ) -> TetrahedralMesh:
     """Create a :class:`TetrahedralMesh`.
 
@@ -174,12 +258,17 @@ def make_mesh(
     connectivity :
         ``(M, 4)`` integer array of tetrahedral cell vertex indices.
     cell_data :
-        Per-cell arrays such as ``model_type`` and ``models``.
+        Per-cell arrays: ``model_type`` (one :class:`ModelType` for the
+        whole mesh) and ``priority``.
     field_data :
         Per-model arrays such as ``rho``, ``vp``, ``vs``, ``qp``, ``qs``,
         ``alpha`` and ``priority``.
     geometry :
         Optional footprint of the mesh, stored alongside the mesh data.
+    depth_profile :
+        The :class:`DepthProfileSchema` variables (``depth`` and the
+        ``profile_*`` arrays), required when any cell has type
+        :attr:`ModelType.DEPTH_PROFILE`.
 
     Returns
     -------
@@ -204,4 +293,7 @@ def make_mesh(
         **cell_data,
         **field_data,
     )
+    if depth_profile is not None:
+        layer = np.arange(len(depth_profile["profile_top"]))
+        mesh = mesh.merge(DepthProfileSchema.new(i=i, layer=layer, **depth_profile))
     return encode(mesh, attr_hook=_encode_geometry_attr)

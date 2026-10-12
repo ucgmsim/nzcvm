@@ -19,7 +19,7 @@ use bitfield_struct::bitfield;
 use bvh::aabb::Aabb;
 use bvh::bvh::{Bvh, BvhNode};
 use deepsize::{Context, DeepSizeOf};
-use nalgebra::Point3;
+use nalgebra::{Point3, Point4};
 use smallvec::SmallVec;
 
 use crate::real::Real;
@@ -257,17 +257,18 @@ impl CompactBvh {
         )
     }
 
-    /// Iterator over the indices of all simplices that contain `point`.
-    pub fn containing_indices<'a>(
+    /// Iterator over the indices of all simplices that contain `point`, with
+    /// the point's barycentric coordinates in each.
+    pub fn containing_simplices<'a>(
         &'a self,
         simplices: &'a [Simplex],
         point: Point3<Real>,
-    ) -> ContainingIndices<'a> {
+    ) -> ContainingSimplices<'a> {
         let mut stack = SmallVec::new();
         if let Some(root) = self.root {
             stack.push(root);
         }
-        ContainingIndices {
+        ContainingSimplices {
             nodes: &self.nodes,
             simplices,
             point,
@@ -292,8 +293,8 @@ impl CompactBvh {
     }
 }
 
-/// See [`CompactBvh::containing_indices`].
-pub struct ContainingIndices<'a> {
+/// See [`CompactBvh::containing_simplices`].
+pub struct ContainingSimplices<'a> {
     nodes: &'a [CompactNode],
     simplices: &'a [Simplex],
     point: Point3<Real>,
@@ -303,16 +304,16 @@ pub struct ContainingIndices<'a> {
     end: u32,
 }
 
-impl Iterator for ContainingIndices<'_> {
-    type Item = usize;
+impl Iterator for ContainingSimplices<'_> {
+    type Item = (usize, Point4<Real>);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             while self.cursor < self.end {
                 let i = self.cursor as usize;
                 self.cursor += 1;
-                if self.simplices[i].contains(&self.point) {
-                    return Some(i);
+                if let Some(bary) = self.simplices[i].locate(&self.point) {
+                    return Some((i, bary));
                 }
             }
             match self.stack.pop()?.unpack() {

@@ -201,6 +201,11 @@ class SurfaceGrid:
             np.asarray(self.values, dtype=np.float64),
         )
 
+    @property
+    def inner(self) -> StructuredGrid:
+        """The compiled grid, for Rust functions that take one."""
+        return self._grid
+
     def __call__(
         self, x: np.ndarray, y: np.ndarray, clamp: bool = True
     ) -> tuple[np.ndarray, np.ndarray]:

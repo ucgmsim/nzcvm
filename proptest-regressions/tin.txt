@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f4d38d31e5446a6a076672e7089fe2820b7cf545469348ee856e32a347699c68 # shrinks to terrains = [(Terrain { slope: (0.0, 0.0), wave: (19.273924028153328, 0.005, 0.05714771912033384, 1.3471149261229856), bump: (34.53897874408503, 58.00434066277732, 91.16229985180753, 7.239268689270991) }, 0.05, 7)], max_edge = Some(10.0)

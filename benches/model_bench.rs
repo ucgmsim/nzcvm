@@ -3,6 +3,7 @@ use criterion::{
 };
 use nalgebra::Point3;
 use nzcvm::mesh::MeshModel;
+use nzcvm::model::Interpolated;
 use nzcvm::quality::Quality;
 use nzcvm::real::Real;
 use pprof::criterion::{Output, PProfProfiler};
@@ -64,7 +65,7 @@ fn bench_mesh_queries(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new(name, total_vertices),
                 &mesh,
-                |b, m: &MeshModel| {
+                |b, m: &MeshModel<Interpolated>| {
                     // The result must be black-boxed, not just the input:
                     // discarding it lets LLVM elide the whole lookup, so the
                     // benchmark would happily "pass" if `query` returned `None`

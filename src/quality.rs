@@ -1,3 +1,4 @@
+use crate::barycentric::interpolate;
 use crate::real::Real;
 use deepsize::DeepSizeOf;
 use ndarray::{Array1, Array2, ArrayView1};
@@ -69,29 +70,18 @@ impl Quality {
         }
     }
 }
-/// Interpolates a tetrahedral cell's vertex properties.
+/// Interpolates a tetrahedral cell's vertex properties.  Q is interpolated
+/// harmonically (through 1/Q), the rest linearly.
 pub fn barycentric_interpolate(q: [Quality; 4], w: [Real; 4]) -> Quality {
-    let [q0, q1, q2, q3] = q;
-    let [w0, w1, w2, w3] = w;
-
-    let rho = w0 * q0.rho + w1 * q1.rho + w2 * q2.rho + w3 * q3.rho;
-    let vp = w0 * q0.vp + w1 * q1.vp + w2 * q2.vp + w3 * q3.vp;
-    let vs = w0 * q0.vs + w1 * q1.vs + w2 * q2.vs + w3 * q3.vs;
-
-    let qp =
-        (w0 * q0.qp.recip() + w1 * q1.qp.recip() + w2 * q2.qp.recip() + w3 * q3.qp.recip()).recip();
-    let qs =
-        (w0 * q0.qs.recip() + w1 * q1.qs.recip() + w2 * q2.qs.recip() + w3 * q3.qs.recip()).recip();
-
-    let alpha = w0 * q0.alpha + w1 * q1.alpha + w2 * q2.alpha + w3 * q3.alpha;
-
+    let linear = |f: fn(&Quality) -> Real| interpolate(q.each_ref().map(f), w);
+    let harmonic = |f: fn(&Quality) -> Real| interpolate(q.map(|q| f(&q).recip()), w).recip();
     Quality {
-        rho,
-        vp,
-        vs,
-        qp,
-        qs,
-        alpha,
+        rho: linear(|q| q.rho),
+        vp: linear(|q| q.vp),
+        vs: linear(|q| q.vs),
+        qp: harmonic(|q| q.qp),
+        qs: harmonic(|q| q.qs),
+        alpha: linear(|q| q.alpha),
     }
 }
 

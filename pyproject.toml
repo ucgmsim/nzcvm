@@ -54,8 +54,6 @@ DEP002 = ["zfpy"]
 
 [project.optional-dependencies]
 vis = ["pyvista>=0.47.2"]
-# `nzcvm basin`: gmsh triangulates the basin outline.
-mesh = ["gmsh>=4.15.2"]
 # `nzcvm convert-tiff`: rioxarray registers xarray's `engine="rasterio"`.
 raster = ["rioxarray>=0.22.0"]
 # `nzcvm tree-stats`: geopandas reads the land polygon, which joblib caches
