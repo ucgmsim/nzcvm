@@ -25,6 +25,7 @@ mod nzcvm {
     use crate::query::Query;
     use crate::real::Real;
     use crate::tin::{self, TinSurface};
+    use bvh::aabb::Aabb;
 
     use nalgebra::{Affine3, Matrix4, Point2, Point3, Point4};
     use ndarray::{Array1, Array2, Axis, array, azip};
@@ -34,6 +35,7 @@ mod nzcvm {
     };
     use pyo3::exceptions::PyValueError;
     use pyo3::prelude::*;
+    use pyo3::pybacked::PyBackedStr;
     use pythonize::pythonize;
 
     /// Coordinate arrays and optional boolean mask for a vectorised query.
@@ -139,18 +141,52 @@ mod nzcvm {
     /// which consumes the builder:
     ///
     /// ```python
-    /// MeshModelBuilder(vertices, faces, priority, "elevation").name("crust").interpolated(qualities)
+    /// MeshModelBuilder(vertices, faces, priority, "elevation", bounds).name("crust").interpolated(qualities)
     /// ```
     ///
     /// Each field has its own finishing method, so the field types are
     /// defined once, here; the file format's model types map onto them in
     /// Python.  (Constant fields have no file format, so no method.)
+    impl<'a, 'py> FromPyObject<'a, 'py> for Vertical {
+        type Error = PyErr;
+
+        /// ``"elevation"`` or ``"depth"``, as the mesh file's ``vertical``
+        /// attribute spells it.
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            match &*obj.extract::<PyBackedStr>()? {
+                "elevation" => Ok(Vertical::Elevation),
+                "depth" => Ok(Vertical::Depth),
+                other => Err(PyValueError::new_err(format!(
+                    "vertical must be 'elevation' or 'depth', got {other:?}"
+                ))),
+            }
+        }
+    }
+
+    /// Where a mesh lies, from the mesh file's ``aabb`` attribute:
+    /// ``[min_x, min_y, min_z, max_x, max_y, max_z]`` with ``z`` negated
+    /// elevation.
+    pub struct Bounds(Aabb<Real, 3>);
+
+    impl<'a, 'py> FromPyObject<'a, 'py> for Bounds {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+            let [min_x, min_y, min_z, max_x, max_y, max_z] = obj.extract::<[Real; 6]>()?;
+            Ok(Bounds(Aabb::with_bounds(
+                Point3::new(min_x, min_y, min_z),
+                Point3::new(max_x, max_y, max_z),
+            )))
+        }
+    }
+
     #[pyclass(name = "MeshModelBuilder")]
     pub struct PyMeshModelBuilder {
         /// Taken by the finishing method.
         geometry: Option<Geometry>,
         priority: u8,
         vertical: Vertical,
+        bounds: Bounds,
         transform: Option<Affine3<Real>>,
         name: String,
     }
@@ -170,32 +206,18 @@ mod nzcvm {
         /// vertical :
         ///     ``"elevation"`` if the vertices' third coordinate is negated
         ///     elevation, or ``"depth"`` if it is depth below the topography.
-        /// elevation_range :
-        ///     For a depth mesh, the ``(min, max)`` negated elevation it can
-        ///     occupy, which the tree prunes on. Required for depth meshes.
+        /// bounds :
+        ///     ``[min_x, min_y, min_z, max_x, max_y, max_z]``, with ``z``
+        ///     negated elevation whatever *vertical* is. The model tree
+        ///     prunes on it.
         #[new]
-        #[pyo3(signature = (vertices, faces, priority, vertical, elevation_range=None))]
         fn new(
             vertices: PyReadonlyArray2<Real>,
             faces: PyReadonlyArray2<usize>,
             priority: u8,
-            vertical: &str,
-            elevation_range: Option<(Real, Real)>,
+            vertical: Vertical,
+            bounds: Bounds,
         ) -> PyResult<Self> {
-            let vertical = match (vertical, elevation_range) {
-                ("elevation", _) => Vertical::Elevation,
-                ("depth", Some((min_z, max_z))) => Vertical::Depth { min_z, max_z },
-                ("depth", None) => {
-                    return Err(PyValueError::new_err(
-                        "a depth mesh needs the elevation range it can occupy",
-                    ));
-                }
-                (other, _) => {
-                    return Err(PyValueError::new_err(format!(
-                        "vertical must be 'elevation' or 'depth', got {other:?}"
-                    )));
-                }
-            };
             let vertices = vertices
                 .as_array()
                 .axis_iter(Axis(0))
@@ -214,6 +236,7 @@ mod nzcvm {
                 geometry: Some((vertices, faces)),
                 priority,
                 vertical,
+                bounds,
                 transform: None,
                 name: String::new(),
             })
@@ -310,7 +333,13 @@ mod nzcvm {
             let model = MeshModel::new(vertices, faces, field, self.transform)
                 .map_err(|e| PyValueError::new_err(format!("Model {name:?}: {e}")))?;
             Ok(PyMeshModel {
-                inner: Some(TreeModel::new(model, self.priority, name, self.vertical)),
+                inner: Some(TreeModel::new(
+                    model,
+                    self.priority,
+                    name,
+                    self.vertical,
+                    self.bounds.0,
+                )),
             })
         }
     }
@@ -383,7 +412,7 @@ mod nzcvm {
             let inner = self.inner.as_ref().ok_or_else(|| {
                 PyValueError::new_err("MeshModel has been consumed by model_tree()")
             })?;
-            let b = inner.model.aabb3();
+            let b = inner.bounds;
             let min = array![b.min.x, b.min.y, b.min.z];
             let max = array![b.max.x, b.max.y, b.max.z];
             Ok((min.into_pyarray(py), max.into_pyarray(py)))

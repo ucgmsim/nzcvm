@@ -13,17 +13,15 @@ import numpy as np
 import pandas as pd
 import pytest
 import shapely
+import typer
 import xarray as xr
 from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from nzcvm.models.mesh import (
     DEPTH_PROFILE_VARIABLES,
-    ELEVATION_RANGE_MARGIN,
     ModelType,
     TetrahedralMeshSchema,
-    Vertical,
-    make_mesh,
     mesh_encoding,
 )
 from nzcvm.models.model import MeshModel
@@ -412,82 +410,66 @@ def test_stacked_layers_meet_over_bases_at_different_spacings(
 def _assert_stack_meets(
     tmp_path: Path, outline: Path, dem: Path, middle: Path, basement: Path
 ) -> None:
-    """Build the two layers of a stack over one triangulation and check they meet."""
-    stack = tmp_path / "stack.npz"
-    _build("triangulate", stack, outline, dem, middle, basement)
-    constants = [
-        "--rho",
-        "2000",
-        "--vp",
-        "2000",
-        "--vs",
-        "800",
-        "--qp",
-        "80",
-        "--qs",
-        "40",
-    ]
+    """Build the two layers of a stack in one run and check they meet."""
+    uniform = "rho=2000,vp=2000,vs=800,qp=80,qs=40"
     upper, lower = tmp_path / "upper.zarr", tmp_path / "lower.zarr"
-    _build(
-        "main", outline, dem, dem, middle, upper, *constants, "--triangulation", stack
-    )
     _build(
         "main",
         outline,
         dem,
+        dem,
         middle,
         basement,
-        lower,
-        *constants,
-        "--no-pad-top",
-        "--triangulation",
-        stack,
+        *("--output", upper, "--output", lower),
+        *("--priority", "1", "--priority", "2"),
+        *("--model", uniform, "--model", uniform),
     )
 
     upper_bottom = _columns(xr.open_zarr(upper), "max")
     lower_top = _columns(xr.open_zarr(lower), "min")
     shared = upper_bottom.index.intersection(lower_top.index)
     assert len(shared) > 10
+    # A padded lower layer would start PAD_DEPTH above the upper one's bottom.
     np.testing.assert_array_equal(upper_bottom[shared], lower_top[shared])
 
 
-def test_a_triangulation_from_another_region_is_refused(tmp_path: Path) -> None:
-    outline, dem, middle, basement = _stack_inputs(tmp_path)
-    stack = tmp_path / "stack.npz"
-    _build("triangulate", stack, outline, dem, middle, basement)
+def test_each_layer_needs_its_own_options(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
+    outline, dem, middle, basement = _stack_inputs(tmp_path)
     result = CliRunner().invoke(
         construct_mesh.app,
         [
             "main",
-            str(outline),
-            str(dem),
-            str(dem),
-            str(middle),
-            str(tmp_path / "upper.zarr"),
-            "--rho",
-            "2000",
-            "--vp",
-            "2000",
-            "--vs",
-            "800",
-            "--qp",
-            "80",
-            "--qs",
-            "40",
-            "--simplification",
-            "500",
-            "--triangulation",
-            str(stack),
+            *map(str, (outline, dem, dem, middle, basement)),
+            *("--output", str(tmp_path / "only.zarr")),
+            *("--priority", "1"),
+            *("--model", "rho=2000,vp=2000,vs=800,qp=80,qs=40"),
         ],
     )
     assert result.exit_code != 0
-    assert "different region" in result.output
+    assert "2 layer(s)" in result.output
 
 
-def test_depth_mesh_stores_the_elevation_range_it_can_occupy() -> None:
-    """A depth mesh's elevation range spans its depths over the topography's."""
+@pytest.mark.parametrize(
+    ("spec", "message"),
+    [
+        ("rho=1,vp=2,vs=3,qp=4", "exactly"),
+        ("no/such/model.fd_modfile", "No 1-D model file"),
+    ],
+)
+def test_read_model_rejects_bad_specs(spec: str, message: str) -> None:
+    with pytest.raises(typer.BadParameter, match=message):
+        construct_mesh.read_model(spec)
+
+
+def test_read_model_reads_uniform_qualities() -> None:
+    model = construct_mesh.read_model("rho=1,vp=2,vs=3,qp=4,qs=5")
+    assert model[["rho", "vp", "vs", "qp", "qs"]].iloc[0].tolist() == [1, 2, 3, 4, 5]
+
+
+def test_depth_mesh_bounds_span_its_depths_over_the_topography() -> None:
+    """A depth mesh's bounds hold the elevation range it can occupy."""
     mesh = profile_mesh(
         "square",
         shapely.box(0.0, 0.0, SIDE, SIDE),
@@ -500,19 +482,8 @@ def test_depth_mesh_stores_the_elevation_range_it_can_occupy() -> None:
         priority=3,
         topography_range=(-300.0, 20.0),
     )
-    low, high = mesh.attrs["elevation_range"]
-    assert low == pytest.approx(-300.0 + float(mesh.z.min()) - ELEVATION_RANGE_MARGIN)
-    assert high == pytest.approx(20.0 + float(mesh.z.max()) + ELEVATION_RANGE_MARGIN)
-
-
-def test_depth_mesh_needs_a_topography_range() -> None:
-    with pytest.raises(ValueError, match="topography range"):
-        make_mesh(
-            "bare",
-            Vertical.DEPTH,
-            np.zeros((4, 3), dtype=np.float32),
-            np.array([[0, 1, 2, 3]]),
-            cell_data={},
-            field_data={},
-            geometry=None,
-        )
+    min_x, min_y, min_z, max_x, max_y, max_z = mesh.attrs["aabb"]
+    assert (min_x, min_y, max_x, max_y) == pytest.approx((0.0, 0.0, SIDE, SIDE))
+    margin = construct_mesh.ELEVATION_MARGIN
+    assert min_z == pytest.approx(-300.0 + float(mesh.z.min()) - margin)
+    assert max_z == pytest.approx(20.0 + float(mesh.z.max()) + margin)

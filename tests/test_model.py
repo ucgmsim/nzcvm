@@ -107,6 +107,7 @@ def _tetrahedral_mesh(model_type: np.ndarray | None = None):
     return make_mesh(
         name="mesh",
         vertical=Vertical.ELEVATION,
+        aabb=[*points.min(axis=0), *points.max(axis=0)],
         points=points,
         connectivity=connectivity,
         cell_data={

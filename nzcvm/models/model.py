@@ -692,13 +692,8 @@ def _mesh_model_from_tetra(
     points = np.c_[mesh_model.x.values, mesh_model.y.values, mesh_model.z.values]
     priority = mesh_model.priority.isel(j=0).item()
     vertical = Vertical(mesh_model.attrs["vertical"])
-    elevation_range = mesh_model.attrs.get("elevation_range")
     builder = nzcvm.MeshModelBuilder(
-        points,
-        connectivity,
-        priority,
-        str(vertical),
-        None if elevation_range is None else tuple(elevation_range),
+        points, connectivity, priority, str(vertical), mesh_model.attrs["aabb"]
     )
     builder = builder.name(name)
     transform = mesh_model.attrs.get("transform")

@@ -7,6 +7,7 @@ and structured grids (topographic surfaces).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from enum import IntEnum, StrEnum
 from typing import Any, Literal
@@ -112,6 +113,10 @@ class TetrahedralMeshSchema(AsDataset):
     name: Attr[str]
     #: A :class:`Vertical`: what the vertex ``z`` holds.
     vertical: Attr[str]
+    #: ``[min_x, min_y, min_z, max_x, max_y, max_z]`` of where the model lies,
+    #: with ``z`` negated elevation whatever :attr:`vertical` is. The model
+    #: tree prunes on it.
+    aabb: Attr[list[float]]
 
     x: Data[tuple[I,], np.float32]
     y: Data[tuple[I,], np.float32]
@@ -133,9 +138,6 @@ class TetrahedralMeshSchema(AsDataset):
     k: Coord[K, np.uint64]
 
     transform: Attr[np.ndarray | None] = None
-    #: For a depth mesh, the ``[min, max]`` negated elevation it can occupy
-    #: over the topography it came from. The model tree prunes on it.
-    elevation_range: Attr[list[float] | None] = None
     geometry: Attr[shapely.Geometry | None] = None
     __dataoptions__ = DataOptions(TetrahedralMesh)
 
@@ -281,21 +283,16 @@ SURFACE_CHUNK_SIZE = 512
 DEFAULT_STRUCTURED_ENCODING_SETTINGS = {"z": {"compressors": MEDIUM_COMPRESSOR}}
 
 
-#: Slack, in metres, on a depth mesh's elevation range, for a query
-#: topography that differs a little from the one under the mesh at build time.
-ELEVATION_RANGE_MARGIN = 50.0
-
-
 def make_mesh(
     name: str,
     vertical: Vertical,
+    aabb: Sequence[float],
     points: np.ndarray,
     connectivity: np.ndarray,
     cell_data: dict[str, np.ndarray],
     field_data: dict[str, np.ndarray],
     geometry: shapely.Geometry | None,
     depth_profile: dict[str, np.ndarray] | None = None,
-    topography_range: tuple[float, float] | None = None,
 ) -> TetrahedralMesh:
     """Create a :class:`TetrahedralMesh`.
 
@@ -308,6 +305,9 @@ def make_mesh(
     vertical :
         Whether vertex ``z`` stores negated elevation or depth below the
         topography.
+    aabb :
+        ``[min_x, min_y, min_z, max_x, max_y, max_z]`` of where the model
+        lies, with ``z`` negated elevation.
     points :
         ``(N, 3)`` float32 array of vertex coordinates.
     connectivity :
@@ -324,30 +324,12 @@ def make_mesh(
         The :class:`DepthProfileSchema` variables (``depth`` and the
         ``profile_*`` arrays), required when any cell has type
         :attr:`ModelType.DEPTH_PROFILE`.
-    topography_range :
-        ``(min, max)`` depth (negated elevation) of the topography under a
-        depth mesh, required for one. The mesh stores the negated elevation
-        it can occupy, padded by :data:`ELEVATION_RANGE_MARGIN`.
 
     Returns
     -------
     TetrahedralMesh
         The assembled mesh.
-
-    Raises
-    ------
-    ValueError
-        If a depth mesh has no topography range.
     """
-    elevation_range = None
-    if vertical == Vertical.DEPTH:
-        if topography_range is None:
-            raise ValueError(f"Depth mesh {name!r} needs its topography range")
-        depth = points[..., 2]
-        elevation_range = [
-            float(topography_range[0] + depth.min() - ELEVATION_RANGE_MARGIN),
-            float(topography_range[1] + depth.max() + ELEVATION_RANGE_MARGIN),
-        ]
     i = np.arange(len(points))
     nj, nk = connectivity.shape
     j = np.arange(nj)
@@ -356,7 +338,7 @@ def make_mesh(
     mesh = TetrahedralMeshSchema.new(
         name=name,
         vertical=str(vertical),
-        elevation_range=elevation_range,
+        aabb=[float(bound) for bound in aabb],
         x=points[..., 0],
         y=points[..., 1],
         z=points[..., 2],

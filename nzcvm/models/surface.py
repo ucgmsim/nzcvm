@@ -39,11 +39,6 @@ logger = logging.getLogger(__name__)
 OUTSIDE_TOLERANCE = 1e-9
 
 
-def _frame_matrix(frame: list[float] | tuple[float, ...]) -> np.ndarray:
-    """``frame`` as a 2 x 3 matrix acting on ``(X, Y, 1)``."""
-    return np.asarray(frame, dtype=np.float64).reshape(2, 3)
-
-
 @dataclass
 class Surface:
     """A surface interpolator over a grid that's regular in its own frame.
@@ -72,7 +67,9 @@ class Surface:
         for axis in ("y", "x"):
             if not z.indexes[axis].is_monotonic_increasing:
                 z = z.isel({axis: slice(None, None, -1)})
-        return cls(z, _frame_matrix(mesh.attrs["frame"]))
+        # The frame acts on (X, Y, 1).
+        frame = np.asarray(mesh.attrs["frame"], dtype=np.float64).reshape(2, 3)
+        return cls(z, frame)
 
     @classmethod
     def load(cls, path: Path) -> Self:
