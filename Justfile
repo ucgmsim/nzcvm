@@ -187,13 +187,13 @@ kaikoura:
     @test -d models/Kaikoura.zarr || {{ construct }} ${NZCVM_DATA_ROOT}/regional/Kaikoura/Kaikoura_outline_WGS84_v25p5.geojson {{ dem }} {{ dem }} ${NZCVM_DATA_ROOT}/regional/Kaikoura/Kaikoura_basement_WGS84_v25p5.h5 models/Kaikoura.zarr --priority 43 --vm-1d ${NZCVM_DATA_ROOT}/vm1d/Cant1D_v2.fd_modfile  --smoothing {{ smoothing }} --coastline {{ coastline }}
 
 [parallel]
-basins: alexandra balclutha canterbury castle_hill cheviot collingwood dunedin gisborne greater_wellington hakataramea hanmer hawkes_bay kaikoura karamea mackenzie marlborough mosgiel murchison napier ne_otago nelson north_canterbury omaio_bay palmerston_north porirua queen_charlotte ranfurly rarakau southern_hawkes_bay southland springs_junction te_anau te_araroa tolaga_bay waiapu waikato_hauraki wairarapa waitaki wakatipu wanaka wellington west_coast westport whakatane whangaparoa
+basins: alexandra balclutha banks canterbury castle_hill cheviot collingwood dunedin gisborne greater_wellington hakataramea hanmer hawkes_bay kaikoura karamea mackenzie marlborough mosgiel murchison napier ne_otago nelson north_canterbury omaio_bay palmerston_north porirua queen_charlotte ranfurly rarakau southern_hawkes_bay southland springs_junction te_anau te_araroa tolaga_bay waiapu waikato_hauraki wairarapa waitaki wakatipu wanaka wellington west_coast westport whakatane whangaparoa
 
 tomography := "uv run nzcvm tomography convert"
 surface := "uv run --extra raster nzcvm convert-tiff main"
 
 ep2020:
-    @test -f models/ep2020.zarr || {{ tomography }} ${NZCVM_DATA_ROOT}/tomography/EP2020/ep2020.csv models/ep2020.zarr
+    @test -d models/ep2020.zarr || {{ tomography }} ${NZCVM_DATA_ROOT}/tomography/EP2020/ep2020.csv models/ep2020.zarr
 
 models: ep2020 basins
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py

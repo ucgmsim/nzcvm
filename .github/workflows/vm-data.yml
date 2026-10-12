@@ -43,8 +43,9 @@ env:
   DATA_REPO: https://github.com/ucgmsim/nzcvm_data.git
   NZCVM_DATA_ROOT: ${{ github.workspace }}/nzcvm_data
   # Only the files the Justfile recipes read. Pulling the whole LFS store
-  # spends the org's LFS bandwidth on data nothing here uses.
-  LFS_INCLUDE: "regional/**,surface/NZ_DEM_HD.h5"
+  # spends the org's LFS bandwidth on data nothing here uses. It's part of
+  # the cache key, so it can't contain a comma: actions/cache rejects one.
+  LFS_INCLUDE: "regional/**"
 
 jobs:
   publish:
@@ -79,7 +80,9 @@ jobs:
           rm -rf nzcvm_data/.git
 
       - name: Set up rclone
-        uses: AnimMouse/setup-rclone@v1
+        # It gets the Dropbox credentials, so it's pinned to a commit.
+        # v1
+        uses: AnimMouse/setup-rclone@26ef2133e09fd383329a1d4c1fbe6a71db1976c9
         with:
           rclone_config: ${{ secrets.RCLONE_CONFIG }}
 
@@ -112,7 +115,8 @@ jobs:
             Site database: profiles, and Vs30, Z1.0 and Z2.5 per station
           RESOURCES_ABOUT: Vs30, DEM and coastline that the models build from
         run: |
-          suffix=master
+          # A dispatch from another branch mustn't overwrite master's files.
+          suffix="${GITHUB_REF_NAME//\//-}"
           if [ -n "$TAG" ]; then suffix="v${TAG#v}"; fi
           row() { printf '| [%s](%s) | %s | `%s` |\n' "$@"; }
           rows=()

@@ -21,7 +21,8 @@ three- or four-character name, as opposed to the seven-character names of
 the virtual stations. ``--all-stations`` takes every station instead.
 
 A station whose profile never reaches Vs = 2.5 km/s has its profile re-run
-twice as deep, again and again, until it does. Its rows in
+twice as deep, again and again, until it does, with the last pass at
+``--max-depth``. Its rows in
 ``profiles.parquet`` reach further than the rest. The build fails if any
 station still misses 2.5 km/s at ``--max-depth``.
 
@@ -148,6 +149,10 @@ def query_profiles(velocity_model: VelocityModel, sites: slice) -> pd.DataFrame:
         by station then depth.
     """
     batch = velocity_model.map(lambda dataset: dataset.isel({Coordinate.I: sites}))
+    # Compute every variable in one pass. Flattening computes each column on
+    # its own, which would run the query pipeline once per quality.
+    grids, qualities = dask.compute(batch.grids, batch.qualities)
+    batch = dataclasses.replace(batch, grids=grids, qualities=qualities)
     return flatten(batch).sort_values([Coordinate.I, Coordinate.K], ignore_index=True)
 
 
@@ -171,15 +176,15 @@ def summarise(profiles: pd.DataFrame, stations: pd.DataFrame) -> pd.DataFrame:
         first sample at or above 1.0 and 2.5 km/s, and NaN where the profile
         never gets there. ``vs30_m_per_s`` is the travel-time average over
         the samples above 30 m, each standing for the interval down to the
-        next sample.
+        next sample or to 30 m, whichever is shallower.
     """
     n_stations = len(stations)
     vs = profiles[Component.VS].to_numpy(np.float64).reshape(n_stations, -1)
     depth_m = profiles[Coordinate.DEPTH].to_numpy(np.float64).reshape(n_stations, -1)
 
-    thickness_m = np.diff(depth_m, axis=1)
-    in_top = depth_m[:, :-1] < VS30_DEPTH
-    vs30 = VS30_DEPTH / np.sum(np.where(in_top, thickness_m / vs[:, :-1], 0.0), axis=1)
+    # Each sample stands for the interval down to the next, cut off at 30 m.
+    thickness_m = np.diff(np.minimum(depth_m, VS30_DEPTH), axis=1)
+    vs30 = VS30_DEPTH / np.sum(thickness_m / vs[:, :-1], axis=1)
 
     def first_depth(threshold: float) -> np.ndarray:
         reached = vs >= threshold
@@ -345,6 +350,8 @@ def main(
         stations = stations[observational].reset_index(drop=True)
     if limit is not None:
         stations = stations.head(limit)
+    if stations.empty:
+        raise typer.BadParameter("No stations to build profiles for.")
     depth_m = grid.depth
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -359,18 +366,12 @@ def main(
         # Building the pipeline loads the nationwide DEM and Vs30 surfaces,
         # so it happens once, over every station, and serves the deeper
         # passes too.
-        model_pipeline = pipeline.build_pipeline(
-            sites_model(config, stations, depth_m).geometry, config.layers
-        )
-        while not pending.empty:
-            if depth_m > max_depth_m:
-                raise RuntimeError(
-                    f"{len(pending)} station(s) never reach Vs = {VS_2P5} m/s "
-                    f"above {max_depth_m} m: {pending[STATION].tolist()[:10]}"
-                )
+        velocity_model = sites_model(config, stations, depth_m)
+        model_pipeline = pipeline.build_pipeline(velocity_model.geometry, config.layers)
+        while True:
             logger.info("%d station(s) to %.0f m", len(pending), depth_m)
             velocity_model = pipeline.execute_model_pipeline(
-                sites_model(config, pending, depth_m), model_pipeline
+                velocity_model, model_pipeline
             )
             samples_per_profile = int(depth_m // grid.resolution_z) + 1
             # Whole chunks of the borehole grid's station axis per batch.
@@ -379,7 +380,16 @@ def main(
             )
             summary, pending = write_pass(velocity_model, pending, batch_size, writer)
             summaries.append(summary)
-            depth_m *= 2
+            if pending.empty:
+                break
+            if depth_m >= max_depth_m:
+                raise RuntimeError(
+                    f"{len(pending)} station(s) never reach Vs = {VS_2P5} m/s "
+                    f"above {max_depth_m} m: {pending[STATION].tolist()[:10]}"
+                )
+            # The last pass goes exactly to the deepest allowed.
+            depth_m = min(2 * depth_m, max_depth_m)
+            velocity_model = sites_model(config, pending, depth_m)
 
     summary = (
         pd.concat(summaries).set_index(STATION).loc[stations[STATION]].reset_index()
