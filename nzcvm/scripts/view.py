@@ -26,7 +26,8 @@ import xarray as xr
 # Adjust these imports according to your local package structure
 from nzcvm.components import Component
 from nzcvm.grids.grid import Grid
-from nzcvm.models.mesh import TetrahedralMeshSchema
+from nzcvm.models.mesh import TetrahedralMeshSchema, Vertical
+from nzcvm.models.surface import Surface
 from nzcvm.qualities import Qualities
 from nzcvm.velocity_model import VelocityModel
 
@@ -176,6 +177,56 @@ def add_coastline_underlay(
     pl.add_mesh(poly, color="red", line_width=2.5, opacity=0.8, name="coastline")
 
 
+#: Most DEM nodes drawn along each axis. A finer window takes every n-th node.
+DEM_MAX_NODES = 1000
+#: Fraction of the meshes' footprint the DEM window extends past each side.
+DEM_MARGIN = 0.1
+
+
+def dem_window(
+    dem: Surface, bounds: tuple[float, ...], margin: float = DEM_MARGIN
+) -> pv.StructuredGrid:
+    """Read the part of *dem* under *bounds* as a grid coloured by elevation.
+
+    This reads only the window around the footprint, widened by *margin* on
+    each side, and keeps at most :data:`DEM_MAX_NODES` along each axis.
+
+    Parameters
+    ----------
+    dem :
+        The DEM, lazily indexed.
+    bounds :
+        ``[x_min, x_max, y_min, y_max, ...]`` of the meshes, in NZTM.
+    margin :
+        Fraction of the footprint's width and height to add on each side.
+
+    Returns
+    -------
+    pyvista.StructuredGrid
+        The DEM surface at its own (positive down) ``z``, with an
+        ``elevation`` scalar.
+    """
+    pv = _require_pyvista()
+    x_min, x_max, y_min, y_max = bounds[:4]
+    pad_x, pad_y = margin * (x_max - x_min), margin * (y_max - y_min)
+    corner_x = np.array([x_min - pad_x, x_max + pad_x] * 2)
+    corner_y = np.repeat([y_min - pad_y, y_max + pad_y], 2)
+    frame_x, frame_y = dem.to_frame(corner_x, corner_y)
+
+    window = dem.values.sel(
+        x=slice(frame_x.min(), frame_x.max()), y=slice(frame_y.min(), frame_y.max())
+    )
+    stride = max(1, int(np.ceil(max(window.shape) / DEM_MAX_NODES)))
+    window = window.isel(x=slice(None, None, stride), y=slice(None, None, stride))
+    z = window.values.astype(np.float64)
+
+    grid_x, grid_y = np.meshgrid(window.x.values, window.y.values)
+    nztm_x, nztm_y = dem.from_frame(grid_x.ravel(), grid_y.ravel())
+    surface = pv.StructuredGrid(nztm_x.reshape(z.shape), nztm_y.reshape(z.shape), z)
+    surface.point_data["elevation"] = -z.ravel(order="F")
+    return surface
+
+
 def _build_structured_grid(
     layer: int,
     grid1: Grid,
@@ -239,6 +290,17 @@ def basin(
         Path | None,
         typer.Option(help="Optional topography mesh to overlay.", exists=True),
     ] = None,
+    dem: Annotated[
+        Path | None,
+        typer.Option(
+            help="DEM surface (.zarr) to draw under the meshes. Depth meshes "
+            "are hung from it.",
+            exists=True,
+        ),
+    ] = None,
+    dem_opacity: Annotated[
+        float, typer.Option(help="Opacity of the DEM [0, 1].", min=0.0, max=1.0)
+    ] = 0.6,
     coastline: Annotated[
         Path | None,
         typer.Option(help="Path to coastline vector file (NZTM).", exists=True),
@@ -274,10 +336,18 @@ def basin(
         float("-inf"),
     ]
 
-    for i, current_mesh in enumerate(mesh):
-        mesh_dset = TetrahedralMeshSchema.from_dataset(xr.open_dataset(current_mesh))
+    dem_surface = Surface.load(dem) if dem else None
 
-        points = np.c_[mesh_dset.x.values, mesh_dset.y.values, mesh_dset.z.values]
+    for i, current_mesh in enumerate(mesh):
+        dataset = xr.open_dataset(current_mesh)
+        mesh_dset = TetrahedralMeshSchema.from_dataset(dataset)
+
+        x, y, z = mesh_dset.x.values, mesh_dset.y.values, mesh_dset.z.values
+        if dem_surface and dataset.attrs["vertical"] == Vertical.DEPTH:
+            # Depth is below the topography: hang the mesh from the DEM so it
+            # sits under the terrain rather than under sea level.
+            z = z + dem_surface.transform(x, y, extrapolate=True)
+        points = np.c_[x, y, z]
         connectivity = mesh_dset.connectivity.values
         cell_length = connectivity.shape[1]
         lengths = np.full(
@@ -317,6 +387,16 @@ def basin(
             color="black",
             opacity=0.3,
             label="Surface",
+        )
+
+    if dem_surface:
+        pl.add_mesh(
+            dem_window(dem_surface, tuple(global_bounds)),
+            scalars="elevation",
+            cmap="gist_earth",
+            opacity=dem_opacity,
+            show_scalar_bar=False,
+            name="dem",
         )
 
     if x_pos and y_pos:
