@@ -169,7 +169,7 @@ def test_clamp_vs_floors_match_brute_force(
     vs = 50.0
     expected = np.full(depth.shape, vs if global_min is None else global_min)
     for by_depth, t, m in floors:
-        below = depth >= np.float32(t) if by_depth else -z <= np.float32(t)
+        below = depth >= np.float32(t) if by_depth else z >= np.float32(t)
         expected = np.where(below, np.maximum(expected, np.float32(m)), expected)
     result = _clamp_over_profile(cfg, depth, z, vs)
     np.testing.assert_allclose(result.vs.values, expected, rtol=1e-6)

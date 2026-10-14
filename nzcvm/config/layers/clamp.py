@@ -34,7 +34,8 @@ class Floor(ConfigObject):
     """A minimum that holds at and below a depth or an elevation.
 
     Set exactly one of ``depth`` (metres below the topography) or
-    ``elevation`` (metres above sea level).  ``Floor(min=1000.0, depth=2000.0)``
+    ``elevation`` (metres below sea level: nzcvm's elevations are positive
+    down, like ``grid.z``).  ``Floor(min=1000.0, depth=2000.0)``
     keeps the component at or above 1000 wherever the grid sits 2 km or
     more below the ground.  ``min`` is in the component's pipeline units
     (velocities in m/s), and never scales with a ``min_ref``.
@@ -208,7 +209,7 @@ class ClampLayerConfig(LayerConfig):
         min = 1000.0
 
         [[layers.clamps.vs.floors]]
-        elevation = -3000.0
+        elevation = 3000.0  # NOTE: nzcvm uses a positive DOWN convention.
         min = 1000.0
     """
 

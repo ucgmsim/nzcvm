@@ -55,13 +55,12 @@ def _floor_lookup(floors: list[tuple[float, float]], key: xr.DataArray) -> xr.Da
 def _resolve_min(bound: Bound, qualities: Qualities, grid: Grid):
     """Resolve *bound*'s minimum, raised by its ``floors`` over *grid*.
 
-    A depth floor compares against ``grid.depth``.  An elevation floor
-    compares against ``grid.z``, which is positive down, so its threshold is
-    the negated elevation.
+    A depth floor compares against ``grid.depth`` and an elevation floor
+    against ``grid.z``.  Both are positive down.
     """
     minimum = bound.resolve("min", qualities)
     by_depth = [(d, f.min) for f in bound.floors if (d := f.depth) is not None]
-    by_z = [(-e, f.min) for f in bound.floors if (e := f.elevation) is not None]
+    by_z = [(e, f.min) for f in bound.floors if (e := f.elevation) is not None]
     for key, floors in ((grid.depth, by_depth), (grid.z, by_z)):
         if floors:
             floor = _floor_lookup(floors, key)

@@ -255,7 +255,7 @@ def test_clamp_bound_accepts_max_only() -> None:
     "kwargs",
     [
         {"min": 1000.0},
-        {"min": 1000.0, "depth": 100.0, "elevation": -100.0},
+        {"min": 1000.0, "depth": 100.0, "elevation": 100.0},
         {"min": 0.0, "depth": 100.0},
     ],
 )
@@ -279,13 +279,13 @@ min = 500.0
 depth = 2000.0
 min = 1000.0
 [[clamps.vs.floors]]
-elevation = -3000.0
+elevation = 3000.0
 min = 1200.0
 """
     )
     assert cfg.clamps[Component.VS].floors == [
         Floor(min=1000.0, depth=2000.0),
-        Floor(min=1200.0, elevation=-3000.0),
+        Floor(min=1200.0, elevation=3000.0),
     ]
 
 
