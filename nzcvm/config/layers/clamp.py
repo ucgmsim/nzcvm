@@ -5,6 +5,7 @@ from mashumaro.exceptions import InvalidFieldValue
 
 from nzcvm.components import Component
 from nzcvm.config.core import ConfigObject
+from nzcvm.config.validation import PositiveFloat
 
 from .core import LayerConfig
 
@@ -30,6 +31,42 @@ def _validate_bounds(name: str, min_val: float | None, max_val: float | None):
 
 
 @dataclass
+class Floor(ConfigObject):
+    """A minimum that holds at and below a depth or an elevation.
+
+    Set exactly one of ``depth`` (metres below the topography) or
+    ``elevation`` (metres below sea level: nzcvm's elevations are positive
+    down, like ``grid.z``).  ``Floor(min=1000.0, depth=2000.0)``
+    keeps the component at or above 1000 wherever the grid sits 2 km or
+    more below the ground.  ``min`` is in the component's pipeline units
+    (velocities in m/s), and never scales with a ``min_ref``.
+    """
+
+    min: PositiveFloat
+    depth: float | None = None
+    elevation: float | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if (self.depth is None) == (self.elevation is None):
+            raise InvalidFieldValue(
+                field_name="depth",
+                field_type=float,
+                field_value={"depth": self.depth, "elevation": self.elevation},
+                holder_class=self.__class__,
+                msg="Set exactly one of depth or elevation.",
+            )
+        if self.depth is not None and self.depth < 0:
+            raise InvalidFieldValue(
+                field_name="depth",
+                field_type=float,
+                field_value=self.depth,
+                holder_class=self.__class__,
+                msg=f"Depth must be non-negative (>= 0), got {self.depth}.",
+            )
+
+
+@dataclass
 class Bound(ConfigObject):
     """A ``(min, max)`` bound applied to a component.
 
@@ -40,12 +77,17 @@ class Bound(ConfigObject):
     so the factor is ``50 / 1000``).  ``None`` leaves that side unbounded.  The
     reference component keeps the pipeline's native units (velocities in m/s),
     evaluated pointwise at clamp time.
+
+    ``floors`` raise the minimum at depth: each :class:`Floor` holds at and
+    below its depth or elevation, on top of ``min``.  Where several apply,
+    the point takes the largest.
     """
 
     min: float | None = None
     max: float | None = None
     min_ref: Component | None = None
     max_ref: Component | None = None
+    floors: list[Floor] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -96,6 +138,13 @@ class Bound(ConfigObject):
                 str(e),
             )
 
+        if (
+            self.max is not None
+            and self.max_ref is None
+            and any(floor.min > self.max for floor in self.floors)
+        ):
+            self._raise("floors", f"Floor minimums must be <= max ({self.max}).")
+
     def _raise(self, field_name: str, msg: str):
         raise InvalidFieldValue(
             field_name=field_name,
@@ -105,6 +154,7 @@ class Bound(ConfigObject):
                 "max": self.max,
                 "min_ref": self.min_ref,
                 "max_ref": self.max_ref,
+                "floors": self.floors,
             },
             holder_class=self.__class__,
             msg=msg,
@@ -115,7 +165,9 @@ class Bound(ConfigObject):
 
         Returns ``None`` for an unbounded side, the constant when no
         ``*_ref`` names a component, or ``coefficient * qualities[ref]`` (a
-        DataArray broadcastable to the grid) for a relative bound.
+        DataArray broadcastable to the grid) for a relative bound.  The
+        ``floors`` don't enter here: the clamp layer applies them against
+        the grid.
         """
         coeff = getattr(self, which)
         ref = getattr(self, f"{which}_ref")
@@ -145,6 +197,21 @@ class ClampLayerConfig(LayerConfig):
     another component via ``min_ref``/``max_ref`` on the :class:`Bound`.
     Writing ``[layers.clamps.qs] min = 0.05, min_ref = "vs"`` floors Qs at
     ``50 * Vs`` (Vs in m/s), and ``qp`` bounds against ``vp`` the same way.
+
+    A bound's ``floors`` raise its minimum with depth.  The Vs floors below
+    keep a global 500 m/s minimum, but tolerate nothing under 1000 m/s from
+    2 km below the ground, or anywhere beneath 3 km below sea level::
+
+        [layers.clamps.vs]
+        min = 500.0
+
+        [[layers.clamps.vs.floors]]
+        depth = 2000.0
+        min = 1000.0
+
+        [[layers.clamps.vs.floors]]
+        elevation = 3000.0  # NOTE: nzcvm uses a positive DOWN convention.
+        min = 1000.0
     """
 
     type: str = "clamp"

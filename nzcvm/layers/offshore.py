@@ -29,6 +29,7 @@ from nzcvm.config.layers.offshore import (
 )
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids.grid import grid_like_at_depth
+from nzcvm.interpolation import step_interpolator
 from nzcvm.layers.core import Layer
 from nzcvm.qualities import QualitiesSchema
 from nzcvm.query import ModelRange
@@ -42,16 +43,6 @@ logger = logging.getLogger(__name__)
 
 # Room to speed this up: segments beyond the maximum distance from the
 # shoreline never need an exact distance.
-
-
-def step_interpolator(
-    x: np.ndarray,
-    xp: np.ndarray,
-    fp: np.ndarray,
-) -> np.ndarray:
-    idx = np.searchsorted(xp, x, side="right") - 1
-    idx = np.clip(idx, 0, len(xp) - 1)
-    return fp[idx]
 
 
 def _extract_qualities(layers: list[VelocityModel1D]) -> np.ndarray:

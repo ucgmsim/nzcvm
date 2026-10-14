@@ -23,11 +23,12 @@ from hypothesis import strategies as st
 from mashumaro.config import BaseConfig
 from mashumaro.exceptions import ExtraKeysError, InvalidFieldValue
 
+from nzcvm.components import Component
 from nzcvm.config.core import ConfigObject
 from nzcvm.config.grids.core import GridConfig
 from nzcvm.config.grids.model import Model
 from nzcvm.config.grids.regular import RegularGridConfig
-from nzcvm.config.layers.clamp import Bound, ClampLayerConfig
+from nzcvm.config.layers.clamp import Bound, ClampLayerConfig, Floor
 from nzcvm.config.layers.core import LayerConfig
 from nzcvm.config.layers.ely import ElyLayerConfig
 from nzcvm.config.layers.offshore import VelocityModel1D
@@ -248,6 +249,45 @@ def test_clamp_bound_accepts_min_only() -> None:
 def test_clamp_bound_accepts_max_only() -> None:
     b = Bound(max=5.0)
     assert b.max == 5.0 and b.min is None
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min": 1000.0},
+        {"min": 1000.0, "depth": 100.0, "elevation": 100.0},
+        {"min": 0.0, "depth": 100.0},
+        {"min": 1000.0, "depth": -100.0},
+    ],
+)
+def test_clamp_floor_rejects_invalid(kwargs) -> None:
+    with pytest.raises(InvalidFieldValue):
+        Floor(**kwargs)
+
+
+def test_clamp_bound_rejects_floor_above_max() -> None:
+    with pytest.raises(InvalidFieldValue):
+        Bound(max=800.0, floors=[Floor(min=1000.0, depth=100.0)])
+
+
+def test_clamp_floors_parse_from_toml() -> None:
+    cfg = ClampLayerConfig.from_toml(
+        """
+type = "clamp"
+[clamps.vs]
+min = 500.0
+[[clamps.vs.floors]]
+depth = 2000.0
+min = 1000.0
+[[clamps.vs.floors]]
+elevation = 3000.0
+min = 1200.0
+"""
+    )
+    assert cfg.clamps[Component.VS].floors == [
+        Floor(min=1000.0, depth=2000.0),
+        Floor(min=1200.0, elevation=3000.0),
+    ]
 
 
 def test_clamp_config_rejects_inverted_vp_vs_ratio() -> None:
