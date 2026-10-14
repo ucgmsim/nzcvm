@@ -48,7 +48,10 @@ class ClampLayer(Layer[ClampLayerConfig], config_cls=ClampLayerConfig):
         vs_bound = self.config.clamps.get(Component.VS)
         if vs_bound is not None:
             vs = qualities.vs
-            clamped_vs = vs.clip(min=vs_bound.min, max=vs_bound.max)
+            clamped_vs = vs.clip(
+                min=vs_bound.resolve("min", qualities, grid),
+                max=vs_bound.resolve("max", qualities, grid),
+            )
             moved = clamped_vs != vs
             vp = xr.where(moved, VP_FROM_VS_RELATION(clamped_vs), qualities.vp)
             rho = xr.where(moved, DENSITY_RELATION(vp), qualities.rho)
@@ -76,8 +79,8 @@ class ClampLayer(Layer[ClampLayerConfig], config_cls=ClampLayerConfig):
             if c == Component.VS:
                 continue
             qualities[c] = qualities[c].clip(
-                min=bound.resolve("min", qualities),
-                max=bound.resolve("max", qualities),
+                min=bound.resolve("min", qualities, grid),
+                max=bound.resolve("max", qualities, grid),
             )
 
         return qualities

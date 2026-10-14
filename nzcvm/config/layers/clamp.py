@@ -1,12 +1,19 @@
-from dataclasses import dataclass, field
-from typing import Literal
+from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Literal
+
+import numpy as np
+import xarray as xr
 from mashumaro.exceptions import InvalidFieldValue
 
 from nzcvm.components import Component
 from nzcvm.config.core import ConfigObject
 
 from .core import LayerConfig
+
+if TYPE_CHECKING:
+    from nzcvm.grids.grid import Grid
 
 
 def _validate_bounds(name: str, min_val: float | None, max_val: float | None):
@@ -30,6 +37,72 @@ def _validate_bounds(name: str, min_val: float | None, max_val: float | None):
 
 
 @dataclass
+class Floor(ConfigObject):
+    """A minimum that holds at and below a depth or an elevation.
+
+    Set exactly one of ``depth`` (metres below the topography) or
+    ``elevation`` (metres above sea level).  ``Floor(min=1000.0, depth=2000.0)``
+    keeps the component at or above 1000 wherever the grid sits 2 km or
+    more below the ground.  ``min`` is in the component's pipeline units
+    (velocities in m/s), and never scales with a ``min_ref``.
+    """
+
+    min: float
+    depth: float | None = None
+    elevation: float | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if (self.depth is None) == (self.elevation is None):
+            raise InvalidFieldValue(
+                field_name="depth",
+                field_type=float,
+                field_value={"depth": self.depth, "elevation": self.elevation},
+                holder_class=self.__class__,
+                msg="Set exactly one of depth or elevation.",
+            )
+        if self.min <= 0:
+            raise InvalidFieldValue(
+                field_name="min",
+                field_type=float,
+                field_value=self.min,
+                holder_class=self.__class__,
+                msg=f"Floor minimum must be > 0, have: {self.min}.",
+            )
+
+    @property
+    def threshold(self) -> float:
+        """The depth, or the negated elevation (``grid.z`` is positive down)."""
+        if self.depth is not None:
+            return self.depth
+        assert self.elevation is not None
+        return -self.elevation
+
+
+def _floor_lookup(floors: list[Floor], key: xr.DataArray) -> xr.DataArray:
+    """Evaluate *floors* at every point of *key*, ``-inf`` where none apply.
+
+    *key* grows downward and every floor holds at and beyond its threshold,
+    so the running maximum over floors sorted by threshold gives the
+    tightest minimum at each step.  One ``searchsorted`` then picks the step
+    for each point, so the lookup costs one pass over the chunk regardless
+    of how many floors there are.
+    """
+    floors = sorted(floors, key=lambda f: f.threshold)
+    thresholds = np.array([f.threshold for f in floors], dtype=key.dtype)
+    steps = np.concatenate(
+        [[-np.inf], np.maximum.accumulate([f.min for f in floors])]
+    ).astype(key.dtype)
+
+    return xr.apply_ufunc(
+        lambda k: steps[np.searchsorted(thresholds, k, side="right")],
+        key,
+        dask="parallelized",
+        output_dtypes=[key.dtype],
+    )
+
+
+@dataclass
 class Bound(ConfigObject):
     """A ``(min, max)`` bound applied to a component.
 
@@ -40,12 +113,17 @@ class Bound(ConfigObject):
     so the factor is ``50 / 1000``).  ``None`` leaves that side unbounded.  The
     reference component keeps the pipeline's native units (velocities in m/s),
     evaluated pointwise at clamp time.
+
+    ``floors`` raise the minimum at depth: each :class:`Floor` holds at and
+    below its depth or elevation, on top of ``min``.  Where several apply,
+    the point takes the largest.
     """
 
     min: float | None = None
     max: float | None = None
     min_ref: Component | None = None
     max_ref: Component | None = None
+    floors: list[Floor] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -96,6 +174,14 @@ class Bound(ConfigObject):
                 str(e),
             )
 
+        if self.max is not None and self.max_ref is None:
+            for floor in self.floors:
+                if floor.min > self.max:
+                    self._raise(
+                        "floors",
+                        f"Floor minimum ({floor.min}) must be <= max ({self.max}).",
+                    )
+
     def _raise(self, field_name: str, msg: str):
         raise InvalidFieldValue(
             field_name=field_name,
@@ -110,20 +196,37 @@ class Bound(ConfigObject):
             msg=msg,
         )
 
-    def resolve(self, which: Literal["min", "max"], qualities):
+    def resolve(self, which: Literal["min", "max"], qualities, grid: Grid):
         """Resolve the ``"min"`` or ``"max"`` side to a scalar or per-point array.
 
         Returns ``None`` for an unbounded side, the constant when no
         ``*_ref`` names a component, or ``coefficient * qualities[ref]`` (a
-        DataArray broadcastable to the grid) for a relative bound.
+        DataArray broadcastable to the grid) for a relative bound.  With
+        ``floors``, the ``"min"`` side is the pointwise maximum of
+        that and the floors evaluated over *grid*.
         """
         coeff = getattr(self, which)
         ref = getattr(self, f"{which}_ref")
         if coeff is None:
-            return None
-        if ref is None:
-            return coeff
-        return coeff * qualities[ref]
+            bound = None
+        elif ref is None:
+            bound = coeff
+        else:
+            bound = coeff * qualities[ref]
+
+        if which == "max" or not self.floors:
+            return bound
+
+        floor = None
+        for key, floors in (
+            (grid.depth, [f for f in self.floors if f.depth is not None]),
+            (grid.z, [f for f in self.floors if f.elevation is not None]),
+        ):
+            if floors:
+                step = _floor_lookup(floors, key)
+                floor = step if floor is None else step.clip(min=floor)
+        assert floor is not None
+        return floor if bound is None else floor.clip(min=bound)
 
 
 @dataclass
@@ -145,6 +248,21 @@ class ClampLayerConfig(LayerConfig):
     another component via ``min_ref``/``max_ref`` on the :class:`Bound`.
     Writing ``[layers.clamps.qs] min = 0.05, min_ref = "vs"`` floors Qs at
     ``50 * Vs`` (Vs in m/s), and ``qp`` bounds against ``vp`` the same way.
+
+    A bound's ``floors`` raise its minimum with depth.  The Vs floors below
+    keep a global 500 m/s minimum, but tolerate nothing under 1000 m/s from
+    2 km below the ground, or anywhere beneath 3 km below sea level::
+
+        [layers.clamps.vs]
+        min = 500.0
+
+        [[layers.clamps.vs.floors]]
+        depth = 2000.0
+        min = 1000.0
+
+        [[layers.clamps.vs.floors]]
+        elevation = -3000.0
+        min = 1000.0
     """
 
     type: str = "clamp"

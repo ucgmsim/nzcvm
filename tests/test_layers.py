@@ -20,7 +20,7 @@ from hypothesis import assume, given
 from hypothesis import strategies as st
 
 from nzcvm.components import Component
-from nzcvm.config.layers.clamp import Bound, ClampLayerConfig
+from nzcvm.config.layers.clamp import Bound, ClampLayerConfig, Floor
 from nzcvm.config.layers.offshore import (
     DepthModel,
     OffshoreBasinConfig,
@@ -118,6 +118,94 @@ def test_clamp_bound_rejects_unknown_ref() -> None:
 
     with pytest.raises(InvalidFieldValue):
         Bound(min=0.05, min_ref="not_a_component")  # ty: ignore[invalid-argument-type]
+
+
+def _clamp_over_profile(
+    config: ClampLayerConfig, depth: np.ndarray, z: np.ndarray, vs: float
+) -> Qualities:
+    """Apply *config* over a grid with per-point *depth* and *z*, and constant *vs*."""
+    grid = make_grid(nx=depth.shape[0], ny=depth.shape[1], nz=depth.shape[2])
+    grid = grid.assign(
+        depth=(grid.depth.dims, depth.astype(np.float32)),
+        z=(grid.z.dims, z.astype(np.float32)),
+    )
+    return ClampLayer(config, GEOM, ConstantLayer(vs=vs))(grid)
+
+
+@given(
+    floors=st.lists(
+        st.tuples(
+            st.booleans(),
+            st.floats(-5000.0, 5000.0, allow_nan=False, width=32),
+            st.floats(100.0, 3000.0, allow_nan=False, width=32),
+        ),
+        min_size=1,
+        max_size=5,
+    ),
+    global_min=st.none() | st.floats(100.0, 3000.0, allow_nan=False, width=32),
+    seed=st.integers(0, 2**32 - 1),
+)
+def test_clamp_vs_floors_match_brute_force(
+    floors: list[tuple[bool, float, float]], global_min: float | None, seed: int
+) -> None:
+    """Every point ends at the largest minimum among the floors that apply to it."""
+    rng = np.random.default_rng(seed)
+    # Depth and elevation vary independently across all three axes.
+    depth = rng.uniform(0.0, 6000.0, (3, 4, 5)).astype(np.float32)
+    z = rng.uniform(-3000.0, 6000.0, (3, 4, 5)).astype(np.float32)
+    cfg = ClampLayerConfig(
+        clamps={
+            Component.VS: Bound(
+                min=global_min,
+                floors=[
+                    Floor(min=m, depth=t) if by_depth else Floor(min=m, elevation=t)
+                    for by_depth, t, m in floors
+                ],
+            )
+        }
+    )
+    vs = 50.0
+    expected = np.full(depth.shape, vs if global_min is None else global_min)
+    for by_depth, t, m in floors:
+        below = depth >= np.float32(t) if by_depth else -z <= np.float32(t)
+        expected = np.where(below, np.maximum(expected, np.float32(m)), expected)
+    result = _clamp_over_profile(cfg, depth, z, vs)
+    np.testing.assert_allclose(result.vs.values, expected, rtol=1e-6)
+
+
+def test_clamp_vs_floor_regenerates_vp_rho_only_where_it_moves() -> None:
+    """Floors go through the Vs clamp, so Vp and density change only where Vs moved."""
+    depth = np.array([0.0, 1000.0, 3000.0], dtype=np.float32).reshape(1, 1, 3)
+    cfg = ClampLayerConfig(
+        clamps={
+            Component.VS: Bound(min=500.0, floors=[Floor(min=4000.0, depth=2000.0)])
+        }
+    )
+    result = _clamp_over_profile(cfg, depth, depth, vs=3500.0)
+    np.testing.assert_allclose(result.vs.values.ravel(), [3500.0, 3500.0, 4000.0])
+    np.testing.assert_allclose(
+        result.vp.values.ravel(), [6000.0, 6000.0, 6935.700], rtol=1e-4
+    )
+    np.testing.assert_allclose(
+        result.rho.values.ravel(), [2700.0, 2700.0, 2949.165], rtol=1e-4
+    )
+
+
+def test_clamp_floor_stacks_on_relative_min() -> None:
+    """A floor on a relative bound applies only where it exceeds ``factor * ref``."""
+    depth = np.array([0.0, 3000.0], dtype=np.float32).reshape(1, 1, 2)
+    cfg = ClampLayerConfig(
+        clamps={
+            Component.QS: Bound(
+                min=0.05,
+                min_ref="vs",  # ty: ignore[invalid-argument-type]
+                floors=[Floor(min=400.0, depth=2000.0)],
+            )
+        }
+    )
+    grid = make_grid(nx=1, ny=1, nz=2).assign(depth=(("i", "j", "k"), depth))
+    result = ClampLayer(cfg, GEOM, ConstantLayer(vs=3000.0, qs=40.0))(grid)
+    np.testing.assert_allclose(result.qs.values.ravel(), [150.0, 400.0], rtol=1e-4)
 
 
 @pytest.mark.parametrize(

@@ -49,6 +49,11 @@ max_vp_vs_ratio = 4.0
 
 # [layers.clamps.vs]
 # min = 500.0
+#
+# Raise the floor at depth: no Vs under 1000 m/s from 2 km below the ground.
+# [[layers.clamps.vs.floors]]
+# depth = 2000.0
+# min = 1000.0
 
 [[layers]]
 type = "coastline"
