@@ -85,8 +85,8 @@ def _floor_lookup(floors: list[Floor], key: xr.DataArray) -> xr.DataArray:
     *key* grows downward and every floor holds at and beyond its threshold,
     so the running maximum over floors sorted by threshold gives the
     tightest minimum at each step.  One ``searchsorted`` then picks the step
-    for each point, so the lookup costs one pass over the chunk regardless
-    of how many floors there are.
+    for each point.  The lookup costs one pass over the chunk regardless of
+    how many floors there are.
     """
     floors = sorted(floors, key=lambda f: f.threshold)
     thresholds = np.array([f.threshold for f in floors], dtype=key.dtype)
