@@ -29,10 +29,11 @@ from nzcvm.config.layers.offshore import (
 )
 from nzcvm.coordinates import Coordinate
 from nzcvm.grids.grid import Grid
+from nzcvm.interpolation import step_interpolator
 from nzcvm.layers.clamp import ClampLayer
 from nzcvm.layers.core import Layer
 from nzcvm.layers.dummy import ConstantLayer, CountingLayer, RecordingLayer
-from nzcvm.layers.offshore import OffshoreBasinLayer, OffshoreModel, step_interpolator
+from nzcvm.layers.offshore import OffshoreBasinLayer, OffshoreModel
 from nzcvm.qualities import Qualities
 from nzcvm.query import ModelRange
 from tests.conftest import make_grid
@@ -422,7 +423,6 @@ def test_step_interpolator_is_right_continuous_on_each_segment(args: tuple) -> N
 
 
 def test_step_interpolator_clip_below_first() -> None:
-    from nzcvm.layers.offshore import step_interpolator
 
     xp = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     fp = np.array([10.0, 20.0, 30.0], dtype=np.float32)
@@ -432,7 +432,6 @@ def test_step_interpolator_clip_below_first() -> None:
 
 
 def test_step_interpolator_clip_above_last() -> None:
-    from nzcvm.layers.offshore import step_interpolator
 
     xp = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     fp = np.array([10.0, 20.0, 30.0], dtype=np.float32)

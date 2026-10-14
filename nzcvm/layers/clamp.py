@@ -20,8 +20,8 @@ from shapely import Geometry
 from nzcvm.components import Component
 from nzcvm.config.layers.clamp import Bound, ClampLayerConfig
 from nzcvm.ely_taper import DENSITY_RELATION, VP_FROM_VS_RELATION
+from nzcvm.interpolation import step_interpolator
 from nzcvm.layers.core import Layer
-from nzcvm.layers.offshore import step_interpolator
 from nzcvm.query import ModelRange
 
 if TYPE_CHECKING:
@@ -31,29 +31,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _raise_by_floors(floors: list[tuple[float, float]], minimum, key: xr.DataArray):
+def _raise_by_floors(
+    floors: list[tuple[float, float]],
+    minimum: float | xr.DataArray | None,
+    key: xr.DataArray,
+) -> float | xr.DataArray | None:
     """Raise *minimum* by the ``(threshold, min)`` *floors* over *key*.
 
     *key* grows downward and each floor holds at and beyond its threshold.
-    The running maximum over floors sorted by threshold gives the tightest
-    floor at each step, and :func:`step_interpolator` picks the step for each
-    point in one pass, however many floors there are.  Points above every
-    threshold get ``-inf``, so *minimum* (a constant, a per-point array or
-    ``None``) alone bounds them.  The grid's coordinates stay off the result,
-    so they don't leak onto the clamped component.
+    A constant *minimum* seeds the step table, and the running maximum over
+    floors sorted by threshold gives the tightest minimum at each step.
+    :func:`step_interpolator` then picks the step for each point in one pass,
+    however many floors there are.  A per-point *minimum* (a relative bound,
+    or the floors of another key) can't seed the table and costs one extra
+    pass to clip in.  The grid's coordinates stay off the result, so they
+    don't leak onto the clamped component.
     """
     thresholds, minimums = np.array(sorted(floors), dtype=key.dtype).T
+    per_point = isinstance(minimum, xr.DataArray)
+    absolute_floor = -np.inf if minimum is None or per_point else minimum
     floor = xr.apply_ufunc(
         step_interpolator,
         key.reset_coords(drop=True),
         kwargs={
             "xp": np.r_[-np.inf, thresholds],
-            "fp": np.r_[-np.inf, np.maximum.accumulate(minimums)].astype(key.dtype),
+            "fp": np.maximum.accumulate(np.r_[absolute_floor, minimums]).astype(
+                key.dtype
+            ),
         },
         dask="parallelized",
         output_dtypes=[key.dtype],
     )
-    return floor if minimum is None else floor.clip(min=minimum)
+    return floor.clip(min=minimum) if per_point else floor
 
 
 def _clip(bound: Bound, values: xr.DataArray, qualities: Qualities, grid: Grid):
