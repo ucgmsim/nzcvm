@@ -18,6 +18,7 @@ import shapely
 import xarray as xr
 from hypothesis import assume, given
 from hypothesis import strategies as st
+from hypothesis.extra import numpy as hnp
 
 from nzcvm.components import Component
 from nzcvm.config.layers.clamp import Bound, ClampLayerConfig, Floor
@@ -143,16 +144,17 @@ def _clamp_over_profile(
         max_size=5,
     ),
     global_min=st.none() | st.floats(100.0, 3000.0, allow_nan=False, width=32),
-    seed=st.integers(0, 2**32 - 1),
+    # Depth and elevation vary independently across all three axes.
+    depth=hnp.arrays(np.float32, (3, 4, 5), elements=st.floats(0.0, 6000.0, width=32)),
+    z=hnp.arrays(np.float32, (3, 4, 5), elements=st.floats(-3000.0, 6000.0, width=32)),
 )
 def test_clamp_vs_floors_match_brute_force(
-    floors: list[tuple[bool, float, float]], global_min: float | None, seed: int
+    floors: list[tuple[bool, float, float]],
+    global_min: float | None,
+    depth: np.ndarray,
+    z: np.ndarray,
 ) -> None:
     """Every point ends at the largest minimum among the floors that apply to it."""
-    rng = np.random.default_rng(seed)
-    # Depth and elevation vary independently across all three axes.
-    depth = rng.uniform(0.0, 6000.0, (3, 4, 5)).astype(np.float32)
-    z = rng.uniform(-3000.0, 6000.0, (3, 4, 5)).astype(np.float32)
     cfg = ClampLayerConfig(
         clamps={
             Component.VS: Bound(

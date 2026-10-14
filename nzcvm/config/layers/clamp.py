@@ -1,19 +1,12 @@
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-import numpy as np
-import xarray as xr
 from mashumaro.exceptions import InvalidFieldValue
 
 from nzcvm.components import Component
 from nzcvm.config.core import ConfigObject
 
 from .core import LayerConfig
-
-if TYPE_CHECKING:
-    from nzcvm.grids.grid import Grid
 
 
 def _validate_bounds(name: str, min_val: float | None, max_val: float | None):
@@ -69,37 +62,6 @@ class Floor(ConfigObject):
                 holder_class=self.__class__,
                 msg=f"Floor minimum must be > 0, have: {self.min}.",
             )
-
-    @property
-    def threshold(self) -> float:
-        """The depth, or the negated elevation (``grid.z`` is positive down)."""
-        if self.depth is not None:
-            return self.depth
-        assert self.elevation is not None
-        return -self.elevation
-
-
-def _floor_lookup(floors: list[Floor], key: xr.DataArray) -> xr.DataArray:
-    """Evaluate *floors* at every point of *key*, ``-inf`` where none apply.
-
-    *key* grows downward and every floor holds at and beyond its threshold,
-    so the running maximum over floors sorted by threshold gives the
-    tightest minimum at each step.  One ``searchsorted`` then picks the step
-    for each point.  The lookup costs one pass over the chunk regardless of
-    how many floors there are.
-    """
-    floors = sorted(floors, key=lambda f: f.threshold)
-    thresholds = np.array([f.threshold for f in floors], dtype=key.dtype)
-    steps = np.concatenate(
-        [[-np.inf], np.maximum.accumulate([f.min for f in floors])]
-    ).astype(key.dtype)
-
-    return xr.apply_ufunc(
-        lambda k: steps[np.searchsorted(thresholds, k, side="right")],
-        key,
-        dask="parallelized",
-        output_dtypes=[key.dtype],
-    )
 
 
 @dataclass
@@ -196,37 +158,22 @@ class Bound(ConfigObject):
             msg=msg,
         )
 
-    def resolve(self, which: Literal["min", "max"], qualities, grid: Grid):
+    def resolve(self, which: Literal["min", "max"], qualities):
         """Resolve the ``"min"`` or ``"max"`` side to a scalar or per-point array.
 
         Returns ``None`` for an unbounded side, the constant when no
         ``*_ref`` names a component, or ``coefficient * qualities[ref]`` (a
-        DataArray broadcastable to the grid) for a relative bound.  With
-        ``floors``, the ``"min"`` side is the pointwise maximum of
-        that and the floors evaluated over *grid*.
+        DataArray broadcastable to the grid) for a relative bound.  The
+        ``floors`` don't enter here: the clamp layer applies them against
+        the grid.
         """
         coeff = getattr(self, which)
         ref = getattr(self, f"{which}_ref")
         if coeff is None:
-            bound = None
-        elif ref is None:
-            bound = coeff
-        else:
-            bound = coeff * qualities[ref]
-
-        if which == "max" or not self.floors:
-            return bound
-
-        floor = None
-        for key, floors in (
-            (grid.depth, [f for f in self.floors if f.depth is not None]),
-            (grid.z, [f for f in self.floors if f.elevation is not None]),
-        ):
-            if floors:
-                step = _floor_lookup(floors, key)
-                floor = step if floor is None else step.clip(min=floor)
-        assert floor is not None
-        return floor if bound is None else floor.clip(min=bound)
+            return None
+        if ref is None:
+            return coeff
+        return coeff * qualities[ref]
 
 
 @dataclass
