@@ -35,29 +35,25 @@ def _raise_by_floors(floors: list[tuple[float, float]], minimum, key: xr.DataArr
     """Raise *minimum* by the ``(threshold, min)`` *floors* over *key*.
 
     *key* grows downward and each floor holds at and beyond its threshold.
-    Starting from a constant *minimum*, the running maximum over floors
-    sorted by threshold gives the tightest minimum at each step, and
-    :func:`step_interpolator` picks the step for each point in one pass,
-    however many floors there are.  A relative *minimum* varies per point,
-    so it can't seed the steps and gets clipped in afterwards.
+    The running maximum over floors sorted by threshold gives the tightest
+    floor at each step, and :func:`step_interpolator` picks the step for each
+    point in one pass, however many floors there are.  Points above every
+    threshold get ``-inf``, so *minimum* (a constant, a per-point array or
+    ``None``) alone bounds them.  The grid's coordinates stay off the result,
+    so they don't leak onto the clamped component.
     """
     thresholds, minimums = np.array(sorted(floors), dtype=key.dtype).T
-    if not (key >= thresholds[0]).any():
-        return minimum
-
-    relative = isinstance(minimum, xr.DataArray)
-    base = -np.inf if minimum is None or relative else minimum
     floor = xr.apply_ufunc(
         step_interpolator,
-        key,
+        key.reset_coords(drop=True),
         kwargs={
             "xp": np.r_[-np.inf, thresholds],
-            "fp": np.maximum.accumulate(np.r_[base, minimums]).astype(key.dtype),
+            "fp": np.r_[-np.inf, np.maximum.accumulate(minimums)].astype(key.dtype),
         },
         dask="parallelized",
         output_dtypes=[key.dtype],
     )
-    return floor.clip(min=minimum) if relative else floor
+    return floor if minimum is None else floor.clip(min=minimum)
 
 
 def _clip(bound: Bound, values: xr.DataArray, qualities: Qualities, grid: Grid):

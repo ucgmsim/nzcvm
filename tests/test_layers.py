@@ -155,6 +155,8 @@ def test_clamp_vs_floors_match_brute_force(
     z: np.ndarray,
 ) -> None:
     """Every point ends at the largest minimum among the floors that apply to it."""
+    # Depths are non-negative, elevations may sit above sea level.
+    floors = [(by_depth, abs(t) if by_depth else t, m) for by_depth, t, m in floors]
     cfg = ClampLayerConfig(
         clamps={
             Component.VS: Bound(

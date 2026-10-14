@@ -56,6 +56,14 @@ class Floor(ConfigObject):
                 holder_class=self.__class__,
                 msg="Set exactly one of depth or elevation.",
             )
+        if self.depth is not None and self.depth < 0:
+            raise InvalidFieldValue(
+                field_name="depth",
+                field_type=float,
+                field_value=self.depth,
+                holder_class=self.__class__,
+                msg=f"Depth must be non-negative (>= 0), got {self.depth}.",
+            )
 
 
 @dataclass
@@ -146,6 +154,7 @@ class Bound(ConfigObject):
                 "max": self.max,
                 "min_ref": self.min_ref,
                 "max_ref": self.max_ref,
+                "floors": self.floors,
             },
             holder_class=self.__class__,
             msg=msg,
