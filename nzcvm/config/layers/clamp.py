@@ -5,6 +5,7 @@ from mashumaro.exceptions import InvalidFieldValue
 
 from nzcvm.components import Component
 from nzcvm.config.core import ConfigObject
+from nzcvm.config.validation import PositiveFloat
 
 from .core import LayerConfig
 
@@ -41,7 +42,7 @@ class Floor(ConfigObject):
     (velocities in m/s), and never scales with a ``min_ref``.
     """
 
-    min: float
+    min: PositiveFloat
     depth: float | None = None
     elevation: float | None = None
 
@@ -54,14 +55,6 @@ class Floor(ConfigObject):
                 field_value={"depth": self.depth, "elevation": self.elevation},
                 holder_class=self.__class__,
                 msg="Set exactly one of depth or elevation.",
-            )
-        if self.min <= 0:
-            raise InvalidFieldValue(
-                field_name="min",
-                field_type=float,
-                field_value=self.min,
-                holder_class=self.__class__,
-                msg=f"Floor minimum must be > 0, have: {self.min}.",
             )
 
 
@@ -137,13 +130,12 @@ class Bound(ConfigObject):
                 str(e),
             )
 
-        if self.max is not None and self.max_ref is None:
-            for floor in self.floors:
-                if floor.min > self.max:
-                    self._raise(
-                        "floors",
-                        f"Floor minimum ({floor.min}) must be <= max ({self.max}).",
-                    )
+        if (
+            self.max is not None
+            and self.max_ref is None
+            and any(floor.min > self.max for floor in self.floors)
+        ):
+            self._raise("floors", f"Floor minimums must be <= max ({self.max}).")
 
     def _raise(self, field_name: str, msg: str):
         raise InvalidFieldValue(

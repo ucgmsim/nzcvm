@@ -21,6 +21,7 @@ from nzcvm.components import Component
 from nzcvm.config.layers.clamp import Bound, ClampLayerConfig
 from nzcvm.ely_taper import DENSITY_RELATION, VP_FROM_VS_RELATION
 from nzcvm.layers.core import Layer
+from nzcvm.layers.offshore import step_interpolator
 from nzcvm.query import ModelRange
 
 if TYPE_CHECKING:
@@ -30,30 +31,37 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _floor_lookup(floors: list[tuple[float, float]], key: xr.DataArray) -> xr.DataArray:
-    """Evaluate ``(threshold, min)`` *floors* over *key*, ``-inf`` where none apply.
+def _raise_by_floors(floors: list[tuple[float, float]], minimum, key: xr.DataArray):
+    """Raise *minimum* by the ``(threshold, min)`` *floors* over *key*.
 
-    *key* grows downward and each floor holds at and beyond its threshold,
-    so the running maximum over floors sorted by threshold gives the
-    tightest minimum at each step.  One ``searchsorted`` then picks the step
-    for each point.  The lookup costs one pass over the chunk regardless of
-    how many floors there are.
+    *key* grows downward and each floor holds at and beyond its threshold.
+    Starting from a constant *minimum*, the running maximum over floors
+    sorted by threshold gives the tightest minimum at each step, and
+    :func:`step_interpolator` picks the step for each point in one pass,
+    however many floors there are.  A relative *minimum* varies per point,
+    so it can't seed the steps and gets clipped in afterwards.
     """
     thresholds, minimums = np.array(sorted(floors), dtype=key.dtype).T
-    steps = np.concatenate([[-np.inf], np.maximum.accumulate(minimums)]).astype(
-        key.dtype
-    )
+    if not (key >= thresholds[0]).any():
+        return minimum
 
-    return xr.apply_ufunc(
-        lambda k: steps[np.searchsorted(thresholds, k, side="right")],
+    relative = isinstance(minimum, xr.DataArray)
+    base = -np.inf if minimum is None or relative else minimum
+    floor = xr.apply_ufunc(
+        step_interpolator,
         key,
+        kwargs={
+            "xp": np.r_[-np.inf, thresholds],
+            "fp": np.maximum.accumulate(np.r_[base, minimums]).astype(key.dtype),
+        },
         dask="parallelized",
         output_dtypes=[key.dtype],
     )
+    return floor.clip(min=minimum) if relative else floor
 
 
-def _resolve_min(bound: Bound, qualities: Qualities, grid: Grid):
-    """Resolve *bound*'s minimum, raised by its ``floors`` over *grid*.
+def _clip(bound: Bound, values: xr.DataArray, qualities: Qualities, grid: Grid):
+    """Clip *values* to *bound*, with its minimum raised by its ``floors``.
 
     A depth floor compares against ``grid.depth`` and an elevation floor
     against ``grid.z``.  Both are positive down.
@@ -63,9 +71,8 @@ def _resolve_min(bound: Bound, qualities: Qualities, grid: Grid):
     by_z = [(e, f.min) for f in bound.floors if (e := f.elevation) is not None]
     for key, floors in ((grid.depth, by_depth), (grid.z, by_z)):
         if floors:
-            floor = _floor_lookup(floors, key)
-            minimum = floor if minimum is None else floor.clip(min=minimum)
-    return minimum
+            minimum = _raise_by_floors(floors, minimum, key)
+    return values.clip(min=minimum, max=bound.resolve("max", qualities))
 
 
 class ClampLayer(Layer[ClampLayerConfig], config_cls=ClampLayerConfig):
@@ -87,10 +94,7 @@ class ClampLayer(Layer[ClampLayerConfig], config_cls=ClampLayerConfig):
         vs_bound = self.config.clamps.get(Component.VS)
         if vs_bound is not None:
             vs = qualities.vs
-            clamped_vs = vs.clip(
-                min=_resolve_min(vs_bound, qualities, grid),
-                max=vs_bound.resolve("max", qualities),
-            )
+            clamped_vs = _clip(vs_bound, vs, qualities, grid)
             moved = clamped_vs != vs
             vp = xr.where(moved, VP_FROM_VS_RELATION(clamped_vs), qualities.vp)
             rho = xr.where(moved, DENSITY_RELATION(vp), qualities.rho)
@@ -117,10 +121,7 @@ class ClampLayer(Layer[ClampLayerConfig], config_cls=ClampLayerConfig):
         for c, bound in self._topologically_sorted_clamps():
             if c == Component.VS:
                 continue
-            qualities[c] = qualities[c].clip(
-                min=_resolve_min(bound, qualities, grid),
-                max=bound.resolve("max", qualities),
-            )
+            qualities[c] = _clip(bound, qualities[c], qualities, grid)
 
         return qualities
 

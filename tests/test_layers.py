@@ -50,10 +50,22 @@ DISJOINT_GEOM = shapely.box(0.0, 0.0, 1.0, 1.0)
 
 def _clamp_over_constant(
     config: ClampLayerConfig,
+    depth: np.ndarray | None = None,
+    z: np.ndarray | None = None,
     **constants,
 ) -> Qualities:
-    """Apply *config* to a 2×2×2 grid backed by a ConstantLayer(*constants*)."""
-    grid = make_grid()
+    """Apply *config* to a grid backed by a ConstantLayer(*constants*).
+
+    The grid is 2×2×2, or takes the shape of *depth* when given, with
+    per-point *depth* and *z* (defaulting to *depth*).
+    """
+    if depth is None:
+        grid = make_grid()
+    else:
+        grid = make_grid(*depth.shape).assign(
+            depth=(("i", "j", "k"), depth),
+            z=(("i", "j", "k"), depth if z is None else z),
+        )
     inner = ConstantLayer(**constants)
     layer = ClampLayer(config, GEOM, inner)
     return layer(grid)
@@ -121,18 +133,6 @@ def test_clamp_bound_rejects_unknown_ref() -> None:
         Bound(min=0.05, min_ref="not_a_component")  # ty: ignore[invalid-argument-type]
 
 
-def _clamp_over_profile(
-    config: ClampLayerConfig, depth: np.ndarray, z: np.ndarray, vs: float
-) -> Qualities:
-    """Apply *config* over a grid with per-point *depth* and *z*, and constant *vs*."""
-    grid = make_grid(nx=depth.shape[0], ny=depth.shape[1], nz=depth.shape[2])
-    grid = grid.assign(
-        depth=(grid.depth.dims, depth.astype(np.float32)),
-        z=(grid.z.dims, z.astype(np.float32)),
-    )
-    return ClampLayer(config, GEOM, ConstantLayer(vs=vs))(grid)
-
-
 @given(
     floors=st.lists(
         st.tuples(
@@ -171,7 +171,7 @@ def test_clamp_vs_floors_match_brute_force(
     for by_depth, t, m in floors:
         below = depth >= np.float32(t) if by_depth else z >= np.float32(t)
         expected = np.where(below, np.maximum(expected, np.float32(m)), expected)
-    result = _clamp_over_profile(cfg, depth, z, vs)
+    result = _clamp_over_constant(cfg, depth, z, vs=vs)
     np.testing.assert_allclose(result.vs.values, expected, rtol=1e-6)
 
 
@@ -183,7 +183,7 @@ def test_clamp_vs_floor_regenerates_vp_rho_only_where_it_moves() -> None:
             Component.VS: Bound(min=500.0, floors=[Floor(min=4000.0, depth=2000.0)])
         }
     )
-    result = _clamp_over_profile(cfg, depth, depth, vs=3500.0)
+    result = _clamp_over_constant(cfg, depth, vs=3500.0)
     np.testing.assert_allclose(result.vs.values.ravel(), [3500.0, 3500.0, 4000.0])
     np.testing.assert_allclose(
         result.vp.values.ravel(), [6000.0, 6000.0, 6935.700], rtol=1e-4
@@ -205,8 +205,7 @@ def test_clamp_floor_stacks_on_relative_min() -> None:
             )
         }
     )
-    grid = make_grid(nx=1, ny=1, nz=2).assign(depth=(("i", "j", "k"), depth))
-    result = ClampLayer(cfg, GEOM, ConstantLayer(vs=3000.0, qs=40.0))(grid)
+    result = _clamp_over_constant(cfg, depth, vs=3000.0, qs=40.0)
     np.testing.assert_allclose(result.qs.values.ravel(), [150.0, 400.0], rtol=1e-4)
 
 
