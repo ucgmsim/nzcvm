@@ -618,7 +618,7 @@ class ModelTree:
         )
         dset = darr.assign_coords(component=list(Component)).to_dataset(dim="component")
         # The Qualities schema fixes the dims to (i, j, k), so only grid-shaped
-        # queries (as from the pipeline) can be typed as Qualities.
+        # queries (as from the pipeline) can become Qualities.
         if dset.vs.dims == ("i", "j", "k"):
             return QualitiesSchema.from_dataset(dset)
         return dset

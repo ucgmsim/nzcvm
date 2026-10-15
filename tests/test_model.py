@@ -251,7 +251,7 @@ def test_query_many_point_dims() -> None:
     """query_many accepts inputs on dims other than (i, j, k)."""
     vs = 3500.0
     model = ModelTree(_nzcvm.model_tree([_mesh_model(vs=vs, priority=0)]))
-    # The first point is inside the unit tetrahedron, the second outside.
+    # One point inside the unit tetrahedron and one outside it.
     x = xr.DataArray(np.array([0.1, 2.0], dtype=np.float32), dims="point")
     z = xr.DataArray(np.array([0.1, 0.1], dtype=np.float32), dims="point")
     result = model.query_many(x, z, z, z)

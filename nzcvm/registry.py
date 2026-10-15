@@ -12,8 +12,8 @@ workers only), all workers share the same Python process.  This module exposes:
   :class:`~nzcvm.layers.coastline.CoastlineLayer`) override
   ``__getstate__`` to replace that attribute with ``pickle_pass(attr)``, and
   ``__setstate__`` to swap the UUID back for ``REGISTRY[uuid]``.  The lookup
-  only succeeds when pickling and unpickling happen in the same process, which
-  ``processes=False`` guarantees, so no data is copied.
+  only succeeds when pickling and unpickling happen in the same process, as
+  under ``processes=False``, and it doesn't copy any data.
 
 * :func:`pipeline_context` -- a :mod:`contextlib` context manager that clears
   :data:`REGISTRY` after the pipeline (including any lazy dask ``.compute()``
@@ -43,7 +43,7 @@ def pickle_pass(obj: Any) -> str:
 
     Call this from ``__getstate__`` in place of pickling *obj*, and look the
     key up in :data:`REGISTRY` from ``__setstate__``.  This only works when
-    the object is unpickled in the same process.
+    the same process unpickles the object.
 
     Parameters
     ----------
