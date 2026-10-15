@@ -271,6 +271,43 @@ class TestSW4Shape:
         grids = build_grids_from_config(cfg)
         assert len(grids) == 2
 
+    def test_empty_refinements_rejected(self, flat_surface: Path) -> None:
+        with pytest.raises(ValueError, match="at least one refinement"):
+            _sw4_config(flat_surface, refinements={})
+
+    @pytest.mark.parametrize(
+        "refinements",
+        [
+            # Finer below coarser.
+            {
+                "top": MeshRefinement(resolution=1000.0, bottom=2000.0),
+                "bottom": MeshRefinement(resolution=500.0, bottom=6000.0),
+            },
+            # Twice as coarse, but not the next block down.
+            {
+                "top": MeshRefinement(resolution=500.0, bottom=2000.0),
+                "middle": MeshRefinement(resolution=2000.0, bottom=4000.0),
+                "bottom": MeshRefinement(resolution=1000.0, bottom=6000.0),
+            },
+        ],
+        ids=["finer-below", "out-of-order"],
+    )
+    def test_refinements_must_coarsen_with_depth(
+        self, flat_surface: Path, refinements: dict[str, MeshRefinement]
+    ) -> None:
+        with pytest.raises(ValueError, match="twice as coarse"):
+            _sw4_config(flat_surface, refinements=refinements)
+
+    def test_refinements_sharing_a_bottom_rejected(self, flat_surface: Path) -> None:
+        with pytest.raises(ValueError, match="share a bottom"):
+            _sw4_config(
+                flat_surface,
+                refinements={
+                    "top": MeshRefinement(resolution=500.0, bottom=2000.0),
+                    "bottom": MeshRefinement(resolution=1000.0, bottom=2000.0),
+                },
+            )
+
     def test_ni_matches_extent_over_resolution(self, flat_surface: Path) -> None:
         """ni == round(extent_x / resolution) + 1 for the finest refinement."""
         extent_x = 4000.0
