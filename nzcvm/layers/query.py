@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import shapely
 import xarray as xr
@@ -67,8 +67,12 @@ class QueryLayer(Layer[QueryLayerConfig], config_cls=QueryLayerConfig):
         """
 
         logger.debug("Beginning query layer query with model_range=%s", model_range)
-        qualities = self.model.query_many(
-            grid.x, grid.y, grid.z, grid.depth, model_range=model_range
+        # Grid variables are on (i, j, k), so query_many returns Qualities.
+        qualities = cast(
+            "Qualities",
+            self.model.query_many(
+                grid.x, grid.y, grid.z, grid.depth, model_range=model_range
+            ),
         )
         logger.debug("Query complete")
         return qualities

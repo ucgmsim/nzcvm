@@ -498,7 +498,9 @@ projected CRS with `z` positive downwards, and `depth` gives the point's
 depth below the topography. Basin meshes store depth and read it, while the
 tomography reads `z`. A grid computes both for every point.
 
-`query_many` is the vectorised form and returns a `Qualities` dataset.
+`query_many` is the vectorised form. It takes coordinate arrays on any dims,
+such as a list of points, and returns a dataset on the same dims (a `Qualities`
+dataset for the `(i, j, k)` grid dims).
 `explain` shows which models contributed to the blend:
 
 ```python
