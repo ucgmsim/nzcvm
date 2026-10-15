@@ -21,6 +21,7 @@ from hypothesis import strategies as st
 from nzcvm import nzcvm as _nzcvm  # ty: ignore[unresolved-import]
 from nzcvm.models.mesh import ModelType, Vertical, make_mesh
 from nzcvm.models.model import MeshModel, ModelRange, ModelTree
+from nzcvm.qualities import Qualities
 from tests.conftest import _mesh_model
 
 # ---------------------------------------------------------------------------
@@ -244,3 +245,24 @@ def test_query_matches_query_many(x: float, y: float, z: float) -> None:
         assert result_query.qp == pytest.approx(result_query_many.qp.item())
         assert result_query.qs == pytest.approx(result_query_many.qs.item())
         assert result_query.alpha == pytest.approx(result_query_many.alpha.item())
+
+
+def test_query_many_point_dims() -> None:
+    """query_many accepts inputs on dims other than (i, j, k)."""
+    vs = 3500.0
+    model = ModelTree(_nzcvm.model_tree([_mesh_model(vs=vs, priority=0)]))
+    # One point inside the unit tetrahedron and one outside it.
+    x = xr.DataArray(np.array([0.1, 2.0], dtype=np.float32), dims="point")
+    z = xr.DataArray(np.array([0.1, 0.1], dtype=np.float32), dims="point")
+    result = model.query_many(x, z, z, z)
+    assert not isinstance(result, Qualities)
+    assert result.vs.dims == ("point",)
+    np.testing.assert_allclose(result.vs.values, [vs, 0.0])
+
+
+def test_query_many_grid_dims_returns_qualities() -> None:
+    """Grid-shaped (i, j, k) inputs still produce a Qualities dataset."""
+    model = ModelTree(_nzcvm.model_tree([_mesh_model(priority=0)]))
+    x = xr.DataArray(np.full((2, 1, 1), 0.1, dtype=np.float32), dims=["i", "j", "k"])
+    result = model.query_many(x, x, x, x)
+    assert isinstance(result, Qualities)

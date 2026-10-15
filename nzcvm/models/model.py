@@ -580,13 +580,14 @@ class ModelTree:
         depth: xr.DataArray,
         *,
         model_range: ModelRange = ModelRange.ALL,
-    ) -> Qualities:
+    ) -> Qualities | xr.Dataset:
         """Vectorised query returning a labelled :class:`xarray.Dataset`.
 
         Parameters
         ----------
         x, y, z :
-            Arrays of coordinates, broadcastable to a common shape.
+            Arrays of coordinates, broadcastable to a common shape with any
+            dims, such as a 1-D ``point`` dim or the ``(i, j, k)`` grid dims.
         depth :
             Depths below the topography, broadcastable to the same shape.
         model_range :
@@ -595,8 +596,10 @@ class ModelTree:
 
         Returns
         -------
-        Qualities
-            Qualities dataset.
+        Qualities or xarray.Dataset
+            One variable per component on the broadcast dims of the inputs.
+            The result is a :class:`Qualities` dataset when those dims are
+            ``(i, j, k)``, and a plain :class:`xarray.Dataset` otherwise.
 
         See Also
         --------
@@ -614,7 +617,11 @@ class ModelTree:
             kwargs={"model_range": model_range},
         )
         dset = darr.assign_coords(component=list(Component)).to_dataset(dim="component")
-        return QualitiesSchema.from_dataset(dset)
+        # The Qualities schema fixes the dims to (i, j, k), so only grid-shaped
+        # queries (as from the pipeline) can become Qualities.
+        if dset.vs.dims == ("i", "j", "k"):
+            return QualitiesSchema.from_dataset(dset)
+        return dset
 
     def view(self) -> Tree:
         """Return a :class:`rich.tree.Tree` representation of the model tree."""
