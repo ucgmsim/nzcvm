@@ -246,9 +246,8 @@ def _build_structured_grid(
 
         ops = {
             DiffMode.ABS: lambda a, b: a - b,
-            DiffMode.LOG: lambda a, b: (
-                xr.apply_ufunc(np.log10, a) - xr.apply_ufunc(np.log10, b)
-            ),
+            # np.log10 on a DataArray dispatches to dask for chunked inputs.
+            DiffMode.LOG: lambda a, b: np.log10(a) - np.log10(b),
         }
         for var in ds1.data_vars:
             if var in ("x", "y", "z") or var not in ds2:
@@ -399,7 +398,7 @@ def basin(
             name="dem",
         )
 
-    if x_pos and y_pos:
+    if x_pos is not None and y_pos is not None:
         # Use global mesh bounds to define the vertical extent across all models
         z_min, z_max = global_bounds[4], global_bounds[5]
         # Create a line running from deep under the meshes to high over them
@@ -526,8 +525,8 @@ def model(
     global_bounds = pv.MultiBlock(list(grids.values())).bounds
     all_vals = np.concatenate([g.point_data[scalar_str] for g in grids.values()])
     clim = [
-        min_val or float(np.nanmin(all_vals)),
-        max_val or float(np.nanmax(all_vals)),
+        float(np.nanmin(all_vals)) if min_val is None else min_val,
+        float(np.nanmax(all_vals)) if max_val is None else max_val,
     ]
 
     # Choose a smart diverging colormap automatically when running comparison transformations
@@ -556,19 +555,19 @@ def model(
 
         match slice_axis.lower():
             case "x":
-                min_val, max_val, normal = (
+                lo, hi, normal = (
                     min(b[0] for b in all_bounds),
                     max(b[1] for b in all_bounds),
                     [1, 0, 0],
                 )
             case "y":
-                min_val, max_val, normal = (
+                lo, hi, normal = (
                     min(b[2] for b in all_bounds),
                     max(b[3] for b in all_bounds),
                     [0, 1, 0],
                 )
             case "z":
-                min_val, max_val, normal = (
+                lo, hi, normal = (
                     min(b[4] for b in all_bounds),
                     max(b[5] for b in all_bounds),
                     [0, 0, 1],
@@ -577,7 +576,7 @@ def model(
                 typer.secho(f"[error] Invalid axis '{invalid}'.", fg="red")
                 raise typer.Exit(1)
 
-        mid_val = (min_val + max_val) / 2
+        mid_val = (lo + hi) / 2
 
         def create_slice(value: float) -> None:
             origin = [
@@ -594,7 +593,7 @@ def model(
 
         pl.add_slider_widget(
             callback=create_slice,
-            rng=[min_val, max_val],
+            rng=[lo, hi],
             value=mid_val,
             title=f"{slice_axis.upper()} Slice Location",
             pointa=(0.025, 0.1),

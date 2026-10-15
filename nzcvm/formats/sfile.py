@@ -49,14 +49,25 @@ class AsyncHDF5Writer(AbstractContextManager):
         self.queue = queue.Queue(maxsize=max_buffer)
         self.filename = filename
         self.stop_event = threading.Event()
+        self.error: BaseException | None = None
 
     def _write_loop(self):
-        with h5py.File(self.filename, "r+") as f:
-            while not (self.stop_event.is_set() and self.queue.empty()):
-                try:
-                    path, key, value = self.queue.get(timeout=1)
+        try:
+            with h5py.File(self.filename, "r+") as f:
+                while not (self.stop_event.is_set() and self.queue.empty()):
+                    try:
+                        path, key, value = self.queue.get(timeout=1)
+                    except queue.Empty:
+                        continue
                     f[path][key] = value
                     self.queue.task_done()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the producer
+            self.error = exc
+            # Keep draining so producers blocked on a full queue wake up and
+            # see the error.
+            while not self.stop_event.is_set():
+                try:
+                    self.queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
 
@@ -65,6 +76,8 @@ class AsyncHDF5Writer(AbstractContextManager):
         # queueing.
         class Dummy:
             def __setitem__(_self, key, value):
+                if self.error is not None:
+                    raise self.error
                 self.queue.put((datapath, key, value))
 
         return Dummy()
@@ -73,9 +86,12 @@ class AsyncHDF5Writer(AbstractContextManager):
         self.thread = threading.Thread(target=self._write_loop, daemon=True)
         self.thread.start()
 
-    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+    def __exit__(self, _exc_type, exc_value, _traceback) -> None:
         self.stop_event.set()
         self.thread.join()
+        # Catches a write that fails after the last put.
+        if exc_value is None and self.error is not None:
+            raise self.error
 
 
 def _solver_z(grid: Grid) -> xr.DataArray:
