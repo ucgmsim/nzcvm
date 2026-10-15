@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 import dask.array as da
@@ -275,3 +276,49 @@ def test_emod3d_output_rejects_a_physical_grid(
     )
     with pytest.raises(ValueError, match="physical solver"):
         emod3d.to_emod3d(model, tmp_path / "emod3d")
+
+
+def _run_with_timeout(fn, timeout: float = 30.0) -> BaseException | None:
+    """Run ``fn`` in a thread and return what it raised, failing on a hang."""
+    raised = []
+
+    def target():
+        try:
+            fn()
+        except BaseException as exc:  # noqa: BLE001 - returned to the test
+            raised.append(exc)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    assert not thread.is_alive(), "writer hung"
+    return raised[0] if raised else None
+
+
+# 5 blocks fit in the writer's queue, 40 do not and used to deadlock.
+@pytest.mark.parametrize("n_blocks", [5, 40])
+def test_async_writer_propagates_write_errors(tmp_path: Path, n_blocks: int):
+    out = tmp_path / "out.h5"
+    h5py.File(out, "w").close()
+    writer = sfile.AsyncHDF5Writer(out)
+
+    def store():
+        with writer:
+            da.store([da.ones(n_blocks, chunks=1)], [writer.target("missing")])
+
+    assert isinstance(_run_with_timeout(store), KeyError)
+
+
+def test_sfile_write_error_fails(
+    tmp_path: Path,
+    simple_velocity_model: VelocityModel,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    target = sfile.AsyncHDF5Writer.target
+    monkeypatch.setattr(
+        sfile.AsyncHDF5Writer, "target", lambda self, _path: target(self, "missing")
+    )
+    error = _run_with_timeout(
+        lambda: sfile.to_sfile(simple_velocity_model, tmp_path / "model.sfile")
+    )
+    assert isinstance(error, KeyError)
