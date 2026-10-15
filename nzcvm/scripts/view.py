@@ -246,7 +246,7 @@ def _build_structured_grid(
 
         ops = {
             DiffMode.ABS: lambda a, b: a - b,
-            # np.log10 on a DataArray stays lazy for dask-backed inputs.
+            # np.log10 on a DataArray dispatches to dask for chunked inputs.
             DiffMode.LOG: lambda a, b: np.log10(a) - np.log10(b),
         }
         for var in ds1.data_vars:

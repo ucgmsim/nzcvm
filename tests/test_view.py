@@ -1,6 +1,6 @@
 """Tests for the ``nzcvm view model`` command.
 
-The plotter is replaced with a mock, so these tests need no display.
+The tests mock the plotter, so these tests don't need a display.
 """
 
 from pathlib import Path
@@ -62,7 +62,7 @@ def test_colour_limits_default_to_data_range(zarr_model: Path, plotter: MagicMoc
 
 
 def test_log_diff_on_dask_grids():
-    # The test grids are dask-backed, as they are when read from disk.
+    # The test grids are dask-backed, like grids read from disk.
     grid, qualities = _grid("g0", 100.0, 0.0), _qualities()
     other = _qualities(offset=100.0)
     mesh = view._build_structured_grid(

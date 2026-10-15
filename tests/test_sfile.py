@@ -295,7 +295,7 @@ def _run_with_timeout(fn, timeout: float = 30.0) -> BaseException | None:
     return raised[0] if raised else None
 
 
-# 5 blocks fit in the writer's queue, 40 do not and used to deadlock.
+# 5 blocks fit in the writer's queue; 40 don't, and used to deadlock.
 @pytest.mark.parametrize("n_blocks", [5, 40])
 def test_async_writer_propagates_write_errors(tmp_path: Path, n_blocks: int):
     out = tmp_path / "out.h5"

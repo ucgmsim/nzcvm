@@ -64,7 +64,7 @@ class AsyncHDF5Writer(AbstractContextManager):
         except BaseException as exc:  # noqa: BLE001 - re-raised in the producer
             self.error = exc
             # Keep draining so producers blocked on a full queue wake up and
-            # see the error, rather than waiting forever.
+            # see the error.
             while not self.stop_event.is_set():
                 try:
                     self.queue.get(timeout=0.1)
@@ -89,7 +89,7 @@ class AsyncHDF5Writer(AbstractContextManager):
     def __exit__(self, _exc_type, exc_value, _traceback) -> None:
         self.stop_event.set()
         self.thread.join()
-        # A write that failed after the last block was queued is only seen here.
+        # Catches a write that fails after the last put.
         if exc_value is None and self.error is not None:
             raise self.error
 
