@@ -73,9 +73,11 @@ def topography_following_grid(
     """Hang a fixed-resolution depth axis off *surface*.
 
     Depth is purely a function of k and *resolution_z*, identical from column
-    to column.  A column starts at the topography and ends *thickness* below
-    it, with the bottom following the topography exactly.  Chunking only ever
-    applies to i/j, and k always stays one chunk.
+    to column: sample k sits exactly ``k * resolution_z`` below the
+    topography.  A column ends at the first sample at or below *thickness*, so
+    when *thickness* isn't a multiple of *resolution_z* the bottom lies up to
+    one *resolution_z* deeper.  The bottom follows the topography exactly.
+    Chunking only ever applies to i/j, and k always stays one chunk.
 
     Parameters
     ----------
@@ -85,15 +87,17 @@ def topography_following_grid(
     surface :
         Surface elevation at those coordinates, positive down.
     thickness :
-        Depth of the bottom of every column, in metres below the topography.
+        Minimum depth of the bottom of every column, in metres below the
+        topography.
     resolution_z :
         Vertical sample spacing in metres.
     **kwargs :
         Passed through to :meth:`~nzcvm.grids.grid.GridSchema.new`.
     """
-    nk = np.round(thickness / resolution_z).astype(int) + 1
+    # Round off float noise before the ceil, so 2.1 / 0.3 still gives 7.
+    nk = int(np.ceil(round(thickness / resolution_z, 6))) + 1
     zeta_depth = xr.DataArray(
-        np.linspace(0.0, thickness, num=nk, dtype=np.float32),
+        (np.arange(nk) * resolution_z).astype(np.float32),
         dims=[Coordinate.K],
         coords={Coordinate.K: np.arange(nk)},
     ).chunk({Coordinate.K: -1})

@@ -79,8 +79,9 @@ class BoreholeGridConfig(GridConfig):
     extent-based grids use.
 
     The built grid has shape ``(len(sites), 1, nk)``: one column per site,
-    a singleton ``j`` axis, and ``nk`` samples spaced *resolution_z* apart
-    from the topography down to *depth*.
+    a singleton ``j`` axis, and ``nk`` samples spaced exactly *resolution_z*
+    apart from the topography down to *depth*.  When *depth* isn't a multiple
+    of *resolution_z*, the last sample lies at the next multiple below it.
 
     Attributes
     ----------
@@ -92,7 +93,8 @@ class BoreholeGridConfig(GridConfig):
         Parquet file with ``longitude`` and ``latitude`` columns.  Any other
         key or column labels the site.
     depth :
-        Depth of the bottom of every column, in metres below the topography.
+        Depth of the bottom of every column, in metres below the topography,
+        at least *resolution_z*.
     resolution_z :
         Vertical sample spacing in metres.
     projection :
@@ -156,3 +158,8 @@ class BoreholeGridConfig(GridConfig):
         super().__post_init__()
         if isinstance(self.sites, list) and not self.sites:
             raise ValueError("A borehole grid needs at least one site.")
+        if self.depth < self.resolution_z:
+            raise ValueError(
+                f"depth ({self.depth}) must be at least resolution_z"
+                f" ({self.resolution_z})."
+            )

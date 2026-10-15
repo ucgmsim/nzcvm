@@ -18,25 +18,22 @@ from .core import GridConfig
 class MeshRefinement(ConfigObject):
     """Vertical mesh refinement for one depth layer.
 
+    A refinement's name is its key in :attr:`SW4GridConfig.refinements`.
+
     Attributes
     ----------
     resolution :
         Horizontal and nominal vertical resolution in metres.
     bottom :
-        Bottom of this layer in elevation.  The invariant maintained is that
-        the bottom surface of this layer's mesh has a minimum elevation equal
-        to this value.  When *deformation* is ``1.0`` the surface stops
-        exactly at the boundary.
-    name :
-        Human-readable label for the refinement (useful for debugging).
-    deformation :
-        Blend factor between ``0`` (curvilinear, topography-following bottom)
-        and ``1`` (flat bottom at *bottom*).
+        Nominal depth of the base of this block, in metres (positive down).
+        The block spans from the previous refinement's *bottom* (or the
+        surface, for the first) down to this depth.
+        :attr:`SW4GridConfig.decay` sets how the top block follows the
+        topography.
     """
 
     # Horizontal and (nominal) vertical resolution.
     resolution: float
-    # Bottom of interface layer in *elevation*.
     bottom: float
 
 
@@ -102,15 +99,27 @@ class SW4GridConfig(GridConfig):
 
     def __post_init__(self):
         super().__post_init__()
+        if not self.refinements:
+            raise ValueError("SW4 grid needs at least one refinement.")
+        # Sort by depth, as build_sw4 does: each block must sit below the one
+        # above it and be exactly twice as coarse.
         refinements = sorted(
-            self.refinements.values(), key=lambda refinement: refinement.resolution
+            self.refinements.items(), key=lambda refinement: refinement[1].bottom
         )
-        for cur_refinement, next_refinement in itertools.pairwise(refinements):
-            ratio = next_refinement.resolution / cur_refinement.resolution
-            if not np.isclose(ratio, 2.0):
-                raise ValueError("Refinements must follow 2:1 ratio in resolution.")
+        for (above_name, above), (below_name, below) in itertools.pairwise(refinements):
+            if below.bottom == above.bottom:
+                raise ValueError(
+                    f"Refinements {above_name!r} and {below_name!r} share a bottom"
+                    f" ({above.bottom})."
+                )
+            if not np.isclose(below.resolution / above.resolution, 2.0):
+                raise ValueError(
+                    f"Refinement {below_name!r} (resolution {below.resolution}) must be"
+                    f" twice as coarse as {above_name!r} above it"
+                    f" (resolution {above.resolution})."
+                )
 
-        coarsest_grid_resolution = refinements[-1].resolution
+        coarsest_grid_resolution = refinements[-1][1].resolution
         # Adjust extent x and y so it's divisible by the coarsest mesh refinement.
         self.extent_x = (
             np.round(self.extent_x / coarsest_grid_resolution)

@@ -295,6 +295,20 @@ def test_clamp_config_rejects_inverted_vp_vs_ratio() -> None:
         ClampLayerConfig(min_vp_vs_ratio=3.0, max_vp_vs_ratio=1.0)
 
 
+@pytest.mark.parametrize(
+    "bound",
+    [
+        # 20 <= Qs <= 0.1 * Vs: the multiplier isn't comparable to the constant.
+        Bound(min=20.0, max=0.1, max_ref=Component.VS),
+        # 0.1 * Vs <= Qs <= 0.05 * Vp: different references.
+        Bound(min=0.1, min_ref=Component.VS, max=0.05, max_ref=Component.VP),
+    ],
+)
+def test_clamp_config_accepts_relative_bounds(bound: Bound) -> None:
+    cfg = ClampLayerConfig(clamps={Component.QS: bound})
+    assert cfg.clamps[Component.QS] == bound
+
+
 def test_clamp_config_accepts_valid_vp_vs_ratio() -> None:
     c = ClampLayerConfig(min_vp_vs_ratio=1.5, max_vp_vs_ratio=2.5)
     assert c.min_vp_vs_ratio == 1.5
