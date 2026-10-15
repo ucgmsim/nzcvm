@@ -236,15 +236,3 @@ class ClampLayerConfig(LayerConfig):
                 holder_class=self.__class__,
                 msg=str(e),
             ) from e
-
-        for component, bound in self.clamps.items():
-            try:
-                _validate_bounds(str(component), bound.min, bound.max)
-            except ValueError as e:
-                raise InvalidFieldValue(
-                    field_name=f"clamps.{component}",
-                    field_type=Bound,
-                    field_value=bound,
-                    holder_class=self.__class__,
-                    msg=str(e),
-                ) from e
