@@ -205,6 +205,12 @@ def test_resolve_sites_reads_a_file(synthetic_surface: Path, tmp_path: Path) -> 
         pytest.param(
             {"sites_crs": _NZTM}, InvalidFieldValue, "geographic", id="projected-crs"
         ),
+        pytest.param(
+            {"depth": 10.0, "resolution_z": 30.0},
+            ValueError,
+            "at least resolution_z",
+            id="depth-below-resolution",
+        ),
     ],
 )
 def test_config_rejects_bad_sites(
@@ -304,6 +310,14 @@ def test_resolution_z_sets_the_sample_count(synthetic_surface: Path) -> None:
     finer = _build(_config(synthetic_surface, depth=600.0, resolution_z=25.0))
     assert finer.sizes[Coordinate.K] == 25
     assert float(finer.depth.max()) == pytest.approx(600.0)
+
+
+def test_depth_off_the_resolution_keeps_the_spacing(synthetic_surface: Path) -> None:
+    """Every depth is a multiple of the requested spacing, and the column reaches at
+    least `depth`."""
+    grid = _build(_config(synthetic_surface, depth=1010.0, resolution_z=25.0))
+    depths = grid.depth.values[0, 0]
+    assert depths == pytest.approx(np.arange(42) * 25.0)
 
 
 def test_columns_sit_over_the_projected_site(grid: Grid) -> None:

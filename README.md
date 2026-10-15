@@ -239,7 +239,8 @@ outputs include both sets of coordinates.
 
 `grid.type = "borehole"` extracts one vertical profile per site rather than
 filling a volume. Each column runs from the topography down to `depth` at a
-fixed `resolution_z`. The profiles line up sample for sample and compare
+fixed `resolution_z` (rounded up to the next multiple of `resolution_z` when
+`depth` isn't one). The profiles line up sample for sample and compare
 directly.
 
 ```toml

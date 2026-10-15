@@ -1,4 +1,4 @@
-"""Tests for EMOD3D and SW4 grid builders.
+"""Tests for the EMOD3D, SW4 and regular grid builders.
 
 Every test here builds on a synthetic flat surface, z=0 everywhere, so nothing
 reads a real data file.
@@ -15,6 +15,7 @@ from pyproj import CRS
 
 from nzcvm.config.grids.emod3d import EMOD3DGrid
 from nzcvm.config.grids.model import Model
+from nzcvm.config.grids.regular import RegularGridConfig
 from nzcvm.config.grids.sw4 import MeshRefinement, SW4GridConfig
 from nzcvm.config.grids.terrain import SquashedDecay
 from nzcvm.coordinates import Coordinate
@@ -368,3 +369,54 @@ class TestSW4RefinementSeams:
         depths = grid.z.isel(i=0, j=0).compute().values.astype(np.float64)
         diffs = np.abs(np.diff(depths))
         assert list(diffs) == pytest.approx([res] * len(diffs), rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Regular grid builder
+# ---------------------------------------------------------------------------
+
+
+def _regular_config(
+    flat_surface: Path, *, thickness: float, resolution_z: float
+) -> RegularGridConfig:
+    return RegularGridConfig(
+        surface=flat_surface,
+        extent_x=2000.0,
+        extent_y=2000.0,
+        thickness=thickness,
+        resolution_x=1000.0,
+        resolution_y=1000.0,
+        resolution_z=resolution_z,
+        orientation=_model(),
+    )
+
+
+class TestRegularDepthAxis:
+    @pytest.mark.parametrize(
+        ("thickness", "resolution_z", "expected"),
+        [
+            (900.0, 300.0, [0.0, 300.0, 600.0, 900.0]),
+            # Not a multiple: keep the spacing and carry the bottom on past it.
+            (1000.0, 300.0, [0.0, 300.0, 600.0, 900.0, 1200.0]),
+            # 2.1 / 0.3 is 7.000000000000001 in floating point.
+            (2.1, 0.3, [0.3 * k for k in range(8)]),
+        ],
+    )
+    def test_spacing_is_exactly_resolution_z(
+        self,
+        flat_surface: Path,
+        thickness: float,
+        resolution_z: float,
+        expected: list[float],
+    ) -> None:
+        grid = _first_grid_of(
+            _regular_config(
+                flat_surface, thickness=thickness, resolution_z=resolution_z
+            )
+        )
+        depths = grid.depth.isel(i=0, j=0).values
+        assert depths == pytest.approx(expected, rel=1e-6)
+
+    def test_thickness_below_resolution_z_rejected(self, flat_surface: Path) -> None:
+        with pytest.raises(ValueError, match="at least resolution_z"):
+            _regular_config(flat_surface, thickness=10.0, resolution_z=30.0)

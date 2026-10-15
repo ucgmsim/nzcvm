@@ -27,8 +27,9 @@ class RegularGridConfig(GridConfig):
     extent_x, extent_y :
         Physical extent of the grid in metres along each horizontal axis.
     thickness :
-        Total depth/thickness of the model in metres. The invariant maintained
-        is that the bottom surface perfectly follows the top surface at this depth.
+        Total depth/thickness of the model in metres, at least *resolution_z*.
+        The bottom surface perfectly follows the top surface at this depth,
+        rounded up to the next multiple of *resolution_z*.
     resolution_x, resolution_y, resolution_z :
         Spatially independent grid resolutions in metres.
     azimuth :
@@ -63,3 +64,11 @@ class RegularGridConfig(GridConfig):
     chunks: dict[Coordinate, int] = field(default_factory=lambda: DEFAULT_CHUNK_SIZES)
 
     type: Literal["regular"] = "regular"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.thickness < self.resolution_z:
+            raise ValueError(
+                f"thickness ({self.thickness}) must be at least resolution_z"
+                f" ({self.resolution_z})."
+            )
