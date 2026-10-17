@@ -59,11 +59,10 @@ class ConfigObject(
                         msg=str(e),
                     ) from e
 
-    # Declared as ``type[BaseConfig]`` rather than a nested class so that
-    # subclasses can override it with their own ``class Config(...)``
-    # without ty flagging an invalid attribute override. Only type checkers
-    # see the annotation: mashumaro would treat it as a field.
-    if TYPE_CHECKING:
-        Config: type[BaseConfig]
-    else:
+    # Hidden from type checkers so that subclasses can define their own
+    # nested ``class Config(...)`` without ty flagging an invalid override.
+    # ty rejects every base declaration it can see (a nested class, a
+    # ``type[BaseConfig]`` or ``ClassVar`` annotation, ``Final``). Only
+    # mashumaro reads ``Config``, and it does so at runtime.
+    if not TYPE_CHECKING:
         Config = ConfigObjectConfig
