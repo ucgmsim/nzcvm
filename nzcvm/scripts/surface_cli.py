@@ -64,6 +64,13 @@ def resample_upright(
     )
 
 
+def _positive_spacing(spacing: float | None) -> float | None:
+    """Reject a zero or negative ``--spacing``, which has no grid."""
+    if spacing is not None and spacing <= 0.0:
+        raise typer.BadParameter(f"{spacing} is not positive.")
+    return spacing
+
+
 @app.command()
 def convert(
     surface: Annotated[
@@ -83,7 +90,7 @@ def convert(
         float | None,
         typer.Option(
             help="Grid spacing in metres. Defaults to the source's median spacing.",
-            min=0.0,
+            callback=_positive_spacing,
         ),
     ] = None,
 ) -> None:

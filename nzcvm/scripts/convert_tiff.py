@@ -68,7 +68,9 @@ def main(
     tiff_path: Path,
     band: int,
     output_path: Path,
-    downsample: int = 1,
+    downsample: Annotated[
+        int, typer.Option(min=1, help="Average blocks of this many pixels.")
+    ] = 1,
     flip: Annotated[
         bool, typer.Option(help="Negate the values, as for elevation to depth.")
     ] = False,
@@ -87,7 +89,9 @@ def main(
         output_path.stem, dset["band_data"].sel(band=band), downsample, flip
     )
     surface = surface.chunk({"y": SURFACE_CHUNK_SIZE, "x": SURFACE_CHUNK_SIZE})
-    surface.to_zarr(output_path, encoding=DEFAULT_STRUCTURED_ENCODING_SETTINGS)
+    surface.to_zarr(
+        output_path, encoding=DEFAULT_STRUCTURED_ENCODING_SETTINGS, mode="w"
+    )
 
 
 if __name__ == "__main__":
