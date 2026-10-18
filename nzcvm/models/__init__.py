@@ -4,7 +4,7 @@ This subpackage contains the core data representations and I/O routines for
 NZCVM velocity models:
 
 :mod:`nzcvm.models.mesh`
-    VTKHDF-backed mesh I/O for tetrahedral and structured grids.
+    xarray schemas and zarr encodings for tetrahedral and structured grids.
 
 :mod:`nzcvm.models.surface`
     Surface interpolation for topography-based depth transforms.

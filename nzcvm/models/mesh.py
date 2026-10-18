@@ -1,8 +1,8 @@
 """Mesh I/O utilities for NZCVM.
 
-Provides dataclass representations and VTKHDF-backed I/O for the two mesh
-types used by NZCVM: tetrahedral unstructured grids (velocity model meshes)
-and structured grids (topographic surfaces).
+Provides the xarray dataset schemas, and their zarr encodings, for the two
+mesh types used by NZCVM: tetrahedral unstructured grids (velocity model
+meshes) and structured grids (topographic surfaces).
 """
 
 from __future__ import annotations
@@ -299,27 +299,30 @@ def make_mesh(
     Parameters
     ----------
     name :
-        Optional human-readable name for the model.  Stored in
-        ``field_data["name"]`` when provided so it survives VTKHDF
-        round-trips and reaches :func:`~nzcvm.model.MeshModel`.
+        Human-readable name for the model. Stored as the ``name`` attribute,
+        which a zarr round trip keeps and :class:`~nzcvm.models.model.MeshModel`
+        reads.
     vertical :
         Whether vertex ``z`` stores negated elevation or depth below the
-        topography.
+        topography. Stored as the ``vertical`` attribute.
     aabb :
         ``[min_x, min_y, min_z, max_x, max_y, max_z]`` of where the model
-        lies, with ``z`` negated elevation.
+        lies, with ``z`` negated elevation. Stored as the ``aabb``
+        attribute.
     points :
         ``(N, 3)`` float32 array of vertex coordinates.
     connectivity :
         ``(M, 4)`` integer array of tetrahedral cell vertex indices.
     cell_data :
-        Per-cell arrays: ``model_type`` (one :class:`ModelType` for the
-        whole mesh) and ``priority``.
+        Per-tetrahedron ``(M,)`` arrays: ``model_type`` (a :class:`ModelType`
+        value) and ``priority``. Loading a mesh as a model requires every
+        cell to share one model type, and reads the priority of the first.
     field_data :
-        Per-model arrays such as ``rho``, ``vp``, ``vs``, ``qp``, ``qs``,
-        ``alpha`` and ``priority``.
+        Per-vertex ``(N,)`` arrays: ``rho``, ``vp``, ``vs``, ``qp``, ``qs``
+        and ``alpha``.
     geometry :
-        Optional footprint of the mesh, stored alongside the mesh data.
+        Optional footprint of the mesh, stored as the ``geometry``
+        attribute.
     depth_profile :
         The :class:`DepthProfileSchema` variables (``depth`` and the
         ``profile_*`` arrays), required when any cell has type

@@ -178,7 +178,7 @@ def main(
     models: Annotated[
         list[Path],
         typer.Argument(
-            help="One or more VTKHDF model files to load.",
+            help="One or more zarr model meshes to load.",
             exists=True,
             file_okay=True,
             dir_okay=False,

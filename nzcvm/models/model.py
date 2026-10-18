@@ -209,8 +209,8 @@ class MeshModel:
             A :class:`~nzcvm.models.mesh.TetrahedralMesh` with the NZCVM cell and
             field data layout (see :func:`nzcvm.models.mesh.make_mesh`).
         name :
-            Optional human-readable name.  Takes precedence over any name
-            stored in ``mesh.field_data["name"]``.
+            Optional human-readable name.  Takes precedence over the mesh's
+            ``name`` attribute.
 
         Returns
         -------
@@ -308,7 +308,7 @@ class MeshModel:
 class ModelTree:
     """A velocity model backed by a Rust BVH tree of tetrahedral meshes.
 
-    Wraps one or more :class:`MeshModel` instances (or VTKHDF mesh files)
+    Wraps one or more :class:`MeshModel` instances (or zarr mesh stores)
     into a priority-ordered spatial index.  Queries return blended
     :class:`Quality` values at arbitrary 3D coordinates.
 
@@ -330,12 +330,14 @@ class ModelTree:
 
     @classmethod
     def load_models(cls, models: Iterable[Path]) -> Self:
-        """Load a velocity model from one or more VTKHDF files or a directory.
+        """Load a velocity model from one or more mesh stores.
 
         Parameters
         ----------
         models : iterable of path
-            Paths to individual models.
+            Paths to individual meshes, each an xarray dataset written by
+            ``to_zarr`` (see :func:`nzcvm.models.mesh.mesh_encoding`). A
+            directory of meshes isn't expanded, so pass each mesh.
 
         Returns
         -------
@@ -344,10 +346,10 @@ class ModelTree:
 
         Examples
         --------
-        Load all mesh files in a directory (requires data files to exist):
+        Load every mesh in a directory (requires data files to exist):
 
         >>> from pathlib import Path
-        >>> ModelTree.load_models([Path("/path/to/models")])  # doctest: +SKIP
+        >>> ModelTree.load_models(Path("/path/to/models").glob("*.zarr"))  # doctest: +SKIP
         """
 
         mesh_models = []
@@ -374,7 +376,7 @@ class ModelTree:
 
         See Also
         --------
-        ModelTree.load_models : Load from VTKHDF files on disk.
+        ModelTree.load_models : Load from zarr mesh stores on disk.
         nzcvm.models.mesh.make_mesh : Create a compatible :class:`~nzcvm.models.mesh.TetrahedralMesh`.
         """
         raw_mesh_model = _mesh_model_from_tetra(mesh_model)

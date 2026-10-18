@@ -2,4 +2,4 @@
 
 import typer
 
-app = typer.Typer(help="Interactively visualise a VTKHDF volumetric mesh.")
+app = typer.Typer(help="Interactively visualise a zarr volumetric mesh.")
