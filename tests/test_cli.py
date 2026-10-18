@@ -1,9 +1,9 @@
 """Command-line smoke tests.
 
 These tests check that every top-level subcommand accepts ``--help`` and
-exits cleanly (exit code 0), and that out-of-range options are rejected as
-usage errors before any work starts.  These tests don't read a data file or
-load a model configuration.
+exits cleanly (exit code 0), and that commands reject out-of-range options
+as usage errors before any work starts.  These tests don't read a data file
+or load a model configuration.
 """
 
 from pathlib import Path
