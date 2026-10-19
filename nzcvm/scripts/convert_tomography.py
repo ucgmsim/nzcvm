@@ -1,4 +1,4 @@
-"""Convert a CSV tomography model to a VTKHDF tetrahedral mesh."""
+"""Convert a CSV tomography model to a zarr tetrahedral mesh."""
 
 from dataclasses import dataclass
 from enum import StrEnum, auto
@@ -258,7 +258,7 @@ MODEL_COLUMNS = {
 }
 
 app = typer.Typer(
-    help="Convert a CSV-like tomography model to a VTKHDF tetrahedral mesh."
+    help="Convert a CSV-like tomography model to a zarr tetrahedral mesh."
 )
 
 
