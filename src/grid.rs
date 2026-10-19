@@ -94,16 +94,40 @@ impl StructuredGrid {
         let quadratic = cross(a, c);
         let linear = cross(a, b) - cross(q, c);
         let constant = -cross(q, b);
-        // The cells are nearly parallelograms, so the quadratic coefficient is
-        // nearly zero. This form of the smaller root avoids the cancellation
-        // the textbook formula suffers there, and reduces to the linear
-        // solution when the cell is a parallelogram.
+        // Both roots in the stable pair: `constant / root` avoids the
+        // cancellation the textbook formula suffers when the cell is nearly a
+        // parallelogram, and reduces to the linear solution when it is one.
+        // The other root, `root / quadratic`, exists only for a curved cell.
         let discriminant = (linear * linear - 4.0 * quadratic * constant).max(0.0);
         let root = -0.5 * (linear + linear.signum() * discriminant.sqrt());
-        let t = constant / root;
-        let d = b + t * c;
-        let s = (q - t * a).dot(&d) / d.norm_squared();
-        (t, s)
+        let solve = |t: f64| {
+            let d = b + t * c;
+            let s = (q - t * a).dot(&d) / d.norm_squared();
+            (t, s)
+        };
+        // The root inside the cell is the one we want. Points outside it may
+        // lie outside both, so keep whichever pair is closest to the cell. A
+        // root where the cell's cross-section collapses (`b + t c = 0`)
+        // leaves `s` undefined and is never chosen over a finite one.
+        let excess = |v: f64| (-v).max(v - 1.0).max(0.0);
+        let distance = |(t, s): (f64, f64)| {
+            let distance = excess(t) + excess(s);
+            if distance.is_nan() {
+                f64::INFINITY
+            } else {
+                distance
+            }
+        };
+        let first = solve(constant / root);
+        if quadratic == 0.0 {
+            return first;
+        }
+        let second = solve(root / quadratic);
+        if distance(second) < distance(first) {
+            second
+        } else {
+            first
+        }
     }
 
     /// Interpolate the grid bilinearly at the point `(px, py)`.
@@ -246,6 +270,25 @@ mod tests {
         }
     }
 
+    /// A trapezoid whose far edge is three times its near edge. The spurious
+    /// root is negative and smaller in magnitude than the true one, and at
+    /// `s = 0.5` it collapses the cell's cross-section.
+    #[test]
+    fn test_inverts_widening_trapezoid_cell() {
+        let x = Array2::from_shape_vec((2, 2), vec![0.0, 10.0, 0.0, 30.0]).unwrap();
+        let y = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 10.0, 10.0]).unwrap();
+        let values = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 1.0]).unwrap();
+        let g = StructuredGrid::new(x, y, values).unwrap();
+        for (t, s) in [(0.2, 0.5), (0.5, 0.5), (0.9, 0.5), (0.9, 0.1), (0.99, 0.99)] {
+            let (px, py) = (s * 10.0 + t * s * 20.0, t * 10.0);
+            for clamp in [false, true] {
+                let (got, outside) = g.query(px, py, clamp);
+                assert!(!outside, "({t}, {s}) reported outside");
+                assert!((got - t).abs() < 1e-9, "at ({t}, {s}): {got}");
+            }
+        }
+    }
+
     #[test]
     fn test_rejects_mismatched_shapes() {
         let a = Array2::<f64>::zeros((3, 3));
@@ -263,6 +306,49 @@ mod tests {
             let (got, outside) = g.query(px, py, false);
             prop_assert!(!outside);
             prop_assert!((got - field(j, k)).abs() < 1e-6, "{got} != {}", field(j, k));
+        }
+
+        /// Every point of a random convex quadrilateral maps back to the local
+        /// coordinates it was built from.
+        #[test]
+        fn prop_inverts_convex_quad(
+            far in prop::array::uniform2(-0.9f64..0.9),
+            spread in 0.1f64..3.0,
+            t in 0.0f64..1.0,
+            s in 0.0f64..1.0,
+        ) {
+            // A unit-height trapezoid-like quad: near edge (0, 0)-(1, 0), far
+            // edge from (far[0], 1) to (far[0] + spread, 1) skewed by far[1].
+            let corners = [
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (far[0], 1.0),
+                (far[0] + spread, 1.0 + far[1]),
+            ];
+            // Walking the boundary (0, 0) → (0, 1) → (1, 1) → (1, 0), every
+            // turn must have the same sign for the quad to be convex.
+            let ring = [corners[0], corners[1], corners[3], corners[2]];
+            let turns: Vec<f64> = (0..4)
+                .map(|i| {
+                    let (p, q, r) = (ring[i], ring[(i + 1) % 4], ring[(i + 2) % 4]);
+                    (q.0 - p.0) * (r.1 - q.1) - (q.1 - p.1) * (r.0 - q.0)
+                })
+                .collect();
+            prop_assume!(turns.iter().all(|&turn| turn > 1e-3));
+            let x = Array2::from_shape_vec((2, 2), corners.iter().map(|c| c.0).collect()).unwrap();
+            let y = Array2::from_shape_vec((2, 2), corners.iter().map(|c| c.1).collect()).unwrap();
+            let values = Array2::from_shape_vec((2, 2), vec![0.0, 0.0, 1.0, 1.0]).unwrap();
+            let blend = |a: &Array2<f64>| {
+                (1.0 - t) * (1.0 - s) * a[[0, 0]]
+                    + (1.0 - t) * s * a[[0, 1]]
+                    + t * (1.0 - s) * a[[1, 0]]
+                    + t * s * a[[1, 1]]
+            };
+            let (px, py) = (blend(&x), blend(&y));
+            let g = StructuredGrid::new(x, y, values).unwrap();
+            let (got, outside) = g.query(px, py, false);
+            prop_assert!(!outside, "({t}, {s}) reported outside");
+            prop_assert!((got - t).abs() < 1e-7, "{got} != {t}");
         }
     }
 }
