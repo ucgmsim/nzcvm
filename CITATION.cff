@@ -1,0 +1,29 @@
+# Zenodo reads this file when it archives a GitHub release. `version` and
+# `date-released` are left out on purpose: Zenodo takes both from the release
+# tag, so they never go stale here. Do not add a .zenodo.json alongside this
+# file, as Zenodo would use it and ignore this one.
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "NZCVM: New Zealand Community Velocity Model"
+abstract: >-
+  Tools for building and querying tetrahedral seismic velocity models of
+  New Zealand. A velocity model is a collection of tetrahedral meshes holding
+  seismic velocity (Vp, Vs), density and quality factors (Qp, Qs). NZCVM
+  samples those meshes onto a structured 3D grid, applies a chain of
+  processing layers, and writes the result in formats read by ground motion
+  simulation codes.
+authors:
+  - given-names: Jake
+    family-names: Faulkner
+    email: jake.faulkner@canterbury.ac.nz
+    affiliation: University of Canterbury
+repository-code: "https://github.com/ucgmsim/nzcvm"
+url: "https://github.com/ucgmsim/nzcvm"
+license: MIT
+keywords:
+  - seismology
+  - velocity model
+  - ground motion simulation
+  - tetrahedral mesh
+  - New Zealand

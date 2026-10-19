@@ -1,0 +1,20 @@
+name: Validate CITATION.cff
+
+# Zenodo builds each release's archive record from CITATION.cff, and silently
+# falls back to bare repository metadata if the file does not parse.
+on:
+  pull_request:
+    paths: [CITATION.cff]
+  push:
+    branches: [master]
+    paths: [CITATION.cff]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: citation-file-format/cffconvert-github-action@2.0.0
+        with:
+          args: "--validate"

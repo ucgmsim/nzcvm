@@ -910,3 +910,15 @@ decode once something imports `nzcvm.layers`, which `nzcvm generate` always
 does. A plugin that fails to import logs a warning rather than breaking NZCVM.
 `nzcvm plugins` lists every available layer, grid, and format, which package
 provides it, and any plugin that failed to load.
+
+## Citation
+
+[Zenodo](https://zenodo.org) archives every GitHub release of NZCVM and gives
+each one its own digital object identifier (DOI). To cite NZCVM, use "Cite
+this repository" on the GitHub repository page, or the metadata in
+[`CITATION.cff`](CITATION.cff). Cite the DOI of the release you used so that
+others can reproduce your results.
+
+## License
+
+NZCVM uses the MIT License. See [`LICENSE`](LICENSE) for the full text.
