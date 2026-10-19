@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8", "setuptools-rust>=1.11"]
+requires = ["setuptools>=77", "setuptools-scm>=8", "setuptools-rust>=1.11"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "nzcvm"
 authors = [{ name = "ucgmsim" }]
 description = "New Zealand Community Velocity Model"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 # Python 3.15 is blocked by h5py (used directly, and through hdf5plugin
 # and h5netcdf). h5py has no cp315 wheels on PyPI yet (they are expected with h5py 3.17,
 # see https://github.com/h5py/h5py/issues/2972), and building it from the

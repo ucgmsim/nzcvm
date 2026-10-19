@@ -18,6 +18,8 @@ NZCVM
 [Bb]ackus
 DEM
 GTL
+DOI
+MIT
 CRS
 EPSG
 NZTM2000
@@ -61,6 +63,7 @@ YAML
 [Pp]y[Vv]ista
 [Gg]eo[Tt]IFF
 [Rr]uff
+Zenodo
 
 # Ordinary technical English that Vale's dictionary lacks
 [Cc]onfigs?
