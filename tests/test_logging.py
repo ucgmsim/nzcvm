@@ -1,7 +1,7 @@
 """Tests for :mod:`nzcvm.logging`.
 
 Covers the background :class:`ResourceMonitor`, the :class:`LogProgress`
-dask callback and :func:`configure_logging`. The monitor loop is driven
+dask callback and :func:`configure_logging`. The tests step the monitor loop
 synchronously with stubbed clocks and disk counters so the reported rates
 are deterministic.
 """
@@ -142,7 +142,7 @@ def test_resource_monitor_stops_on_metric_error(
     caplog: pytest.LogCaptureFixture,
     error: Exception,
 ) -> None:
-    """A psutil metric error is logged as a warning and ends the loop."""
+    """A psutil metric error logs a warning and ends the loop."""
     monkeypatch.setattr(
         nzlogging, "time", SimpleNamespace(time=lambda: 0.0, sleep=lambda _: None)
     )
@@ -189,7 +189,7 @@ def test_resource_monitor_context_runs_and_joins_thread(
 def test_resource_monitor_disabled_level_starts_nothing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """If the logger ignores the level, no thread is started and nothing logged."""
+    """If the logger ignores the level, entering the monitor is a no-op."""
     with caplog.at_level(logging.WARNING, logger="ResourceMonitor"):
         monitor = ResourceMonitor(interval=0.01, level=logging.INFO)
         with monitor as entered:
@@ -222,7 +222,7 @@ def _progress_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
 def test_log_progress_logs_each_interval_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Progress is logged at multiples of the interval, skipping repeats."""
+    """Progress logs at multiples of the interval, skipping repeats."""
     progress = LogProgress(log_interval=25)
     dependencies = {i: set() for i in range(8)}
     with caplog.at_level(logging.INFO, logger="dask_progress"):
@@ -240,7 +240,7 @@ def test_log_progress_logs_each_interval_once(
 
 
 def test_log_progress_rounds_percentage(caplog: pytest.LogCaptureFixture) -> None:
-    """The percentage is rounded to the nearest integer before the check."""
+    """The check rounds the percentage to the nearest integer first."""
     progress = LogProgress(log_interval=33)
     with caplog.at_level(logging.INFO, logger="dask_progress"):
         progress._pretask(
@@ -325,7 +325,7 @@ def test_configure_logging_console(capsys: pytest.CaptureFixture[str]) -> None:
 
 @pytest.mark.usefixtures("restore_logging")
 def test_configure_logging_file(tmp_path: Path) -> None:
-    """With a path, parent directories are created and records go to the file."""
+    """With a path, it creates parent directories and writes records to the file."""
     log_path = tmp_path / "nested" / "dir" / "run.log"
     configure_logging("DEBUG", log_path)
 
