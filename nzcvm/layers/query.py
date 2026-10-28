@@ -45,6 +45,13 @@ class QueryLayer(Layer[QueryLayerConfig], config_cls=QueryLayerConfig):
                 if _model_intersects_geometry(p, geometry)
             }
         )
+        if not models:
+            # An empty model tree queries as zeros everywhere, so a missing
+            # model would otherwise go unnoticed.
+            raise ValueError(
+                f"No models matching {config.model_globs} found under "
+                f"{config.model_path} that intersect the model geometry"
+            )
         logger.info(
             f"Loading {len(models)} models ({', '.join(str(m) for m in sorted(models))}) for querying"
         )
