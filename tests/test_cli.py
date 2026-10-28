@@ -6,6 +6,7 @@ as usage errors before any work starts.  These tests don't read a data file
 or load a model configuration.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,13 @@ from typer.testing import CliRunner
 from nzcvm.scripts.nzcvm_cli import app
 
 runner = CliRunner()
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(output: str) -> str:
+    """Strip the colour codes Rich adds when CI forces colour."""
+    return ANSI.sub("", output)
 
 
 @pytest.mark.parametrize(
@@ -47,7 +55,7 @@ def test_surface_convert_rejects_non_positive_spacing(
         + ["--spacing", spacing],
     )
     assert result.exit_code == 2
-    assert "--spacing" in result.output
+    assert "--spacing" in plain(result.output)
 
 
 @pytest.mark.parametrize("downsample", ["0", "-2"])
@@ -60,4 +68,4 @@ def test_convert_tiff_rejects_non_positive_downsample(
         + [str(tmp_path / "out.zarr"), "--downsample", downsample],
     )
     assert result.exit_code == 2
-    assert "--downsample" in result.output
+    assert "--downsample" in plain(result.output)
