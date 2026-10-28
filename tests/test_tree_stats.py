@@ -1,7 +1,7 @@
 """Tests for the ``nzcvm tree-stats`` benchmark.
 
-The NZ land polygon is downloaded from Natural Earth, so these tests swap it
-for a small polygon around a two-tetrahedron mesh.
+Natural Earth serves the NZ land polygon. These tests swap it for a small
+polygon around a two-tetrahedron mesh.
 """
 
 import io
@@ -138,7 +138,7 @@ def test_get_nz_land_polygon_is_cached_on_disk(
 
 
 # ---------------------------------------------------------------------------
-# run_benchmark and the CLI
+# run_benchmark and the command line
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +176,7 @@ def test_run_benchmark_report(
     n = 60
     expected_hits = _expected_hits(mesh_zarr, n, seed=1)
     # Points in the land box with x + y + z > 1 miss the first tetrahedron;
-    # check that both outcomes occur so the hit rate is meaningful.
+    # check that both outcomes occur so the hit rate is informative.
     assert 0 < expected_hits < n
 
     output = tmp_path / "bench.parquet"
@@ -197,7 +197,7 @@ def test_run_benchmark_report(
     assert f"{expected_hits / n * 100:.1f}%" in report
     assert f"{df['simplex_tests'].max():.0f}" in report
     assert "Query Time Distribution" in report
-    # Each of the 20 histogram bins prints its count; they sum to n.
+    # Each of the 20 histogram bins prints its count. The counts sum to n.
     bin_rows = [line for line in report.splitlines() if "μ " in line]
     assert len(bin_rows) == 20
     assert sum(int(row.split()[-2]) for row in bin_rows) == n
@@ -206,7 +206,7 @@ def test_run_benchmark_report(
 
 
 def test_cli_writes_parquet(captured_console: io.StringIO, tmp_path: Path) -> None:
-    # The CLI only accepts files, so store the mesh as netCDF. netCDF can't
+    # The command line only accepts files, so store the mesh as netCDF. netCDF can't
     # store ``None`` attributes.
     mesh = _tetrahedral_mesh()
     mesh.attrs = {k: v for k, v in mesh.attrs.items() if v is not None}
