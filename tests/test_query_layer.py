@@ -24,19 +24,19 @@ def _write_mesh(path: Path) -> None:
 def test_default_globs_find_zarr_meshes(tmp_path: Path) -> None:
     """The default ``model_globs`` loads the zarr meshes the package writes."""
     _write_mesh(tmp_path / "basin.zarr")
-    layer = QueryLayer(QueryLayerConfig(model_path=tmp_path), GEOMETRY, None)
+    layer = QueryLayer(QueryLayerConfig(model_path=tmp_path), GEOMETRY, None)  # ty: ignore[invalid-argument-type]
 
     x = y = 0.25 * SIDE
     z = _topography_at(x, y) + 200.0
-    point = [np.array([v], dtype=np.float32) for v in (x, y, z, 200.0)]
-    out = layer.model._query_many_raw(*point)
+    xs, ys, zs, depths = (np.array([v], dtype=np.float32) for v in (x, y, z, 200.0))
+    out = layer.model._query_many_raw(xs, ys, zs, depths)
     assert out[0, 2] == 800.0
 
 
 def test_no_matching_models_is_an_error(tmp_path: Path) -> None:
-    """A query layer that finds no models fails instead of returning zeros."""
+    """A query layer with no matching models raises instead of returning zeros."""
     _write_mesh(tmp_path / "basin.zarr")
     config = QueryLayerConfig(model_path=tmp_path, model_globs=["*.vtkhdf"])
     with pytest.raises(ValueError, match=r"\*\.vtkhdf") as excinfo:
-        QueryLayer(config, GEOMETRY, None)
+        QueryLayer(config, GEOMETRY, None)  # ty: ignore[invalid-argument-type]
     assert str(tmp_path) in str(excinfo.value)

@@ -46,8 +46,8 @@ class QueryLayer(Layer[QueryLayerConfig], config_cls=QueryLayerConfig):
             }
         )
         if not models:
-            # An empty model tree queries as zeros everywhere, so a missing
-            # model would otherwise go unnoticed.
+            # An empty model tree queries as zeros everywhere. Fail here so a
+            # missing model doesn't pass silently.
             raise ValueError(
                 f"No models matching {config.model_globs} found under "
                 f"{config.model_path} that intersect the model geometry"
