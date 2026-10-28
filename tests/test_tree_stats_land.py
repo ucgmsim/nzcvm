@@ -1,6 +1,6 @@
 """Tests for how ``nzcvm tree-stats`` reads the New Zealand land polygon.
 
-The real polygon is downloaded from Natural Earth, so these tests replace
+Natural Earth serves the real polygon. These tests replace
 ``geopandas.read_file`` with a small stand-in world and run offline.
 """
 
@@ -22,7 +22,7 @@ def world_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         {"ADMIN": ["Australia", "New Zealand", "New Zealand"]},
         geometry=[
             shapely.box(140.0, -30.0, 150.0, -20.0),
-            # Two boxes around Wellington and Auckland.
+            # Boxes around Wellington and Auckland.
             shapely.box(174.7, -41.4, 174.9, -41.2),
             shapely.box(174.6, -37.0, 174.9, -36.8),
         ],
@@ -44,7 +44,7 @@ def test_read_nz_land_polygon_selects_new_zealand_in_nztm(
     polygon = tree_stats._read_nz_land_polygon()
 
     assert world_reads == [NATURAL_EARTH_URL]
-    # Both New Zealand pieces are merged into one geometry.
+    # The query merges both New Zealand pieces into one geometry.
     assert polygon.geom_type == "MultiPolygon"
     assert len(polygon.geoms) == 2
     # The geometry is in NZTM metres, and excludes Australia.
