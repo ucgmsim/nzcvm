@@ -22,7 +22,7 @@ from rich.console import Console
 from nzcvm.models.mesh import ModelType, Vertical, make_mesh, mesh_encoding
 from nzcvm.scripts import tree_stats
 
-# NZTM origin of the test mesh, so the samples land on real NZ coordinates.
+# NZTM origin of the test mesh, placing the samples at real NZ coordinates.
 X0, Y0 = 1_570_000.0, 5_180_000.0
 SIDE = 1000.0
 
@@ -103,7 +103,7 @@ def test_read_nz_land_polygon_keeps_nz_in_nztm(
         "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip"
     ]
     expected = gpd.GeoSeries([nz_lonlat], crs="EPSG:4326").to_crs(epsg=2193)[0]
-    # Australia is dropped and New Zealand reprojected to NZTM metres.
+    # The query drops Australia and reprojects New Zealand to NZTM metres.
     assert land.equals_exact(expected, tolerance=1e-6)
     minx, miny, maxx, maxy = land.bounds
     assert 1_400_000 < minx < maxx < 1_700_000
@@ -145,7 +145,7 @@ def test_land_polygon_is_cached_between_calls(
     assert first.equals(_square(0.0, 1.0))
     assert second.equals(first)
     assert _reads == [1]
-    # The cache lives under the nzcvm user cache directory.
+    # The cache sits in the nzcvm user cache directory.
     assert any((tmp_path / "nzcvm").rglob("*"))
 
 
@@ -226,7 +226,7 @@ def test_save_to_parquet_converts_to_lonlat(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("land", "hits"),
     [
-        # Near the right angle the tetrahedron covers every shallow sample.
+        # Near the right angle the tetrahedron covers the shallow samples.
         (_square(0.0, 0.3), True),
         # Past the hypotenuse, inside the bounding box but outside the mesh.
         (_square(0.6, 0.9), False),
@@ -249,13 +249,13 @@ def test_run_benchmark_reports_hits_and_writes_samples(
 
     df = pd.read_parquet(output)
     assert len(df) == n_samples
-    # Elapsed nanoseconds are reported in microseconds.
+    # The report converts elapsed nanoseconds to microseconds.
     assert (df["query_time"] > 0).all()
     assert (df["query_time"] < 1e6).all()
-    # One leaf: the tree tests the lone tetrahedron and no inner boxes.
+    # With one leaf, the tree tests the tetrahedron and no inner boxes.
     assert (df["aabb_tests"] == 0.0).all()
     assert (df["simplex_tests"] == 1.0).all()
-    # The samples were reprojected from the land polygon to lon/lat.
+    # The benchmark reprojected the samples from the land polygon to lon/lat.
     assert df["longitude"].between(171.0, 173.0).all()
     assert df["latitude"].between(-44.0, -43.0).all()
 
