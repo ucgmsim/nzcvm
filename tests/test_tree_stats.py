@@ -145,7 +145,7 @@ def test_land_polygon_is_cached_between_calls(
     assert first.equals(_square(0.0, 1.0))
     assert second.equals(first)
     assert _reads == [1]
-    # The cache sits in the nzcvm user cache directory.
+    # The cache is written to the nzcvm user cache directory.
     assert any((tmp_path / "nzcvm").rglob("*"))
 
 
