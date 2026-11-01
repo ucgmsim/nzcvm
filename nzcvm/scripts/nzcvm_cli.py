@@ -33,7 +33,6 @@ from nzcvm.scripts import (
     convert_tomography,
     surface_cli,
     synthetic,
-    tree_stats,
     view,
 )
 from nzcvm.velocity_model import VelocityModel
@@ -178,7 +177,6 @@ app = typer.Typer(help="NZCVM velocity model toolkit.")
 app.add_typer(construct_mesh.app, name="basin")
 app.add_typer(convert_tomography.app, name="tomography")
 app.add_typer(surface_cli.app, name="surface")
-app.add_typer(tree_stats.app, name="tree-stats")
 app.add_typer(view.app, name="view")
 app.add_typer(convert_tiff.app, name="convert-tiff")
 app.add_typer(synthetic.app, name="synthetic")
