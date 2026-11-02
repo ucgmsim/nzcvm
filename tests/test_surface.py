@@ -101,6 +101,33 @@ def test_transform_1d_input(flat_surface: Surface) -> None:
     assert result.shape == (2,)
 
 
+def _metre_slope() -> Surface:
+    """Plane z = (x + y) / 100 over x in [0, 300], y in [0, 200]."""
+    x = np.arange(0.0, 400.0, 100.0)
+    y = np.arange(0.0, 300.0, 100.0)
+    return Surface.from_dataset(surface_mesh("slope", np.add.outer(y, x) / 100.0, x, y))
+
+
+def test_transform_integer_coordinates_return_floats() -> None:
+    """Integer coordinates must not truncate elevations or NaN (issue #82)."""
+    s = _metre_slope()
+    z = s.transform(np.array([150, 900]), np.array([160, 900]))
+    assert np.issubdtype(z.dtype, np.floating)
+    assert z[0] == pytest.approx(3.1)
+    assert np.isnan(z[1])
+
+
+def test_transform_empty_integer_coordinates_return_floats() -> None:
+    z = _metre_slope().transform(np.array([], dtype=int), np.array([], dtype=int))
+    assert z.shape == (0,)
+    assert np.issubdtype(z.dtype, np.floating)
+
+
+def test_transform_accepts_lists() -> None:
+    z = _metre_slope().transform([150.0], [160.0])
+    assert z == pytest.approx([3.1])
+
+
 # ---------------------------------------------------------------------------
 # Pickling (registry round-trip)
 # ---------------------------------------------------------------------------
