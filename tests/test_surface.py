@@ -215,6 +215,22 @@ def test_extrapolate_leaves_inner_no_data_alone() -> None:
     assert z[1] == pytest.approx(5.5)
 
 
+def test_transform_keeps_valid_nodes_and_edges_beside_a_nan_node() -> None:
+    """A NaN node blanks only points that put weight on it.
+
+    Points on a valid node, or on an edge between two valid nodes, keep their
+    value even when another corner of their cell is NaN.
+    """
+    values = _sloped_values()
+    values[2, 2] = np.nan
+    surface = Surface.from_dataset(_unit_mesh("holed", values))
+    x = np.array([1.0, 1.0, 3.0, 1.5, 1.5, 2.5])
+    y = np.array([1.0, 1.5, 2.0, 1.0, 2.0, 2.5])
+    z = surface.transform(x, y)
+    np.testing.assert_allclose(z[:4], [11.0, 16.0, 23.0, 11.5])
+    assert np.isnan(z[4:]).all()
+
+
 def test_rotated_frame_reproduces_a_plane() -> None:
     """A surface at 45 degrees maps each query into its own frame first."""
     origin = np.array([1.5e6, 5.2e6])
