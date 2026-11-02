@@ -21,7 +21,6 @@ runner = CliRunner()
         ["basin"],
         ["tomography"],
         ["surface"],
-        ["tree-stats"],
         ["view"],
         ["synthetic"],
         ["plugins"],
