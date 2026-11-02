@@ -32,7 +32,6 @@ def plain(output: str) -> str:
         ["basin"],
         ["tomography"],
         ["surface"],
-        ["tree-stats"],
         ["view"],
         ["synthetic"],
         ["plugins"],
