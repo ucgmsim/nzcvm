@@ -167,8 +167,8 @@ class Surface:
             point falls outside the surface, unless *extrapolate* fills it.
         """
         x, y = np.asarray(x), np.asarray(y)
-        # Keep a floating input precision; anything else (e.g. integer
-        # coordinates) would truncate elevations and cannot hold NaN.
+        # Keep a floating input precision. Anything else, such as integer
+        # coordinates, would truncate elevations and can't hold NaN.
         dtype = x.dtype if np.issubdtype(x.dtype, np.floating) else np.float64
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
         frame_x, frame_y = self.to_frame(

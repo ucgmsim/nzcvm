@@ -124,7 +124,7 @@ def test_transform_empty_integer_coordinates_return_floats() -> None:
 
 
 def test_transform_accepts_lists() -> None:
-    z = _metre_slope().transform([150.0], [160.0])
+    z = _metre_slope().transform([150.0], [160.0])  # ty: ignore[invalid-argument-type]
     assert z == pytest.approx([3.1])
 
 
