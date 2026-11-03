@@ -1,4 +1,4 @@
-"""Pipeline layer for applying the Ely et al. (2010) GTL taper."""
+"""Pipeline layer for Backus averaging the next layer over each node's span."""
 
 from __future__ import annotations
 
@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 class BackusAveragedLayer(
     Layer[BackusAveragedLayerConfig], config_cls=BackusAveragedLayerConfig
 ):
+    """Backus average the next layer over the vertical span of each node.
+
+    Each node's span runs half-way to its neighbours in ``z``. On the top
+    grid the free surface truncates the first span; on a lower grid the
+    interface mirrors it. The layer samples the span ``samples`` times and
+    combines the samples, weighted by their ``alpha``: ``rho`` is the
+    arithmetic mean, ``vp`` and ``vs`` the Backus average
+    ``sqrt(1 / (<1 / (rho v^2)> <rho>))``, ``qp`` and ``qs`` the
+    ``1 / v``-weighted harmonic mean ``<1 / v> / <1 / (v Q)>``, and ``alpha``
+    the fraction of covered samples.
+    """
+
     def __init__(
         self, config: BackusAveragedLayerConfig, geometry: Geometry, next_layer: Layer
     ) -> None:
