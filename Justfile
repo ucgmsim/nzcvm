@@ -259,10 +259,11 @@ clippy:
 lint: ty ruff clippy
 
 # Rebuild the README fence diagram, docs/images/canterbury_fence.png, from a
-# fresh run of examples/canterbury.toml. Needs resources/ and models/.
+# fresh run of examples/canterbury.toml. scripts/canterbury_fence.toml places
+# the fences and sets the view. Needs resources/ and models/.
 canterbury_fence model="canterbury.zarr":
     uv run nzcvm generate examples/canterbury.toml {{ model }}
-    uv run --extra vis scripts/canterbury_fence.py {{ model }} docs/images/canterbury_fence.png
+    uv run --extra vis scripts/fence_diagram.py scripts/canterbury_fence.toml {{ model }} docs/images/canterbury_fence.png
 
 # ---------------------------------------------------------------------------
 # Synthetic data

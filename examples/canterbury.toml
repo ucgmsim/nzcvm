@@ -7,7 +7,8 @@ creator_email = "jake.faulkner@canterbury.ac.nz"
 # A 260 x 200 km box over the Canterbury Plains, from the Main Divide in the
 # west to offshore of Banks Peninsula in the east. The README fence diagram
 # (docs/images/canterbury_fence.png) is rendered from this config's output by
-# scripts/canterbury_fence.py. `just canterbury_fence` runs both steps.
+# scripts/fence_diagram.py, with the fences placed by
+# scripts/canterbury_fence.toml. `just canterbury_fence` runs both steps.
 [grid]
 type = "regular"
 surface = "./resources/dem.zarr"

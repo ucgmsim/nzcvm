@@ -1,0 +1,51 @@
+# Fence diagram for the README figure, docs/images/canterbury_fence.png.
+# Rendered by scripts/fence_diagram.py from the output of
+# examples/canterbury.toml. `just canterbury_fence` runs both steps.
+
+# Projected CRS of the model's x and y.
+crs = "EPSG:2193"
+
+[figure]
+title = "Canterbury velocity model"
+# Vertical exaggeration of the fences and relief.
+exaggeration = 3.0
+# Colour limits for Vs (m/s).
+vs_range = [300.0, 3500.0]
+cmap = "viridis_r"
+# Length of the depth scale bar (m).
+scale_bar = 5000.0
+
+[view]
+# Bearing from the scene centre to the camera, degrees clockwise from north.
+azimuth = 204.0
+# Camera angle above the horizontal, in degrees.
+elevation = 48.0
+zoom = 1.25
+
+# Each fence is a vertical section through its centre (lon, lat), running
+# from start to end along `azimuth` (degrees clockwise from grid north).
+# `length` (m) defaults to crossing the whole domain, and every fence is
+# clipped to the domain. `labels` go beside the fence's start and end.
+#
+# These four run west to east, centred in equal 50 km strips of the
+# 200 km domain, south to north.
+[[fences]]
+lon = 172.0
+lat = -44.175
+azimuth = 90.0
+labels = ["W", "E"]
+
+[[fences]]
+lon = 172.0
+lat = -43.725
+azimuth = 90.0
+
+[[fences]]
+lon = 172.0
+lat = -43.275
+azimuth = 90.0
+
+[[fences]]
+lon = 172.0
+lat = -42.825
+azimuth = 90.0
