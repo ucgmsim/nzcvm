@@ -206,12 +206,10 @@ class Surface:
             .values.reshape(4, -1)
             .astype(np.float64)
         )
-        z = (
-            (1 - tx) * (1 - ty) * corners[0]
-            + tx * (1 - ty) * corners[1]
-            + (1 - tx) * ty * corners[2]
-            + tx * ty * corners[3]
-        )
+        weights = np.stack([(1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty])
+        # Leave out a zero-weight corner so a NaN there (no data) doesn't
+        # blank a point on a valid node or on an edge between valid nodes.
+        z = np.where(weights == 0, 0.0, weights * corners).sum(axis=0)
         if not extrapolate:
             z[outside] = np.nan
         logger.debug("Query complete.")
