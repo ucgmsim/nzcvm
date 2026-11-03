@@ -52,6 +52,45 @@ def test_query_many_raw_nd_shape(unit_tetrahedron_tree, nx: int, ny: int) -> Non
     assert result.shape == (nx, ny, 6)
 
 
+def test_query_many_raw_fills_and_returns_out(unit_tetrahedron_tree) -> None:
+    model = ModelTree(unit_tetrahedron_tree)
+    x = np.full(3, 0.1, dtype=np.float32)
+    out = np.zeros((3, 6), dtype=np.float32)
+    result = model._query_many_raw(x, x, x, x, out=out)
+    assert result is out
+    assert np.all(out[:, 2] > 0)
+
+
+def test_query_many_raw_where_leaves_masked_rows(unit_tetrahedron_tree) -> None:
+    model = ModelTree(unit_tetrahedron_tree)
+    x = np.full(3, 0.1, dtype=np.float32)
+    out = np.full((3, 6), -1.0, dtype=np.float32)
+    where = np.array([True, False, True])
+    result = model._query_many_raw(x, x, x, x, out=out, where=where)
+    assert result is out
+    assert np.all(out[1] == -1.0)
+    assert np.all(out[[0, 2], 2] > 0)
+
+
+@pytest.mark.parametrize(
+    "out",
+    [
+        np.zeros((3, 6), dtype=np.float64),
+        np.zeros((3, 6), dtype=np.float32, order="F"),
+        np.zeros((6, 6), dtype=np.float32)[::2],
+        np.zeros((4, 6), dtype=np.float32),
+    ],
+    ids=["float64", "fortran", "strided", "wrong-shape"],
+)
+def test_query_many_raw_rejects_unusable_out(
+    unit_tetrahedron_tree, out: np.ndarray
+) -> None:
+    model = ModelTree(unit_tetrahedron_tree)
+    x = np.full(3, 0.1, dtype=np.float32)
+    with pytest.raises(ValueError, match="out"):
+        model._query_many_raw(x, x, x, x, out=out)
+
+
 # ---------------------------------------------------------------------------
 # MeshModel metadata
 # ---------------------------------------------------------------------------

@@ -525,7 +525,8 @@ class ModelTree:
         out :
             Optional pre-allocated float32 array of shape ``(*x.shape, 6)``.
             Python is responsible for allocation and zeroing.  When provided,
-            the query fills it in place and returns it.
+            the query fills it in place and returns it.  It must be
+            C-contiguous.
         where :
             Optional boolean array broadcastable to ``x.shape``.  When
             provided, the query visits only points where the mask is ``True``
@@ -538,6 +539,12 @@ class ModelTree:
             ``[rho, vp, vs, qp, qs, alpha]``.  Rows for points outside every
             matching model remain zero, or keep their previous value when you
             pass *out* and *where* masks them out.
+
+        Raises
+        ------
+        ValueError
+            If the coordinate shapes differ, or if *out* is not a
+            C-contiguous float32 array of shape ``(*x.shape, 6)``.
 
         See Also
         --------
@@ -559,9 +566,20 @@ class ModelTree:
 
         if out is None:
             out = np.zeros(orig_shape + (6,), dtype=np.float32)
+        elif (
+            out.dtype != np.float32
+            or not out.flags.c_contiguous
+            or out.shape != orig_shape + (6,)
+        ):
+            raise ValueError(
+                f"out must be a C-contiguous float32 array of shape "
+                f"{orig_shape + (6,)}; got dtype={out.dtype}, shape={out.shape}, "
+                f"c_contiguous={out.flags.c_contiguous}"
+            )
 
         # Rust expects a C-contiguous (N, 6) buffer with exclusive ownership.
-        out_flat = np.ascontiguousarray(out.reshape(n, 6), dtype=np.float32)
+        # ``out`` is C-contiguous float32 here, so this reshape is a view.
+        out_flat = out.reshape(n, 6)
 
         where_flat: np.ndarray | None = None
         if where is not None:
@@ -572,7 +590,7 @@ class ModelTree:
             x.ravel(), y.ravel(), z.ravel(), depth.ravel(), where_flat
         )
         self.inner.query_many(out_flat, coords, params)
-        return out_flat.reshape(orig_shape + (6,))
+        return out
 
     def query_many(
         self,
