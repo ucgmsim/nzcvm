@@ -64,7 +64,7 @@ DEP002 = ["zfpy"]
 DEP003 = ["pyarrow"]
 
 [project.optional-dependencies]
-vis = ["pyvista>=0.47.2"]
+vis = ["pyvista>=0.47.2", "matplotlib>=3.10"]
 # `nzcvm convert-tiff`: rioxarray registers xarray's `engine="rasterio"`.
 raster = ["rioxarray>=0.22.0"]
 

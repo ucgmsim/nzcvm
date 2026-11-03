@@ -17,7 +17,9 @@ tomography blended with fourteen basin and volcanic models, a 1-D offshore
 profile, the Ely Vs30 taper, a Vp/Vs clamp, and Backus averaging over each
 depth cell. The low-velocity wedge thickening eastward is the Canterbury
 Plains sediment sequence. The high-Vs lens interrupting it on the second
-section is the Banks Peninsula volcanics.*
+section is the Banks Peninsula volcanics. `just canterbury_fence` rebuilds the
+figure: it runs `examples/canterbury.toml`, then renders the output with
+`scripts/canterbury_fence.py`.*
 
 ---
 
