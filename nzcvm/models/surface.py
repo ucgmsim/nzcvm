@@ -166,13 +166,17 @@ class Surface:
             Elevation (z) values with the same shape as *x*, NaN where a
             point falls outside the surface, unless *extrapolate* fills it.
         """
+        x, y = np.asarray(x), np.asarray(y)
+        # Keep a floating input precision. Anything else, such as integer
+        # coordinates, would truncate elevations and can't hold NaN.
+        dtype = x.dtype if np.issubdtype(x.dtype, np.floating) else np.float64
         logger.debug(f"Calculating z values for x, y (size = {x.size}).")
         frame_x, frame_y = self.to_frame(
             np.asarray(x, dtype=np.float64).ravel(),
             np.asarray(y, dtype=np.float64).ravel(),
         )
         if frame_x.size == 0:
-            return np.empty(x.shape, dtype=x.dtype)
+            return np.empty(x.shape, dtype=dtype)
 
         def cell(axis: str, position: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             # The node at or before each position, and the fraction of the
@@ -211,7 +215,7 @@ class Surface:
         if not extrapolate:
             z[outside] = np.nan
         logger.debug("Query complete.")
-        return z.reshape(x.shape).astype(x.dtype)
+        return z.reshape(x.shape).astype(dtype)
 
     def __rich_console__(
         self, _console: Console, _options: ConsoleOptions
