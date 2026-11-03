@@ -543,7 +543,7 @@ class ModelTree:
         Raises
         ------
         ValueError
-            If the coordinate shapes differ, or if *out* is not a
+            If the coordinate shapes differ, or if *out* isn't a
             C-contiguous float32 array of shape ``(*x.shape, 6)``.
 
         See Also
