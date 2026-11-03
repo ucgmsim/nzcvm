@@ -179,8 +179,8 @@ def functional_layer(func: _LayerFunc) -> GeneratedLayer:
             # Layer (acting as next_layer) or None.
             if isinstance(config, Layer):
                 next_layer = config
-            # Pass kwargs straight through so unknown (e.g. misspelt) names
-            # raise ConfigCls's own TypeError instead of being dropped.
+            # Pass kwargs straight through so unknown names (a misspelt one,
+            # say) raise ConfigCls's own TypeError instead of vanishing.
             config = ConfigCls(**kwargs)
 
         Layer.__init__(self, config, geometry, next_layer)  # ty: ignore[invalid-argument-type]

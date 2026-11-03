@@ -563,7 +563,7 @@ def test_functional_layer_rejects_unknown_keyword() -> None:
     from nzcvm.layers.dummy import constant
 
     with pytest.raises(TypeError, match="vss"):
-        constant(vss=1234.0)  # ty: ignore[unknown-argument]
+        constant(vss=1234.0)
 
 
 # ---------------------------------------------------------------------------
