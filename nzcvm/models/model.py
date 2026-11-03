@@ -508,8 +508,6 @@ class ModelTree:
         z: Any,
         depth: Any,
         model_range: ModelRange = ModelRange.ALL,
-        out: np.ndarray | None = None,
-        where: Any = None,
     ) -> np.ndarray:
         """Vectorised query returning a raw float32 array.
 
@@ -522,22 +520,13 @@ class ModelTree:
         model_range :
             Restricts the query to models whose priority falls within this
             range.  Defaults to :attr:`ModelRange.ALL`.
-        out :
-            Optional pre-allocated float32 array of shape ``(*x.shape, 6)``.
-            Python is responsible for allocation and zeroing.  When provided,
-            the query fills it in place and returns it.
-        where :
-            Optional boolean array broadcastable to ``x.shape``.  When
-            provided, the query visits only points where the mask is ``True``
-            and leaves the other rows of ``out`` unchanged.
 
         Returns
         -------
         numpy.ndarray
             Float32 array of shape ``(*x.shape, 6)`` with columns ordered as
             ``[rho, vp, vs, qp, qs, alpha]``.  Rows for points outside every
-            matching model remain zero, or keep their previous value when you
-            pass *out* and *where* masks them out.
+            matching model are zero.
 
         See Also
         --------
@@ -556,23 +545,11 @@ class ModelTree:
         n = x.size
         lo, hi = model_range.value
         params = QueryParams(lo, hi)
-
-        if out is None:
-            out = np.zeros(orig_shape + (6,), dtype=np.float32)
-
-        # Rust expects a C-contiguous (N, 6) buffer with exclusive ownership.
-        out_flat = np.ascontiguousarray(out.reshape(n, 6), dtype=np.float32)
-
-        where_flat: np.ndarray | None = None
-        if where is not None:
-            where_np = np.broadcast_to(np.asarray(where, dtype=bool), orig_shape)
-            where_flat = np.ascontiguousarray(where_np.ravel())
-
-        coords = QueryCoordinates(
-            x.ravel(), y.ravel(), z.ravel(), depth.ravel(), where_flat
-        )
-        self.inner.query_many(out_flat, coords, params)
-        return out_flat.reshape(orig_shape + (6,))
+        # Rust fills a zeroed, C-contiguous (N, 6) buffer in place.
+        out = np.zeros((n, 6), dtype=np.float32)
+        coords = QueryCoordinates(x.ravel(), y.ravel(), z.ravel(), depth.ravel())
+        self.inner.query_many(out, coords, params)
+        return out.reshape(orig_shape + (6,))
 
     def query_many(
         self,

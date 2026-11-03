@@ -38,11 +38,10 @@ mod nzcvm {
     use pyo3::pybacked::PyBackedStr;
     use pythonize::pythonize;
 
-    /// Coordinate arrays and optional boolean mask for a vectorised query.
+    /// Coordinate arrays for a vectorised query.
     ///
-    /// Bundles the four `(N,)` coordinate arrays and an optional `(N,)` boolean
-    /// mask into a single object so that [`PyModelTree::query_many`] stays under
-    /// Clippy's argument-count limit.  The object holds no GIL lock — arrays are
+    /// Bundles the four `(N,)` coordinate arrays into a single object so that
+    /// [`PyModelTree::query_many`] stays under Clippy's argument-count limit.  The object holds no GIL lock — arrays are
     /// borrowed only during the actual query call.
     #[pyclass]
     pub struct QueryCoordinates {
@@ -50,7 +49,6 @@ mod nzcvm {
         pub y: Py<PyArray1<Real>>,
         pub z: Py<PyArray1<Real>>,
         pub depth: Py<PyArray1<Real>>,
-        pub mask: Option<Py<PyArray1<bool>>>,
     }
 
     #[pymethods]
@@ -62,26 +60,15 @@ mod nzcvm {
         /// x, y, z, depth :
         ///     Four 1-D float32 arrays of length *N*: the position, and its
         ///     depth below the topography.
-        /// mask :
-        ///     Optional 1-D boolean array of length *N*.  When supplied, only
-        ///     points where ``mask[i]`` is ``True`` are queried; other rows in
-        ///     ``out`` are left untouched.
         #[new]
-        #[pyo3(signature = (x, y, z, depth, mask=None))]
+        #[pyo3(signature = (x, y, z, depth))]
         pub fn new(
             x: Py<PyArray1<Real>>,
             y: Py<PyArray1<Real>>,
             z: Py<PyArray1<Real>>,
             depth: Py<PyArray1<Real>>,
-            mask: Option<Py<PyArray1<bool>>>,
         ) -> Self {
-            QueryCoordinates {
-                x,
-                y,
-                z,
-                depth,
-                mask,
-            }
+            QueryCoordinates { x, y, z, depth }
         }
     }
 
@@ -548,7 +535,7 @@ mod nzcvm {
         ///   in-place.  Columns are ordered `[rho, vp, vs, qp, qs, alpha]`.
         ///   Rows for points outside all matching models are left unchanged.
         /// * `coords` – [`QueryCoordinates`] bundling the four `(N,)` float32
-        ///   coordinate arrays and an optional boolean mask.
+        ///   coordinate arrays.
         /// * `params` – priority bounds; use `QueryParams(0, 255)` for all models.
         ///
         /// The GIL is released during the hot loop so other Python threads
@@ -590,48 +577,19 @@ mod nzcvm {
                 )));
             }
             let mut buf = out.as_array_mut();
-            match &coords.mask {
-                None => {
-                    py.detach(|| {
-                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &di in &depths) {
-                            let pt = Point4::new(xi, yi, zi, di);
-                            if let Some(q) = self.inner.query(pt, None, lo, hi) {
-                                lane[0] = q.rho;
-                                lane[1] = q.vp;
-                                lane[2] = q.vs;
-                                lane[3] = q.qp;
-                                lane[4] = q.qs;
-                                lane[5] = q.alpha;
-                            }
-                        });
-                    });
-                }
-                Some(mask_py) => {
-                    let m_ro = mask_py.bind(py).readonly();
-                    let ms = m_ro.as_array();
-                    if ms.len() != n {
-                        return Err(PyValueError::new_err(format!(
-                            "where mask must have length {n}; got {}",
-                            ms.len(),
-                        )));
+            py.detach(|| {
+                azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &di in &depths) {
+                    let pt = Point4::new(xi, yi, zi, di);
+                    if let Some(q) = self.inner.query(pt, None, lo, hi) {
+                        lane[0] = q.rho;
+                        lane[1] = q.vp;
+                        lane[2] = q.vs;
+                        lane[3] = q.qp;
+                        lane[4] = q.qs;
+                        lane[5] = q.alpha;
                     }
-                    py.detach(|| {
-                        azip!((mut lane in buf.rows_mut(), &xi in &xs, &yi in &ys, &zi in &zs, &di in &depths, &mi in &ms) {
-                            if mi {
-                                let pt = Point4::new(xi, yi, zi, di);
-                                if let Some(q) = self.inner.query(pt, None, lo, hi) {
-                                    lane[0] = q.rho;
-                                    lane[1] = q.vp;
-                                    lane[2] = q.vs;
-                                    lane[3] = q.qp;
-                                    lane[4] = q.qs;
-                                    lane[5] = q.alpha;
-                                }
-                            }
-                        });
-                    });
-                }
-            }
+                });
+            });
             Ok(())
         }
 
