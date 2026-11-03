@@ -1,7 +1,8 @@
 """Numerical tests for :class:`~nzcvm.layers.backus.BackusAveragedLayer`.
 
-A stub next layer returns qualities that depend on the ``z`` it is asked
-for, so each test can work out the Backus average by hand and compare.
+A stub next layer returns qualities that depend on the ``z`` that
+the layer passes it, so each test can work out the Backus average by hand
+and compare.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ class _StubConfig(LayerConfig):
 class _Stub(Layer[_StubConfig]):
     """A next layer whose qualities are a function of the ``z`` it receives.
 
-    It records every ``z`` array it is called with in :attr:`calls`.
+    It records every ``z`` array passed to it in :attr:`calls`.
     """
 
     def __init__(self, medium: Callable[[np.ndarray], tuple[np.ndarray, ...]]):
@@ -107,7 +108,7 @@ def _backus(media: list[Medium]) -> dict[str, float]:
 def _layer(stub: _Stub, samples: int) -> BackusAveragedLayer:
     return BackusAveragedLayer(
         BackusAveragedLayerConfig(samples=samples),
-        None,  # ty: ignore[invalid-argument-type]
+        None,
         stub,
     )
 
@@ -148,7 +149,7 @@ def test_samples_truncate_at_free_surface_on_top_grid() -> None:
     _layer(stub, samples=2)(_column())
     sampled = np.stack([z[0, 0] for z in stub.calls])  # (sample, k)
     # Node 0 spans z[0]..halfway to z[1]; inner nodes span halfway to each
-    # neighbour; the last node mirrors its upper half-span below.
+    # neighbour. The last node mirrors its upper half-span below.
     np.testing.assert_allclose(sampled[:, 0], [12.5, 37.5])
     np.testing.assert_allclose(sampled[:, 1], [75.0, 125.0])
     np.testing.assert_allclose(sampled[:, 2], [175.0, 225.0])

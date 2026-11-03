@@ -27,12 +27,13 @@ class BackusAveragedLayer(
     """Backus average the next layer over the vertical span of each node.
 
     Each node's span runs half-way to its neighbours in ``z``. On the top
-    grid the first span is truncated at the free surface; on a lower grid it
-    is mirrored at the interface. The span is sampled ``samples`` times and
-    the samples are combined, weighted by their ``alpha``: ``rho`` is the
+    grid the free surface truncates the first span; on a lower grid the
+    interface mirrors it. The layer samples the span ``samples`` times and
+    combines the samples, weighted by their ``alpha``: ``rho`` is the
     arithmetic mean, ``vp`` and ``vs`` the Backus average
     ``sqrt(1 / (<1 / (rho v^2)> <rho>))``, ``qp`` and ``qs`` the
-    ``1 / v``-weighted harmonic mean ``<1 / v> / <1 / (v Q)>``, and ``alpha`` the fraction of covered samples.
+    ``1 / v``-weighted harmonic mean ``<1 / v> / <1 / (v Q)>``, and ``alpha``
+    the fraction of covered samples.
     """
 
     def __init__(
