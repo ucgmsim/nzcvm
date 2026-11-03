@@ -161,11 +161,6 @@ def functional_layer(func: _LayerFunc) -> GeneratedLayer:
 
     _captured_param_names = list(param_names)
 
-    # Parameter names accepted by ConfigCls.__init__ (mashumaro may override).
-    _config_init_params = frozenset(
-        inspect.signature(ConfigCls.__init__).parameters
-    ) - {"self"}
-
     def _init(  # type: ignore[return]
         self: Any,
         config: Any = None,
@@ -184,11 +179,9 @@ def functional_layer(func: _LayerFunc) -> GeneratedLayer:
             # Layer (acting as next_layer) or None.
             if isinstance(config, Layer):
                 next_layer = config
-            # Keep only kwargs that ConfigCls.__init__ actually accepts
-            # (dropping inherited base fields like 'provides', say).
-            config = ConfigCls(
-                **{k: v for k, v in kwargs.items() if k in _config_init_params}
-            )
+            # Pass kwargs straight through so unknown (e.g. misspelt) names
+            # raise ConfigCls's own TypeError instead of being dropped.
+            config = ConfigCls(**kwargs)
 
         Layer.__init__(self, config, geometry, next_layer)  # ty: ignore[invalid-argument-type]
 
