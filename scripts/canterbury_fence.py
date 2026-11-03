@@ -35,7 +35,7 @@ LAND_CMAP = LinearSegmentedColormap.from_list(
 LAND_RANGE = (0.0, 3500.0)
 SEA_COLOUR = np.array([0.72, 0.76, 0.81])
 #: Render size of the 3D scene, in pixels.
-WINDOW = (2400, 1500)
+WINDOW = [2400, 1500]
 
 app = typer.Typer(add_completion=False)
 
@@ -112,7 +112,7 @@ def main(
     rows = np.round((np.arange(sections) + 0.5) / sections * (nj - 1)).astype(int)
 
     plotter = pv.Plotter(off_screen=True, window_size=WINDOW)
-    plotter.set_background("white")
+    plotter.renderer.set_background("white")
 
     # Relief: the top surface's shading, draped on the bottom surface.
     top = grid.isel(k=0)[["x", "y", "z"]].compute()
@@ -148,15 +148,16 @@ def main(
 
     # Oblique parallel view from the south-south-west.
     centre = np.array(relief.center)
-    plotter.enable_parallel_projection()
+    plotter.camera.parallel_projection = True
     plotter.camera_position = [
         centre + np.array([-0.45, -1.0, 1.2]) * 1e6,
         centre,
         (0.0, 0.0, 1.0),
     ]
-    plotter.reset_camera()
+    plotter.renderer.reset_camera()
     plotter.camera.zoom(1.25)
     image = plotter.screenshot(return_img=True)
+    assert image is not None
 
     # Annotation anchors, projected while the scene is still live.
     # W and E sit beside the mid-height of the front section's two ends.
@@ -170,7 +171,7 @@ def main(
     ).astype(float)
     west, east = to_pixels(plotter, ends)
     bar_top, bar_bottom = to_pixels(
-        plotter, [centre, centre - np.array([0.0, 0.0, 5000.0 * exaggeration])]
+        plotter, np.array([centre, centre - (0.0, 0.0, 5000.0 * exaggeration)])
     )
     bar_length = float(np.hypot(*(bar_bottom - bar_top)))
     plotter.close()
@@ -185,7 +186,8 @@ def main(
     outline = [patheffects.withStroke(linewidth=4, foreground="white")]
     offset = 70.0
     ax.text(
-        *west + (-offset, 0),
+        west[0] - offset,
+        west[1],
         "W",
         fontsize=18,
         weight="bold",
@@ -194,7 +196,8 @@ def main(
         path_effects=outline,
     )
     ax.text(
-        *east + (offset, 0),
+        east[0] + offset,
+        east[1],
         "E",
         fontsize=18,
         weight="bold",
