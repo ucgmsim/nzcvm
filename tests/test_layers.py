@@ -558,6 +558,14 @@ def test_adhoc_functional_layer_deserialises(isolated_layer_registry: None) -> N
     assert float(result.vs.max()) == pytest.approx(0.0)
 
 
+def test_functional_layer_rejects_unknown_keyword() -> None:
+    """A misspelt config keyword must raise rather than silently keep the default."""
+    from nzcvm.layers.dummy import constant
+
+    with pytest.raises(TypeError, match="vss"):
+        constant(vss=1234.0)
+
+
 # ---------------------------------------------------------------------------
 # OffshoreBasinLayer: a basin outcropping at the surface vetoes the column
 # ---------------------------------------------------------------------------
