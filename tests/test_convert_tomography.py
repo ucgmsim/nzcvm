@@ -105,9 +105,9 @@ def test_a_single_voxel_splits_into_a_known_tiling() -> None:
 
 # `data_frame_to_mesh` puts the CSV rows in grid order, then in Morton order,
 # and scales the units. A mistake in any of those steps scrambles the
-# velocities without raising an error. A field that is linear in x, y and z
+# velocities without raising an error. A field that's linear in x, y and z
 # catches it: interpolating over tetrahedra reproduces a linear field exactly,
-# and a scrambled one does not come back.
+# and a scrambled one doesn't come back.
 
 _TOMOGRAPHY = TomographyModel(
     latitude="lat",
@@ -118,7 +118,7 @@ _TOMOGRAPHY = TomographyModel(
     rho="rho",
     vp="vp",
     vs="vs",
-    affine_inverse=np.eye(4),
+    affine_inverse=np.eye(4, dtype=np.float32),
 )
 
 
@@ -213,7 +213,7 @@ def test_a_missing_point_is_rejected() -> None:
 
 
 def test_aabb_is_in_world_coordinates() -> None:
-    """The vertices are km from an origin; the aabb is in world metres."""
+    """The vertices are km from an origin. The aabb is in world metres."""
     ox, oy = 1_500_000.0, 5_000_000.0
     tomography = dataclasses.replace(
         _TOMOGRAPHY,
