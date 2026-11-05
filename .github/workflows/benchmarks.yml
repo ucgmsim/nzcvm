@@ -6,12 +6,21 @@ on:
   pull_request:
 
 jobs:
-  benchmark:
-    name: Criterion & Dask Benchmarks
+  criterion:
+    name: Criterion Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # plots are pushed to the criterion-plots branch
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ucgmsim/meta-ci-action/criterion-bench@v2
+
+  dask:
+    name: Dask Benchmark
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
 
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +48,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      # Run the Python/dask benchmark.
       - name: Dask generate benchmark
         env:
           # Benchmark the optimised extension, not a debug build.
@@ -47,11 +55,3 @@ jobs:
         run: |
           uv run --dev python benchmarks/benchmark_generate.py \
             >> $GITHUB_STEP_SUMMARY
-
-      # Run Criterion benchmarks and compare against the base branch.
-      - name: Criterion benchmark comparison
-        uses: boa-dev/criterion-compare-action@v3
-        with:
-          benchName: "model_bench"
-          branchName: ${{ github.base_ref || 'master' }}
-          token: ${{ secrets.GITHUB_TOKEN }}
