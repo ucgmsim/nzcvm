@@ -23,7 +23,7 @@ BROCHER_VP_COEFFS = np.array(
     [-2.51e-11, 2.683e-07, -0.0008206, 2.0947, 940.9], dtype=np.float32
 )
 BROCHER_DENSITY_COEFFS = np.array(
-    [1.06e-16, -4.3e-12, 6.71e-08, -0.00047211, 1.6612, 0.0], dtype=np.float32
+    [1.06e-16, -4.3e-12, 6.71e-08, -0.0004721, 1.6612, 0.0], dtype=np.float32
 )
 
 

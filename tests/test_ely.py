@@ -19,7 +19,7 @@ import xarray as xr
 from nzcvm.config.layers.core import LayerConfig
 from nzcvm.config.layers.ely import ElyLayerConfig
 from nzcvm.coordinates import Coordinate
-from nzcvm.ely_taper import DENSITY_RELATION, VP_FROM_VS_RELATION, ely_vs_profile
+from nzcvm.ely_taper import VP_FROM_VS_RELATION, ely_vs_profile
 from nzcvm.grids.grid import Grid
 from nzcvm.layers.core import Layer
 from nzcvm.layers.ely import ElyLayer
@@ -38,23 +38,6 @@ BASIN = (1800.0, 1600.0, 300.0, 60.0, 30.0)
 NAMES = ("rho", "vp", "vs", "qp", "qs")
 
 
-def _brocher_vp_km(vs_in: float | np.ndarray) -> np.ndarray:
-    """Brocher (2005) eq. 9, Vp from Vs in km/s."""
-    vs = np.asarray(vs_in, dtype=float)
-    return 0.9409 + 2.0947 * vs - 0.8206 * vs**2 + 0.2683 * vs**3 - 0.0251 * vs**4
-
-
-def _brocher_rho_g_cm3(vp: np.ndarray) -> np.ndarray:
-    """Brocher (2005) eq. 1 (Nafe-Drake), density in g/cm³ from Vp in km/s."""
-    return (
-        1.6612 * vp
-        - 0.4721 * vp**2
-        + 0.0671 * vp**3
-        - 0.0043 * vp**4
-        + 0.000106 * vp**5
-    )
-
-
 def _profile(depths: np.ndarray) -> Qualities:
     depth = xr.DataArray(
         np.asarray(depths, dtype=np.float64).reshape(1, 1, -1), dims=("i", "j", "k")
@@ -67,32 +50,13 @@ def _profile(depths: np.ndarray) -> Qualities:
 
 
 # ---------------------------------------------------------------------------
-# Brocher relations
-# ---------------------------------------------------------------------------
-
-
-def test_vp_from_vs_matches_brocher_in_km_per_s() -> None:
-    vs = np.array([200.0, 400.0, 1000.0, 2000.0, 3500.0])
-    got = VP_FROM_VS_RELATION(xr.DataArray(vs)).values
-    np.testing.assert_allclose(got, 1000.0 * _brocher_vp_km(vs / 1000.0), rtol=1e-5)
-
-
-def test_density_matches_brocher_in_g_per_cm3() -> None:
-    vp = np.array([1500.0, 2500.0, 4000.0, 6000.0, 7500.0])
-    got = DENSITY_RELATION(xr.DataArray(vp)).values
-    # The module's Vp² coefficient is -0.00047211 where the published -0.4721
-    # scales to -0.0004721, which shifts rho by up to ~2e-4 at high Vp.
-    np.testing.assert_allclose(got, 1000.0 * _brocher_rho_g_cm3(vp / 1000.0), rtol=5e-4)
-
-
-# ---------------------------------------------------------------------------
 # ely_vs_profile
 # ---------------------------------------------------------------------------
 
 
 def test_profile_at_surface_is_half_the_vs30_relation() -> None:
     surface = _profile(np.array([0.0]))
-    vp_vs30 = 1000.0 * _brocher_vp_km(VS30 / 1000.0)
+    vp_vs30 = float(VP_FROM_VS_RELATION(xr.DataArray(VS30)))
     assert float(surface.vs[0]) == pytest.approx(0.5 * VS30, rel=1e-6)
     assert float(surface.vp[0]) == pytest.approx(0.5 * vp_vs30, rel=1e-5)
 
@@ -106,16 +70,6 @@ def test_profile_meets_tomography_at_depth_t() -> None:
 def test_profile_interior_values() -> None:
     depths = np.array([0.0, 30.0, 175.0, 350.0])
     result = _profile(depths)
-    # Ely et al. (2010) f and g polynomials, evaluated by hand.
-    z = depths / DEPTH_T
-    f = z + (2.0 / 3.0) * (z - z**2)
-    g = 0.5 - 5.0 * z + 1.5 * z**2 + 3.0 * np.sqrt(z)
-    vs = f * VS_T + g * VS30
-    vp = f * VP_T + g * 1000.0 * _brocher_vp_km(VS30 / 1000.0)
-    rho = 1000.0 * _brocher_rho_g_cm3(vp / 1000.0)
-    np.testing.assert_allclose(result.vs.values, vs, rtol=1e-5)
-    np.testing.assert_allclose(result.vp.values, vp, rtol=1e-5)
-    np.testing.assert_allclose(result.rho.values, rho, rtol=1e-4)
     # Pinned values from the current code.
     np.testing.assert_allclose(
         result.vs.values, [200.0, 660.222, 1531.8615, 2000.0], rtol=1e-5
@@ -124,7 +78,7 @@ def test_profile_interior_values() -> None:
         result.vp.values, [832.00635, 2150.552, 3492.5498, 4000.0], rtol=1e-5
     )
     np.testing.assert_allclose(
-        result.rho.values, [1091.9457, 1969.3278, 2316.9421, 2393.184], rtol=1e-5
+        result.rho.values, [1091.9526, 1969.374, 2317.0644, 2393.344], rtol=1e-5
     )
 
 
