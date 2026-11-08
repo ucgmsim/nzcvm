@@ -167,7 +167,7 @@ def isolated_layer_registry() -> Iterator[None]:
     """Snapshot and restore ``Layer.registry`` after the test.
 
     A layer defined in a test also leaves its config class in mashumaro's
-    ``type`` -> class cache on ``LayerConfig``, so that is restored too.
+    ``type`` -> class cache on ``LayerConfig``, so the fixture restores it too.
     Otherwise a second run of the same test in one process (mutmut runs the
     suite twice) deserialises ``{"type": ...}`` to the first run's class.
 
@@ -187,7 +187,7 @@ def isolated_layer_registry() -> Iterator[None]:
     if variants is not None:
         variants.clear()
         variants.update(original_variants)
-    # The generated classes sit in reference cycles; collect them so a later
+    # The generated classes form reference cycles; collect them so a later
     # cache miss doesn't find them in LayerConfig.__subclasses__().
     gc.collect()
 
