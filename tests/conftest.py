@@ -166,15 +166,16 @@ _SUBTYPE_VARIANTS = "__mashumaro_subtype_variants__"
 def isolated_layer_registry() -> Iterator[None]:
     """Snapshot and restore ``Layer.registry`` after the test.
 
-    A layer defined in a test also leaves its config class in mashumaro's
-    ``type`` -> class cache on ``LayerConfig``, so the fixture restores it too.
-    Otherwise a second run of the same test in one process (mutmut runs the
-    suite twice) deserialises ``{"type": ...}`` to the first run's class.
+        A layer defined in a test also leaves its config class in mashumaro's
+        ``type`` -> class cache on ``LayerConfig``. The fixture restores that cache
+    too.
+        Otherwise a second run of the same test in one process (mutmut runs the
+        suite twice) deserialises ``{"type": ...}`` to the first run's class.
 
-    Yields
-    ------
-    None
-        Yields control to caller.
+        Yields
+        ------
+        None
+            Yields control to caller.
     """
     from nzcvm.layers.core import Layer
 
