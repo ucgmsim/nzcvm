@@ -38,8 +38,9 @@ BASIN = (1800.0, 1600.0, 300.0, 60.0, 30.0)
 NAMES = ("rho", "vp", "vs", "qp", "qs")
 
 
-def _brocher_vp_km(vs: np.ndarray) -> np.ndarray:
+def _brocher_vp_km(vs_in: float | np.ndarray) -> np.ndarray:
     """Brocher (2005) eq. 9, Vp from Vs in km/s."""
+    vs = np.asarray(vs_in, dtype=float)
     return 0.9409 + 2.0947 * vs - 0.8206 * vs**2 + 0.2683 * vs**3 - 0.0251 * vs**4
 
 
@@ -115,7 +116,7 @@ def test_profile_interior_values() -> None:
     np.testing.assert_allclose(result.vs.values, vs, rtol=1e-5)
     np.testing.assert_allclose(result.vp.values, vp, rtol=1e-5)
     np.testing.assert_allclose(result.rho.values, rho, rtol=1e-4)
-    # Pinned values from the current implementation.
+    # Pinned values from the current code.
     np.testing.assert_allclose(
         result.vs.values, [200.0, 660.222, 1531.8615, 2000.0], rtol=1e-5
     )
@@ -138,7 +139,7 @@ def test_profile_q_scales_with_vs() -> None:
 # ElyLayer
 # ---------------------------------------------------------------------------
 
-#: Node depths of the test grid; the last two sit at and below DEPTH_T.
+#: Node depths of the test grid. The last two are at and below DEPTH_T.
 Z = np.array([0.0, 30.0, 175.0, DEPTH_T, 450.0])
 
 #: x of a column outside the Vs30 surface, where Vs30 is NaN.
@@ -296,7 +297,7 @@ def test_layer_blends_basins_and_tapers_the_rest(vs30_path: Path) -> None:
     # The basin column keeps the basin, unaffected by the taper.
     for name, value in zip(NAMES, BASIN, strict=True):
         np.testing.assert_allclose(_column(result, 0, name), value, rtol=1e-6)
-    # The basin-free column is tapered above depth_t.
+    # The taper acts on the basin-free column above depth_t.
     expected = _profile(Z[:3])
     for name in NAMES:
         np.testing.assert_allclose(
