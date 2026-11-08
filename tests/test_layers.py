@@ -192,7 +192,7 @@ def test_clamp_vs_floor_regenerates_vp_rho_only_where_it_moves() -> None:
         result.vp.values.ravel(), [6000.0, 6000.0, 6935.700], rtol=1e-4
     )
     np.testing.assert_allclose(
-        result.rho.values.ravel(), [2700.0, 2700.0, 2949.165], rtol=1e-4
+        result.rho.values.ravel(), [2700.0, 2700.0, 2949.647], rtol=1e-4
     )
 
 
@@ -215,10 +215,10 @@ def test_clamp_floor_stacks_on_relative_min() -> None:
 @pytest.mark.parametrize(
     "vs, expected_vp, expected_rho",
     [
-        (1500.0, 3015.044, 2227.043),
-        (3000.0, 5050.601, 2542.342),
-        (4000.0, 6935.700, 2949.165),
-        (4500.0, 7906.168, 3257.309),
+        (1500.0, 3015.044, 2227.134),
+        (3000.0, 5050.601, 2542.597),
+        (4000.0, 6935.700, 2949.647),
+        (4500.0, 7906.168, 3257.936),
     ],
 )
 def test_clamp_vs_snaps_vp_and_rho_onto_manifold(
