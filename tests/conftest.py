@@ -1,5 +1,6 @@
 """Shared fixtures for the nzcvm test suite."""
 
+import gc
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -157,9 +158,18 @@ class Terminal(Layer[TerminalConfig]):
         )
 
 
+# Where mashumaro caches discriminator value -> subclass for ``LayerConfig``.
+_SUBTYPE_VARIANTS = "__mashumaro_subtype_variants__"
+
+
 @pytest.fixture()
 def isolated_layer_registry() -> Iterator[None]:
     """Snapshot and restore ``Layer.registry`` after the test.
+
+    A layer defined in a test also leaves its config class in mashumaro's
+    ``type`` -> class cache on ``LayerConfig``, so that is restored too.
+    Otherwise a second run of the same test in one process (mutmut runs the
+    suite twice) deserialises ``{"type": ...}`` to the first run's class.
 
     Yields
     ------
@@ -169,9 +179,17 @@ def isolated_layer_registry() -> Iterator[None]:
     from nzcvm.layers.core import Layer
 
     original = Layer.registry.copy()
+    original_variants = dict(LayerConfig.__dict__.get(_SUBTYPE_VARIANTS, {}))
     yield
     Layer.registry.clear()
     Layer.registry.update(original)
+    variants = LayerConfig.__dict__.get(_SUBTYPE_VARIANTS)
+    if variants is not None:
+        variants.clear()
+        variants.update(original_variants)
+    # The generated classes sit in reference cycles; collect them so a later
+    # cache miss doesn't find them in LayerConfig.__subclasses__().
+    gc.collect()
 
 
 def get_model_directory() -> Path | None:
