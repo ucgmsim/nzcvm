@@ -427,7 +427,7 @@ _ORIENTATION = {"origin_lon": 172.0, "origin_lat": -43.5, "azimuth": 0.0, "crs":
     ids=["regular", "sw4"],
 )
 def test_grid_rejects_transpose(grid: dict) -> None:
-    """The config used to accept `transpose` and ignore it. The field is gone."""
+    """The config used to accept `transpose` and ignore it. It now rejects it."""
     GridConfig.from_dict(grid)
     with pytest.raises(ExtraKeysError, match="transpose"):
         GridConfig.from_dict({**grid, "transpose": True})
