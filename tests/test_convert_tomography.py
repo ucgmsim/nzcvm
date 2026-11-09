@@ -14,15 +14,26 @@ face.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
+from pyproj import CRS, Transformer
+from typer.testing import CliRunner
 
 from nzcvm.coordinates import scale, translate
 from nzcvm.models.model import ModelTree
 from nzcvm.scripts.convert_tomography import (
+    CRS_NZTM,
+    CRS_WGS,
+    MODEL_COLUMNS,
+    ModelType,
     TomographyModel,
+    _ep_affine,
+    _project_origin,
+    app,
     data_frame_to_mesh,
     tet_connectivity,
 )
@@ -224,4 +235,128 @@ def test_aabb_is_in_world_coordinates() -> None:
 
     assert mesh.attrs["aabb"] == pytest.approx(
         [ox, oy, 0.0, ox + 3000.0, oy + 2000.0, 4000.0]
+    )
+
+
+# The EP model frame is anchored at a geographic origin. Its inverse affine
+# takes NZTM metres to model kilometres: shift the origin to zero, scale to km,
+# mirror x, then rotate 140 degrees about the vertical.
+
+
+def test_project_origin_hits_the_nztm_false_origin() -> None:
+    """NZTM's projection centre (173 E on the equator) is its false origin."""
+    x, y = _project_origin(173.0, 0.0, CRS_WGS, CRS_NZTM)
+    assert x == pytest.approx(1_600_000.0, abs=1e-3)
+    assert y == pytest.approx(10_000_000.0, abs=1e-3)
+
+
+def test_project_origin_takes_longitude_first() -> None:
+    """Longitude is the x argument whatever axis order the source CRS uses."""
+    # Wellington. Off the central meridian, so swapping lon and lat, or the
+    # source and target CRS, can't land on the same numbers.
+    x, y = _project_origin(174.7762, -41.2865, CRS_WGS, CRS_NZTM)
+    assert x == pytest.approx(1_748_735.5, abs=1.0)
+    assert y == pytest.approx(5_427_916.5, abs=1.0)
+
+    # And back again, from projected metres to geographic degrees.
+    lon, lat = _project_origin(x, y, CRS_NZTM, CRS_WGS)
+    assert lon == pytest.approx(174.7762, abs=1e-9)
+    assert lat == pytest.approx(-41.2865, abs=1e-9)
+
+
+def _apply_affine(matrix: np.ndarray, x: float, y: float, z: float) -> np.ndarray:
+    return (np.asarray(matrix, dtype=np.float64) @ np.array([x, y, z, 1.0]))[:3]
+
+
+@pytest.mark.parametrize("datum", [4272, 4167])
+def test_ep_affine_puts_the_origin_at_zero(datum: int) -> None:
+    ox, oy = Transformer.from_crs(
+        CRS.from_epsg(datum), CRS_NZTM, always_xy=True
+    ).transform(172.9037, -41.7638)
+    inverse = _ep_affine(CRS.from_epsg(datum))
+
+    assert inverse.shape == (4, 4)
+    # NZGD49 datum shifts can differ by a few decimetres between pyproj
+    # transformation pipelines, so the origin is checked to a metre.
+    np.testing.assert_allclose(
+        _apply_affine(inverse, ox, oy, 0.0), [0.0, 0.0, 0.0], atol=1e-3
+    )
+    # The geometry relative to the frame's own origin is exact.
+    ox, oy, _ = _apply_affine(np.linalg.inv(inverse), 0.0, 0.0, 0.0)
+    # A kilometre east of the origin is mirrored to (-1, 0), and a rotation by
+    # 140 degrees sends that to (-cos 140, -sin 140).
+    theta = np.deg2rad(140.0)
+    np.testing.assert_allclose(
+        _apply_affine(inverse, ox + 1000.0, oy, 0.0),
+        [-np.cos(theta), -np.sin(theta), 0.0],
+        atol=1e-9,
+    )
+    # A kilometre north is untouched by the mirror: (0, 1) rotated by 140.
+    np.testing.assert_allclose(
+        _apply_affine(inverse, ox, oy + 1000.0, 0.0),
+        [-np.sin(theta), np.cos(theta), 0.0],
+        atol=1e-9,
+    )
+    # Depth is only rescaled to kilometres.
+    np.testing.assert_allclose(
+        _apply_affine(inverse, ox, oy, 2500.0), [0.0, 0.0, 2.5], atol=1e-9
+    )
+
+
+def test_ep_affine_origin_depends_on_the_datum() -> None:
+    """NZGD49 and NZGD2000 put the same lon/lat a couple of hundred metres
+    apart, so the EP2010 and EP2020 frames must not coincide."""
+    nzgd49, nzgd2000 = CRS.from_epsg(4272), CRS.from_epsg(4167)
+    ox49, oy49 = _project_origin(172.9037, -41.7638, nzgd49, CRS_NZTM)
+    ox00, oy00 = _project_origin(172.9037, -41.7638, nzgd2000, CRS_NZTM)
+
+    shift = np.hypot(ox49 - ox00, oy49 - oy00)
+    assert 50.0 < shift < 500.0
+    # The NZGD49 origin, seen from the EP2020 frame, is that shift away in km.
+    offset = _apply_affine(_ep_affine(nzgd2000), ox49, oy49, 0.0)
+    assert np.hypot(*offset[:2]) == pytest.approx(shift / 1000.0, abs=1e-3)
+    assert not np.allclose(_ep_affine(nzgd49), _ep_affine(nzgd2000))
+
+
+def test_ep2020_columns_use_the_nzgd2000_frame() -> None:
+    np.testing.assert_allclose(
+        MODEL_COLUMNS[ModelType.EP2020].affine_inverse,
+        _ep_affine(CRS.from_epsg(4167)),
+    )
+
+
+def test_convert_command_writes_an_ep2020_mesh(tmp_path: Path) -> None:
+    """The CLI reads the whitespace-separated EP2020 layout (a provenance
+    line, then a header) and writes a zarr mesh named after the input."""
+    df = _shuffled_grid(nx=3, ny=2, nz=4).rename(
+        columns={
+            "x": "x(km)",
+            "y": "y(km)",
+            "z": "Depth(km_BSL)",
+            "rho": "Density",
+            "vp": "Vp",
+            "vs": "Vs",
+        }
+    )
+    df["Latitude"] = -41.0
+    df["Longitude"] = 173.0
+    model = tmp_path / "ep_model.txt"
+    with model.open("w") as handle:
+        handle.write("provenance line skipped by the reader\n")
+        df.to_string(handle, index=False)
+    output = tmp_path / "out.zarr"
+
+    result = CliRunner().invoke(app, [str(model), str(output), "ep2020"])
+    assert result.exit_code == 0, result.output
+
+    mesh = xr.open_zarr(output)
+    assert mesh.attrs["name"] == "ep_model"
+    x, y, z = _vertex_coordinates(mesh)
+    assert len(x) == 3 * 2 * 4
+    np.testing.assert_allclose(mesh["vs"], 1000 * _vs(x, y, z), rtol=1e-6)
+    np.testing.assert_allclose(mesh["rho"], 1000 * _rho(x, y, z), rtol=1e-6)
+    np.testing.assert_allclose(mesh["qs"], 50 * _vs(x, y, z), rtol=1e-6)
+    np.testing.assert_allclose(
+        np.asarray(mesh.attrs["transform"], dtype=np.float32),
+        MODEL_COLUMNS[ModelType.EP2020].affine_inverse.astype(np.float32).T,
     )
