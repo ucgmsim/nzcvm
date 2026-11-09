@@ -51,13 +51,8 @@ class SW4GridConfig(GridConfig):
         to elevation.
     extent_x, extent_y :
         Physical extent of the grid in metres along each horizontal axis.
-    azimuth :
-        Clockwise rotation of the grid from north, in degrees.
-    target_crs :
-        Target projected CRS integer code, such as ``2193`` for NZTM2000.
-    origin_lon, origin_lat :
-        Geographic origin of the local grid in *origin_crs* (longitude,
-        latitude).
+    orientation :
+        Origin, azimuth and projected CRS that place the grid on the earth.
     refinements :
         Ordered list of :class:`MeshRefinement` objects.  Must contain at
         least one entry. The *bottom* of the last entry sets the model bottom.
@@ -68,14 +63,8 @@ class SW4GridConfig(GridConfig):
         EMOD3D-compatible model for SW4 without topography: the decay
         distorts the earth into a flat nominal box, and the sfile stores
         nominal depths.  See :attr:`solver`.
-    transpose :
-        If ``True``, swap the I and J axes after applying the affine transform.
-    origin_crs :
-        CRS of the *origin_lon* / *origin_lat* values (default: ``4326``
-        for WGS-84).
-    origin_x, origin_y :
-        Optional additional translation offset applied after the CRS
-        transform (metres).
+    chunks :
+        Dask chunk sizes along the horizontal axes.
     """
 
     # Topographic surface path.
@@ -90,8 +79,6 @@ class SW4GridConfig(GridConfig):
     refinements: dict[str, MeshRefinement]
 
     decay: Decay | None = None
-
-    transpose: bool = False
 
     chunks: dict[Coordinate, int] = field(default_factory=lambda: DEFAULT_CHUNK_SIZES)
 
