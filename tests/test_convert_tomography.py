@@ -277,7 +277,7 @@ def test_ep_affine_puts_the_origin_at_zero(datum: int) -> None:
 
     assert inverse.shape == (4, 4)
     # NZGD49 datum shifts can differ by a few decimetres between pyproj
-    # transformation pipelines, so the test checks the origin to a metre.
+    # transformation pipelines. The test checks the origin to a metre.
     np.testing.assert_allclose(
         _apply_affine(inverse, ox, oy, 0.0), [0.0, 0.0, 0.0], atol=1e-3
     )
