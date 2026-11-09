@@ -32,16 +32,10 @@ class RegularGridConfig(GridConfig):
         rounded up to the next multiple of *resolution_z*.
     resolution_x, resolution_y, resolution_z :
         Spatially independent grid resolutions in metres.
-    azimuth :
-        Clockwise rotation of the grid from north, in degrees.
-    target_crs :
-        Target projected CRS integer code, such as ``2193`` for NZTM2000.
-    origin_lon, origin_lat :
-        Geographic origin of the local grid in *origin_crs* (longitude, latitude).
-    transpose :
-        If ``True``, swap the I and J axes after applying the affine transform.
-    origin_crs :
-        CRS of the *origin_lon* / *origin_lat* values (default: ``4326`` for WGS-84).
+    orientation :
+        Origin, azimuth and projected CRS that place the grid on the earth.
+    chunks :
+        Dask chunk sizes along the horizontal axes.
     """
 
     # Topographic surface path.
@@ -58,8 +52,6 @@ class RegularGridConfig(GridConfig):
     resolution_z: PositiveFloat
 
     orientation: Model
-
-    transpose: bool = False
 
     chunks: dict[Coordinate, int] = field(default_factory=lambda: DEFAULT_CHUNK_SIZES)
 

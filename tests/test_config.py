@@ -398,6 +398,41 @@ def test_an_unknown_key_is_reported(
         config_cls.from_dict(payload)
 
 
+_ORIENTATION = {"origin_lon": 172.0, "origin_lat": -43.5, "azimuth": 0.0, "crs": 2193}
+
+
+@pytest.mark.parametrize(
+    "grid",
+    [
+        {
+            "type": "regular",
+            "surface": "surface.nc",
+            "extent_x": 4000.0,
+            "extent_y": 2000.0,
+            "thickness": 1000.0,
+            "resolution_x": 1000.0,
+            "resolution_y": 1000.0,
+            "resolution_z": 500.0,
+            "orientation": _ORIENTATION,
+        },
+        {
+            "type": "sw4",
+            "surface": "surface.nc",
+            "extent_x": 4000.0,
+            "extent_y": 2000.0,
+            "orientation": _ORIENTATION,
+            "refinements": {"top": {"resolution": 1000.0, "bottom": 1000.0}},
+        },
+    ],
+    ids=["regular", "sw4"],
+)
+def test_grid_rejects_transpose(grid: dict) -> None:
+    """`transpose` was accepted and then ignored. It is no longer a field."""
+    GridConfig.from_dict(grid)
+    with pytest.raises(ExtraKeysError, match="transpose"):
+        GridConfig.from_dict({**grid, "transpose": True})
+
+
 def test_a_known_key_still_decodes() -> None:
     clamp = ClampLayerConfig.from_dict({"type": "clamp", "min_vp_vs_ratio": 1.7})
     assert clamp.min_vp_vs_ratio == pytest.approx(1.7)
