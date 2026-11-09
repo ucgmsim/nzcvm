@@ -238,7 +238,7 @@ def test_aabb_is_in_world_coordinates() -> None:
     )
 
 
-# The EP model frame is anchored at a geographic origin. Its inverse affine
+# The EP model frame has a geographic origin. Its inverse affine
 # takes NZTM metres to model kilometres: shift the origin to zero, scale to km,
 # mirror x, then rotate 140 degrees about the vertical.
 
@@ -253,7 +253,7 @@ def test_project_origin_hits_the_nztm_false_origin() -> None:
 def test_project_origin_takes_longitude_first() -> None:
     """Longitude is the x argument whatever axis order the source CRS uses."""
     # Wellington. Off the central meridian, so swapping lon and lat, or the
-    # source and target CRS, can't land on the same numbers.
+    # source and target CRS, can't give the same numbers.
     x, y = _project_origin(174.7762, -41.2865, CRS_WGS, CRS_NZTM)
     assert x == pytest.approx(1_748_735.5, abs=1.0)
     assert y == pytest.approx(5_427_916.5, abs=1.0)
@@ -277,21 +277,21 @@ def test_ep_affine_puts_the_origin_at_zero(datum: int) -> None:
 
     assert inverse.shape == (4, 4)
     # NZGD49 datum shifts can differ by a few decimetres between pyproj
-    # transformation pipelines, so the origin is checked to a metre.
+    # transformation pipelines, so the test checks the origin to a metre.
     np.testing.assert_allclose(
         _apply_affine(inverse, ox, oy, 0.0), [0.0, 0.0, 0.0], atol=1e-3
     )
     # The geometry relative to the frame's own origin is exact.
     ox, oy, _ = _apply_affine(np.linalg.inv(inverse), 0.0, 0.0, 0.0)
-    # A kilometre east of the origin is mirrored to (-1, 0), and a rotation by
-    # 140 degrees sends that to (-cos 140, -sin 140).
+    # The mirror sends a point a kilometre east of the origin to (-1, 0), and
+    # a rotation by 140 degrees sends that to (-cos 140, -sin 140).
     theta = np.deg2rad(140.0)
     np.testing.assert_allclose(
         _apply_affine(inverse, ox + 1000.0, oy, 0.0),
         [-np.cos(theta), -np.sin(theta), 0.0],
         atol=1e-9,
     )
-    # A kilometre north is untouched by the mirror: (0, 1) rotated by 140.
+    # The mirror leaves a point a kilometre north alone: (0, 1) rotated by 140.
     np.testing.assert_allclose(
         _apply_affine(inverse, ox, oy + 1000.0, 0.0),
         [-np.sin(theta), np.cos(theta), 0.0],
@@ -326,7 +326,7 @@ def test_ep2020_columns_use_the_nzgd2000_frame() -> None:
 
 
 def test_convert_command_writes_an_ep2020_mesh(tmp_path: Path) -> None:
-    """The CLI reads the whitespace-separated EP2020 layout (a provenance
+    """The command-line tool reads the whitespace-separated EP2020 layout (a provenance
     line, then a header) and writes a zarr mesh named after the input."""
     df = _shuffled_grid(nx=3, ny=2, nz=4).rename(
         columns={
