@@ -31,6 +31,7 @@ from nzcvm.scripts import (
     construct_mesh,
     convert_tiff,
     convert_tomography,
+    merge_bathymetry,
     surface_cli,
     synthetic,
     view,
@@ -179,6 +180,7 @@ app.add_typer(convert_tomography.app, name="tomography")
 app.add_typer(surface_cli.app, name="surface")
 app.add_typer(view.app, name="view")
 app.add_typer(convert_tiff.app, name="convert-tiff")
+app.add_typer(merge_bathymetry.app, name="merge-bathymetry")
 app.add_typer(synthetic.app, name="synthetic")
 
 
