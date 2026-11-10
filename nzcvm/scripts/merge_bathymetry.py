@@ -71,6 +71,34 @@ def coast_weight(sea: np.ndarray, spacing: float, taper: float) -> np.ndarray:
     return (s * s * (3.0 - 2.0 * s)).astype(np.float32)
 
 
+def round_mantissa(values: np.ndarray, keep_bits: int) -> np.ndarray:
+    """Round float32 *values* to *keep_bits* bits of mantissa.
+
+    The dropped bits become zeros, which compress far better. The relative
+    error is at most ``2 ** -(keep_bits + 1)``.
+
+    Parameters
+    ----------
+    values :
+        float32 array.
+    keep_bits :
+        Mantissa bits to keep, 0 to 23. 23 keeps every bit.
+
+    Returns
+    -------
+    np.ndarray
+        The rounded values, as float32.
+    """
+    values = np.ascontiguousarray(values, dtype=np.float32)
+    drop = 23 - keep_bits
+    if drop <= 0:
+        return values
+    bits = values.view(np.uint32)
+    half = np.uint32(1 << (drop - 1))
+    mask = np.uint32((0xFFFFFFFF << drop) & 0xFFFFFFFF)
+    return ((bits + half) & mask).view(np.float32)
+
+
 def _extend(axis: np.ndarray, low: float, high: float) -> tuple[np.ndarray, int, int]:
     """Extend the uniform *axis* with nodes on its step until it spans [low, high].
 
@@ -95,6 +123,7 @@ def merge_bathymetry(
     bathymetry: xr.DataArray,
     taper: float = 1000.0,
     order: int = 3,
+    keep_bits: int = 23,
 ) -> xr.DataArray:
     """Fill the sea in *dem* with *bathymetry*, tapered to sea level at the coast.
 
@@ -112,6 +141,10 @@ def merge_bathymetry(
     order :
         Spline order interpolating the bathymetry onto the DEM's nodes:
         1 for bilinear, 3 for cubic.
+    keep_bits :
+        Mantissa bits kept of each sea node's depth (see
+        :func:`round_mantissa`), so the sea compresses well. Land keeps
+        every bit.
 
     Returns
     -------
@@ -176,7 +209,8 @@ def merge_bathymetry(
         # NaN wherever the stencil leaves the bathymetry or reaches a gap.
         elevation = sample(coefficients, r, c, order) + sample(gap_mask, r, c, 1)
         seafloor = np.nan_to_num(np.minimum(elevation, 0.0), nan=0.0)
-        return np.where(depth == 0, -weight * seafloor, depth).astype(np.float32)
+        sea_depth = round_mantissa(-weight * seafloor, keep_bits)
+        return np.where(depth == 0, sea_depth, depth).astype(np.float32)
 
     merged = da.map_blocks(fill, depth, weight, dtype=np.float32)
     return xr.DataArray(merged, dims=("y", "x"), coords={"y": y, "x": x})
@@ -219,6 +253,15 @@ def main(
             max=5,
         ),
     ] = 3,
+    keep_bits: Annotated[
+        int,
+        typer.Option(
+            help="Mantissa bits kept of the sea's depths, so they compress well. "
+            "10 bits rounds to within 0.05% (1 m at 2 km depth); 23 keeps all.",
+            min=0,
+            max=23,
+        ),
+    ] = 10,
 ) -> None:
     """Fill the sea in a land DEM with a coarser bathymetry."""
     try:
@@ -237,7 +280,9 @@ def main(
     bathymetry = raster.sel(band=band).drop_vars(["band", "spatial_ref"])
 
     dem = xr.open_zarr(dem_path)
-    merged = merge_bathymetry(dem.z, bathymetry, taper=taper, order=order)
+    merged = merge_bathymetry(
+        dem.z, bathymetry, taper=taper, order=order, keep_bits=keep_bits
+    )
     surface: StructuredMesh = surface_mesh(
         output_path.stem,
         merged.data,

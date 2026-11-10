@@ -33,6 +33,7 @@ from nzcvm.velocity_model import VelocityModel
 
 if TYPE_CHECKING:
     import pyvista as pv
+    from matplotlib.colors import ListedColormap
 
 
 def _require_pyvista():  # type: ignore[return]
@@ -140,6 +141,13 @@ def add_coastline_underlay(
     z_level = bounds[4] - 500
     with gzip.open(coastline_path) as handle:
         coastline = shapely.from_wkb(handle.read())
+    # Only the shoreline inside the view, so it doesn't widen the camera's
+    # framing. Clip the outlines, not the polygons, or the clip adds edges.
+    x_min, x_max, y_min, y_max = bounds[:4]
+    shoreline = shapely.clip_by_rect(coastline.boundary, x_min, y_min, x_max, y_max)
+    coastline = shapely.MultiLineString(
+        [g for g in shapely.get_parts(shoreline) if g.geom_type == "LineString"]
+    )
 
     points, lines, offset = [], [], 0
 
@@ -184,12 +192,15 @@ DEM_MARGIN = 0.1
 
 
 def dem_window(
-    dem: Surface, bounds: tuple[float, ...], margin: float = DEM_MARGIN
+    dem: Surface,
+    bounds: tuple[float, ...],
+    margin: float = DEM_MARGIN,
+    max_nodes: int = DEM_MAX_NODES,
 ) -> pv.StructuredGrid:
     """Read the part of *dem* under *bounds* as a grid coloured by elevation.
 
     This reads only the window around the footprint, widened by *margin* on
-    each side, and keeps at most :data:`DEM_MAX_NODES` along each axis.
+    each side, and keeps at most *max_nodes* along each axis.
 
     Parameters
     ----------
@@ -199,6 +210,8 @@ def dem_window(
         ``[x_min, x_max, y_min, y_max, ...]`` of the meshes, in NZTM.
     margin :
         Fraction of the footprint's width and height to add on each side.
+    max_nodes :
+        Most nodes kept along each axis.
 
     Returns
     -------
@@ -216,7 +229,7 @@ def dem_window(
     window = dem.values.sel(
         x=slice(frame_x.min(), frame_x.max()), y=slice(frame_y.min(), frame_y.max())
     )
-    stride = max(1, int(np.ceil(max(window.shape) / DEM_MAX_NODES)))
+    stride = max(1, int(np.ceil(max(window.shape) / max_nodes)))
     window = window.isel(x=slice(None, None, stride), y=slice(None, None, stride))
     z = window.values.astype(np.float64)
 
@@ -415,6 +428,103 @@ def basin(
 
     pl.camera.up = (0.0, 0.0, -1.0)
     pl.show()
+
+
+def sea_land_colormap(low: float, high: float, n: int = 512) -> ListedColormap:
+    """Blues below sea level and terrain colours above, meeting at 0 m.
+
+    Parameters
+    ----------
+    low, high :
+        The colour limits (m), with ``low < 0 < high``.
+    n :
+        Number of colours.
+
+    Returns
+    -------
+    matplotlib.colors.ListedColormap
+        A colormap for limits ``(low, high)`` whose sea/land break is at 0.
+    """
+    import matplotlib as mpl
+    from matplotlib.colors import ListedColormap
+
+    n_sea = round(n * -low / (high - low))
+    sea = mpl.colormaps["Blues_r"](np.linspace(0.0, 0.85, n_sea))
+    land = mpl.colormaps["terrain"](np.linspace(0.25, 1.0, n - n_sea))
+    return ListedColormap(np.vstack([sea, land]))
+
+
+@app.command()
+def dem(
+    surface: Annotated[
+        Path, typer.Argument(help="DEM surface (.zarr) to draw.", exists=True)
+    ],
+    bounds: Annotated[
+        tuple[float, float, float, float] | None,
+        typer.Option(
+            help="NZTM window to draw: X_MIN X_MAX Y_MIN Y_MAX. The whole "
+            "surface if not given."
+        ),
+    ] = None,
+    exaggeration: Annotated[
+        float, typer.Option(help="Vertical exaggeration.", min=0.0)
+    ] = 5.0,
+    max_nodes: Annotated[
+        int,
+        typer.Option(
+            help="Most nodes drawn along each axis. A larger window takes "
+            "every n-th node.",
+            min=2,
+        ),
+    ] = 2000,
+    coastline: Annotated[
+        Path | None,
+        typer.Option(
+            help="Coastline (.wkb.gz, NZTM) to draw at sea level.", exists=True
+        ),
+    ] = None,
+    screenshot: Annotated[
+        Path | None,
+        typer.Option(help="Save a PNG off screen instead of opening a window."),
+    ] = None,
+) -> None:
+    """Draw a DEM surface in 3-D, sea in blues and land in terrain colours."""
+    pv = _require_pyvista()
+    surface_grid = Surface.load(surface)
+    x, y = surface_grid.values.x.values, surface_grid.values.y.values
+    window = (
+        bounds
+        if bounds is not None
+        else (float(x.min()), float(x.max()), float(y.min()), float(y.max()))
+    )
+    grid = dem_window(surface_grid, window, margin=0.0, max_nodes=max_nodes)
+
+    elevation = grid.point_data["elevation"]
+    points = grid.points.copy()
+    points[:, 2] = elevation * exaggeration
+    grid.points = points
+
+    low = min(float(np.nanmin(elevation)), -1.0)
+    high = max(float(np.nanmax(elevation)), 1.0)
+    pl = pv.Plotter(off_screen=screenshot is not None, window_size=(1600, 1100))
+    pl.add_mesh(
+        grid,
+        scalars="elevation",
+        cmap=sea_land_colormap(low, high),
+        clim=(low, high),
+        smooth_shading=True,
+        scalar_bar_args={"title": "Elevation (m)"},
+    )
+    if coastline:
+        add_coastline_underlay(pl, (*window, 500.0, 0.0), coastline)
+    pl.add_text(f"{surface.name}  ·  {exaggeration:g}× vertical", font_size=10)
+    pl.camera_position = "xy"
+    pl.camera.elevation = -35
+    pl.reset_camera()
+    if screenshot is not None:
+        pl.screenshot(screenshot)
+    else:
+        pl.show()
 
 
 @app.command()

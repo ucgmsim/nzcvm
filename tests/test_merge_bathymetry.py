@@ -6,7 +6,12 @@ import xarray as xr
 from typer.testing import CliRunner
 
 from nzcvm.models.mesh import UPRIGHT_FRAME, surface_mesh
-from nzcvm.scripts.merge_bathymetry import app, coast_weight, merge_bathymetry
+from nzcvm.scripts.merge_bathymetry import (
+    app,
+    coast_weight,
+    merge_bathymetry,
+    round_mantissa,
+)
 
 SPACING = 30.0
 TAPER = 300.0
@@ -127,3 +132,25 @@ def test_cli_rejects_a_bathymetry_not_in_nztm(tmp_path) -> None:
 
     result = CliRunner().invoke(app, [str(land), str(tif), str(tmp_path / "o.zarr")])
     assert result.exit_code != 0
+
+
+@pytest.mark.parametrize("keep", [0, 7, 10, 23])
+def test_round_mantissa_bounds_the_relative_error(keep: int) -> None:
+    rng = np.random.default_rng(1)
+    values = rng.uniform(-6000.0, 3000.0, 1000).astype(np.float32)
+    rounded = round_mantissa(values, keep)
+    if keep == 23:
+        np.testing.assert_array_equal(rounded, values)
+    else:
+        bound = np.abs(values) * 2.0 ** -(keep + 1)
+        assert np.all(np.abs(rounded - values) <= bound)
+    assert np.all(round_mantissa(np.zeros(3, np.float32), keep) == 0.0)
+
+
+def test_rounding_leaves_land_exact() -> None:
+    dem = _dem()
+    dem[:, :30] = -123.456789
+    merged = merge_bathymetry(dem, _bathymetry(-1234.5678), taper=TAPER, keep_bits=7)
+    z = merged.sel(x=dem.x, y=dem.y).values
+    np.testing.assert_array_equal(z[:, :30], np.float32(-123.456789))
+    np.testing.assert_allclose(z[:, -5:], 1234.5678, rtol=2.0**-8)
