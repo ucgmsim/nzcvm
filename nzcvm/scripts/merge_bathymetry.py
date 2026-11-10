@@ -1,15 +1,15 @@
 """Merge a coarse bathymetry under a fine land DEM, as one topography surface.
 
-The land DEM (e.g. Copernicus GLO-30, built by ``just dem``) holds exactly
-0 m over the sea. Every node it puts above or below 0 is land, and keeps its
-value exactly. Every sea node takes the bathymetry instead, interpolated
-onto the DEM's lattice and clipped to at most sea level.
+The land DEM (Copernicus GLO-30, built by ``just dem``) holds exactly 0 m
+over the sea. Nodes above or below 0 are land, and keep their value
+exactly. Sea nodes take the bathymetry instead, interpolated onto the
+DEM's lattice and clipped to at most sea level.
 
 A coarse bathymetry doesn't meet the coastline at 0 m: its cells straddle
 the shore, so the first sea node can sit tens of metres deep and leave a
-cliff at the coast. The bathymetry is therefore scaled by a weight that
-rises smoothly (a smoothstep) from 0 at the coast to 1 a *taper* distance
-offshore. The seafloor leaves the shore at sea level and joins the
+cliff at the coast. So the merge multiplies the bathymetry by a weight
+that rises smoothly (a smoothstep) from 0 at the coast to 1 a *taper*
+distance offshore. The seafloor leaves the shore at sea level and joins the
 bathymetry with a continuous slope.
 
 The result keeps the DEM's node spacing and alignment, extended to cover
@@ -58,9 +58,9 @@ def coast_weight(sea: np.ndarray, spacing: float, taper: float) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        The smoothstep ``3s² - 2s³`` of ``s = min(d / taper, 1)``, where ``d``
-        is each node's distance to the nearest land node. Land nodes get 0.
-        A block with no land in it is all 1.
+        The smoothstep ``3 s² - 2 s³`` of ``s = min(d / taper, 1)``, where
+        ``d`` is each node's distance to the nearest land node. Land nodes
+        get 0, and a block without land is all 1.
     """
     if sea.all():
         return np.ones(sea.shape, dtype=np.float32)
@@ -206,7 +206,7 @@ def merge_bathymetry(
         assert block_info is not None
         (r0, r1), (c0, c1) = block_info[0]["array-location"]
         r, c = rows[r0:r1], cols[c0:c1]
-        # NaN wherever the stencil leaves the bathymetry or reaches a gap.
+        # NaN where the stencil leaves the bathymetry or touches a gap.
         elevation = sample(coefficients, r, c, order) + sample(gap_mask, r, c, 1)
         seafloor = np.nan_to_num(np.minimum(elevation, 0.0), nan=0.0)
         sea_depth = round_mantissa(-weight * seafloor, keep_bits)

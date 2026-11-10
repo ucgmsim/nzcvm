@@ -431,14 +431,14 @@ def basin(
 
 
 def sea_land_colormap(low: float, high: float, n: int = 512) -> ListedColormap:
-    """Blues below sea level and terrain colours above, meeting at 0 m.
+    """Blues below sea level and terrain colors above, meeting at 0 m.
 
     Parameters
     ----------
     low, high :
-        The colour limits (m), with ``low < 0 < high``.
+        The color limits (m), with ``low < 0 < high``.
     n :
-        Number of colours.
+        Number of colors.
 
     Returns
     -------
@@ -488,7 +488,7 @@ def dem(
         typer.Option(help="Save a PNG off screen instead of opening a window."),
     ] = None,
 ) -> None:
-    """Draw a DEM surface in 3-D, sea in blues and land in terrain colours."""
+    """Draw a DEM surface in 3-D: blue below sea level, terrain colors above."""
     pv = _require_pyvista()
     surface_grid = Surface.load(surface)
     x, y = surface_grid.values.x.values, surface_grid.values.y.values

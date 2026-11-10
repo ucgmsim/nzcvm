@@ -1,10 +1,10 @@
-"""Print the NZTM bounds covering every simulation domain, for ``gdalwarp -te``.
+"""Print the NZTM bounds of the simulation domains, for ``gdalwarp -te``.
 
-Reads the ``domain`` corners of every ``realisation.json`` under the events
+The domains are the ``domain`` corners of each realisation under the events
 directory (``<event>/<realisation>/realisation.json``, as the workflow
-writes them), unions the domains, and prints the union's bounding box,
-padded and snapped outward to a multiple of the snap distance, as
-``xmin ymin xmax ymax``.
+writes them). The script prints the bounding box of their union as
+``xmin ymin xmax ymax``, after padding the box and snapping it outward to
+a multiple of the snap distance.
 """
 
 import json

@@ -62,7 +62,7 @@ def test_coast_weight_without_land_is_one() -> None:
 def test_land_is_kept_and_the_sea_tapers_into_the_bathymetry(order: int) -> None:
     dem = _dem()
     merged = merge_bathymetry(dem, _bathymetry(), taper=TAPER, order=order)
-    # The DEM's own nodes; the lattice also extends over the bathymetry.
+    # The DEM's own nodes. The lattice also extends over the bathymetry.
     z = merged.sel(x=dem.x, y=dem.y).values
 
     np.testing.assert_array_equal(z[:, :30], -100.0)
