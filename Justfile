@@ -8,7 +8,7 @@ construct := "uv run nzcvm basin main"
 coastline := "resources/coastline.wkb.gz"
 # Topography the models are queried against: the Copernicus DEM on an
 # upright NZTM grid, with NIWA's bathymetry at sea, built by
-# `just copernicus_dem bathymetry dem`.
+# `just copernicus_dem dem`.
 dem := "resources/dem.zarr"
 # Topographies the basin surfaces were modelled against. Each basin's depths
 # are measured from its own, then follow the Copernicus DEM.
@@ -228,22 +228,14 @@ copernicus_dem:
         -co COMPRESS=DEFLATE -co PREDICTOR=3 -co TILED=YES -co BIGTIFF=YES \
         {{ dem_tiles }}/nz_cop30.vrt {{ dem_tiles }}/nz_dem_30m.tif
 
-# NIWA's 250 m NZ bathymetry (NZBATHY_ZIP, the nzbathy2016.zip download),
-# read straight from the zip and warped onto a 250 m NZTM raster cropped to
-# the union of the simulation domains under EVENTS_DIR, padded 10 km.
-bathymetry_tif := dem_tiles + "/nz_bathy_250m.tif"
-
-bathymetry:
-    mkdir -p {{ dem_tiles }}
-    gdalwarp -q -overwrite -t_srs EPSG:2193 -tr 250 250 -r bilinear \
-        -te $(uv run scripts/domain_bounds.py ${EVENTS_DIR}) \
-        -dstnodata nan -co COMPRESS=DEFLATE -co PREDICTOR=3 -co TILED=YES \
-        /vsizip/${NZBATHY_ZIP}/nzbathy_2016.tif {{ bathymetry_tif }}
+# NIWA's 250 m NZ bathymetry: NZBATHY_ZIP is the nzbathy2016.zip download.
+# GDAL reads it straight from the zip, and the merge reads only the window
+# under the DEM.
+bathymetry := "/vsizip/${NZBATHY_ZIP}/nzbathy_2016.tif"
 
 # The topography, stored as depth (+z down) like every other surface: the
 # Copernicus DEM on land, and the bathymetry at sea, fading in over 1 km
-# offshore so the seafloor meets the coast at sea level. The grid extends
-# past the DEM to cover the bathymetry.
+# offshore so the seafloor meets the coast at sea level.
 dem:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -251,7 +243,7 @@ dem:
     land={{ dem_tiles }}/land.zarr
     rm -rf "$land"
     {{ surface }} {{ dem_tiles }}/nz_dem_30m.tif 1 "$land" --flip
-    uv run --extra raster nzcvm merge-bathymetry main "$land" {{ bathymetry_tif }} {{ dem }}
+    uv run --extra raster nzcvm merge-bathymetry main "$land" "{{ bathymetry }}" {{ dem }}
     rm -r "$land"
 
 resources: dem vs30

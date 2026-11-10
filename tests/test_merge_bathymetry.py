@@ -62,7 +62,6 @@ def test_coast_weight_without_land_is_one() -> None:
 def test_land_is_kept_and_the_sea_tapers_into_the_bathymetry(order: int) -> None:
     dem = _dem()
     merged = merge_bathymetry(dem, _bathymetry(), taper=TAPER, order=order)
-    # The DEM's own nodes. The lattice also extends over the bathymetry.
     z = merged.sel(x=dem.x, y=dem.y).values
 
     np.testing.assert_array_equal(z[:, :30], -100.0)
@@ -89,49 +88,61 @@ def test_land_in_the_bathymetry_stays_at_sea_level() -> None:
     np.testing.assert_array_equal(z[:, 30:], 0.0)
 
 
-def test_the_lattice_extends_over_the_bathymetry() -> None:
-    merged = merge_bathymetry(_dem(), _bathymetry(extra=3000.0), taper=TAPER)
-    x = merged.x.values
-    np.testing.assert_allclose(np.diff(x), SPACING)
-    assert x[0] == pytest.approx(1.0e6 - 2 * 250.0, abs=SPACING)
-    assert x[-1] > 1.0e6 + 80 * SPACING + 3000.0 - SPACING
-    # The DEM's nodes keep their positions and values.
-    np.testing.assert_array_equal(
-        merged.sel(x=_dem().x, y=_dem().y).values[:, :30], -100.0
+def test_the_result_is_on_the_dem_lattice() -> None:
+    dem = _dem()
+    merged = merge_bathymetry(dem, _bathymetry(), taper=TAPER)
+    np.testing.assert_array_equal(merged.x, dem.x)
+    np.testing.assert_array_equal(merged.y, dem.y)
+
+
+def _sloping_raster(crs: str, step: float = 250.0) -> xr.DataArray:
+    """Elevation -100 - (x - 1e6) / 10 in NZTM x, on a *crs* lattice.
+
+    It covers the DEM 10 km past each side, in the raster's own projection.
+    """
+    from pyproj import Transformer
+
+    to_crs = Transformer.from_crs("EPSG:2193", crs, always_xy=True)
+    to_nztm = Transformer.from_crs(crs, "EPSG:2193", always_xy=True)
+    cx, cy = to_crs.transform(
+        [1.0e6 - 1e4, 1.0e6 + 80 * SPACING + 1e4] * 2,
+        [5.0e6 + 1e4] * 2 + [5.0e6 - 40 * SPACING - 1e4] * 2,
     )
-    np.testing.assert_allclose(merged.values[:, -5:], 200.0, rtol=1e-4)
+    x = np.arange(min(cx), max(cx) + step, step)
+    y = np.arange(max(cy), min(cy) - step, -step)
+    gx, gy = np.meshgrid(x, y)
+    nx, _ = to_nztm.transform(gx, gy)
+    values = (-100.0 - (nx - 1.0e6) / 10.0).astype(np.float32)
+    raster = xr.DataArray(values, dims=("y", "x"), coords={"x": x, "y": y})
+    return raster.rio.write_crs(crs)
 
 
-def test_cli_writes_a_surface(tmp_path) -> None:
+@pytest.mark.parametrize("crs", ["EPSG:2193", "EPSG:3994"])
+def test_cli_warps_the_bathymetry_under_the_dem(tmp_path, crs: str) -> None:
     pytest.importorskip("rioxarray")
     dem = _dem()
     land = tmp_path / "land.zarr"
     surface_mesh("land", dem.data, dem.x.values, dem.y.values).to_zarr(land)
-
-    raster = _bathymetry().rio.write_crs("EPSG:2193")
     tif = tmp_path / "bathy.tif"
-    raster.rio.to_raster(tif)
+    _sloping_raster(crs).rio.to_raster(tif)
 
     out = tmp_path / "dem.zarr"
     result = CliRunner().invoke(
-        app, [str(land), str(tif), str(out), "--taper", str(TAPER)]
+        app, [str(land), str(tif), str(out), "--taper", str(TAPER), "--keep-bits", "23"]
     )
     assert result.exit_code == 0, result.output
     merged = xr.open_zarr(out)
     assert merged.attrs["frame"] == list(UPRIGHT_FRAME)
-    np.testing.assert_allclose(merged.z.values[:, -5:], 200.0, rtol=1e-4)
-
-
-def test_cli_rejects_a_bathymetry_not_in_nztm(tmp_path) -> None:
-    pytest.importorskip("rioxarray")
-    dem = _dem()
-    land = tmp_path / "land.zarr"
-    surface_mesh("land", dem.data, dem.x.values, dem.y.values).to_zarr(land)
-    tif = tmp_path / "bathy.tif"
-    _bathymetry().rio.write_crs("EPSG:3994").rio.to_raster(tif)
-
-    result = CliRunner().invoke(app, [str(land), str(tif), str(tmp_path / "o.zarr")])
-    assert result.exit_code != 0
+    np.testing.assert_array_equal(merged.x, dem.x)
+    np.testing.assert_array_equal(merged.y, dem.y)
+    # Past the taper, the depth is the slope, up to the bilinear warp.
+    far = 30 + int(TAPER / SPACING) + 1
+    expected = 100.0 + (dem.x.values[far:] - 1.0e6) / 10.0
+    np.testing.assert_allclose(
+        merged.z.values[:, far:],
+        np.broadcast_to(expected, (40, len(expected))),
+        atol=0.1,
+    )
 
 
 @pytest.mark.parametrize("keep", [0, 7, 10, 23])
