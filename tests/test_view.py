@@ -126,7 +126,8 @@ def arrows(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 def test_logical_axes_point_along_i_j_k_from_the_origin(arrows: MagicMock):
-    # Nodes: x = 1000 i + 10 j + k, y = 2000 i + 20 j + k, z = 50 + 100 i + 10 j + k
+    # Node (i, j, k) has x = 1000 i + 10 j + k and y = 2000 i + 20 j + k.
+    # Its z is 50 + 100 i + 10 j + k.
     grid = _grid("g0", 100.0, 50.0)
     pl = MagicMock()
     # The bounds' diagonal is |(30, 40, 120)| = 130, so the scale is 19.5.
@@ -294,7 +295,7 @@ def test_dem_window_margin_widens_the_window():
 def test_dem_window_strides_down_to_the_node_limit(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(view, "DEM_MAX_NODES", 2)
     surface = view.dem_window(_dem(), (1020.0, 1060.0, 2030.0, 2070.0), margin=0.0)
-    # Five nodes along each axis need a stride of ceil(5 / 2) = 3.
+    # Each axis has 5 nodes, so the stride is ceil(5 / 2) = 3.
     np.testing.assert_allclose(np.unique(surface.points[:, 0]), [1020.0, 1050.0])
     np.testing.assert_allclose(np.unique(surface.points[:, 1]), [2030.0, 2060.0])
 
@@ -433,7 +434,7 @@ def test_point_picking_reports_values_inside_a_grid(
 
 
 def _tetra_mesh(path: Path, offset: float, vertical: str = "elevation") -> Path:
-    """A single tetrahedron with every coordinate shifted by *offset*."""
+    """A tetrahedron with every coordinate shifted by *offset*."""
     corners = (
         np.array([[0, 0, 0], [100, 0, 0], [0, 100, 0], [0, 0, 100]], dtype=np.float32)
         + offset
