@@ -455,3 +455,44 @@ def test_omit_none_drops_unset_metadata() -> None:
     metadata = ModelMetadata(title="A title").to_dict()
     assert metadata["title"] == "A title"
     assert "creator_name" not in metadata
+
+
+# ---------------------------------------------------------------------------
+# Grid config registration
+# ---------------------------------------------------------------------------
+
+
+def test_register_grid_config_imports_every_grid_submodule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``register_grid_config`` imports each grid config module by full name.
+
+    Every submodule of :mod:`nzcvm.config.grids` must be imported under its
+    fully qualified name, so that the ``GridConfig`` subclasses it defines
+    are registered with the discriminator.
+    """
+    import importlib
+    import sys
+
+    from nzcvm.config import grids
+
+    real_import_module = importlib.import_module
+    imported: list[str] = []
+
+    def recording_import_module(name: str, package: str | None = None):
+        imported.append(name)
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", recording_import_module)
+    grids.register_grid_config()
+
+    expected = {
+        f"nzcvm.config.grids.{name}"
+        for name in ("borehole", "core", "emod3d", "model", "regular", "sw4", "terrain")
+    }
+    assert set(imported) == expected
+    assert len(imported) == len(expected)
+    for name in expected:
+        assert name in sys.modules
+    # The imported modules register their configs as GridConfig subclasses.
+    assert issubclass(RegularGridConfig, grids.GridConfig)
