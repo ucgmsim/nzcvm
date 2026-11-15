@@ -467,9 +467,9 @@ def test_register_grid_config_imports_every_grid_submodule(
 ) -> None:
     """``register_grid_config`` imports each grid config module by full name.
 
-    Every submodule of :mod:`nzcvm.config.grids` must be imported under its
-    fully qualified name, so that the ``GridConfig`` subclasses it defines
-    are registered with the discriminator.
+    It must import each submodule of :mod:`nzcvm.config.grids` under its
+    fully qualified name, so that the discriminator registers the
+    ``GridConfig`` subclasses that submodule defines.
     """
     import importlib
     import sys
