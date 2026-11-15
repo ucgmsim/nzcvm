@@ -253,9 +253,48 @@ MODEL_COLUMNS = {
         rho="Density",
         vp="Vp",
         vs="Vs",
+        # EP2020 publishes Qp and Qs as separate tables on the velocity grid.
+        # ``convert --qp/--qs`` joins them on. Without them, Q follows Vs.
+        qp="Qp",
+        qs="Qs",
         affine_inverse=_EP2020_INV,
     )
 }
+
+
+def join_q_table(
+    df: pd.DataFrame,
+    q_table: pd.DataFrame,
+    column: str,
+    tomography_model: TomographyModel,
+) -> pd.DataFrame:
+    """Join the *column* of a Q table onto the velocity table, node by node.
+
+    EP2020's Qp and Qs tables list the same nodes as the velocity table, in
+    the same ``x``, ``y``, ``z`` columns printed to the same precision, so
+    the nodes match exactly.
+
+    Raises
+    ------
+    ValueError
+        If the Q table has no *column*, or its nodes don't match the velocity
+        table's one to one.
+    """
+    keys = [tomography_model.x, tomography_model.y, tomography_model.z]
+    if column not in q_table.columns:
+        raise ValueError(
+            f"Q table has no {column!r} column, only {list(q_table.columns)}."
+        )
+    if q_table.duplicated(keys).any():
+        raise ValueError(f"Q table lists some {column} nodes more than once.")
+    joined = df.merge(q_table[[*keys, column]], on=keys, how="left", validate="1:1")
+    missing = int(joined[column].isna().sum())
+    if missing:
+        raise ValueError(
+            f"Q table has no {column} at {missing} of {len(df)} velocity nodes."
+        )
+    return joined
+
 
 app = typer.Typer(
     help="Convert a CSV-like tomography model to a zarr tetrahedral mesh."
@@ -280,11 +319,34 @@ def convert(
     model_type: Annotated[
         ModelType, typer.Argument(help="Model type to read.")
     ] = ModelType.EP2020,
+    qp: Annotated[
+        Path | None,
+        typer.Option(
+            help="Qp table on the same grid as the model. Without it, Qp = 2 Qs.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
+    qs: Annotated[
+        Path | None,
+        typer.Option(
+            help="Qs table on the same grid as the model. Without it, Qs = 50 Vs (Vs in km/s).",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
 ) -> None:
-    """Entry point for the ``nzcvm convert-tomography`` command."""
-    df = pd.read_csv(model, **MODEL_KWARGS[model_type])  # ty: ignore[no-matching-overload]
+    """Entry point for the ``nzcvm tomography convert`` command."""
+    read_kwargs = MODEL_KWARGS[model_type]
+    df = pd.read_csv(model, **read_kwargs)  # ty: ignore[no-matching-overload]
 
     column_keys = MODEL_COLUMNS[model_type]
+    for q_path, column in ((qp, column_keys.qp), (qs, column_keys.qs)):
+        if q_path is not None:
+            q_table = pd.read_csv(q_path, **read_kwargs)  # ty: ignore[no-matching-overload]
+            df = join_q_table(df, q_table, column, column_keys)
 
     mesh = data_frame_to_mesh(model.stem, df, column_keys)
     mesh.to_zarr(output, mode="w", encoding=mesh_encoding(mesh))
