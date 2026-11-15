@@ -35,6 +35,7 @@ from nzcvm.scripts.convert_tomography import (
     _project_origin,
     app,
     data_frame_to_mesh,
+    join_q_table,
     tet_connectivity,
 )
 
@@ -360,3 +361,72 @@ def test_convert_command_writes_an_ep2020_mesh(tmp_path: Path) -> None:
         np.asarray(mesh.attrs["transform"], dtype=np.float32),
         MODEL_COLUMNS[ModelType.EP2020].affine_inverse.astype(np.float32).T,
     )
+
+
+def _qs(x, y, z):
+    return 100.0 + 10.0 * x + 5.0 * y + 2.0 * z
+
+
+def _write_ep_table(path: Path, df: pd.DataFrame) -> None:
+    with path.open("w") as handle:
+        handle.write("provenance line skipped by the reader\n")
+        df.to_string(handle, index=False)
+
+
+def _ep_tables(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """EP2020-layout velocity, Qp and Qs tables, each shuffled differently."""
+    df = _shuffled_grid(nx=3, ny=2, nz=4).rename(
+        columns={
+            "x": "x(km)",
+            "y": "y(km)",
+            "z": "Depth(km_BSL)",
+            "rho": "Density",
+            "vp": "Vp",
+            "vs": "Vs",
+        }
+    )
+    keys = ["x(km)", "y(km)", "Depth(km_BSL)"]
+    coords = df[keys].to_numpy().T
+    qs = df[keys].assign(Qs=_qs(*coords), SF_Qs=6.0)
+    # Qp below Qs, which the 2 Qs fallback could never give.
+    qp = df[keys].assign(Qp=0.8 * _qs(*coords), SF_Qp=6.0)
+
+    paths = (tmp_path / "ep2020.csv", tmp_path / "qp.txt", tmp_path / "qs.txt")
+    for path, table, seed in zip(paths, (df, qp, qs), (0, 1, 2), strict=True):
+        _write_ep_table(path, table.sample(frac=1, random_state=seed))
+    return paths
+
+
+def test_convert_command_joins_q_tables(tmp_path: Path) -> None:
+    model, qp, qs = _ep_tables(tmp_path)
+    output = tmp_path / "out.zarr"
+
+    result = CliRunner().invoke(
+        app, [str(model), str(output), "ep2020", "--qp", str(qp), "--qs", str(qs)]
+    )
+    assert result.exit_code == 0, result.output
+
+    mesh = xr.open_zarr(output)
+    x, y, z = _vertex_coordinates(mesh)
+    np.testing.assert_allclose(mesh["qs"], _qs(x, y, z), rtol=1e-6)
+    np.testing.assert_allclose(mesh["qp"], 0.8 * _qs(x, y, z), rtol=1e-6)
+    np.testing.assert_allclose(mesh["vs"], 1000 * _vs(x, y, z), rtol=1e-6)
+
+
+def test_q_table_missing_a_node_is_rejected(tmp_path: Path) -> None:
+    model, _, qs = _ep_tables(tmp_path)
+    lines = qs.read_text().splitlines()
+    qs.write_text("\n".join(lines[:-1]) + "\n")
+
+    result = CliRunner().invoke(
+        app, [str(model), str(tmp_path / "out.zarr"), "ep2020", "--qs", str(qs)]
+    )
+    assert result.exit_code != 0
+    assert "no Qs at 1 of 24 velocity nodes" in str(result.exception)
+
+
+def test_q_table_without_its_column_is_rejected() -> None:
+    df = _shuffled_grid()
+    q_table = df[["x", "y", "z"]].assign(Qs=1.0)
+    with pytest.raises(ValueError, match="no 'Qp' column"):
+        join_q_table(df, q_table, "Qp", _TOMOGRAPHY)

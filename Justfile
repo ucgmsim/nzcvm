@@ -193,8 +193,30 @@ basins: alexandra balclutha banks canterbury castle_hill cheviot collingwood dun
 tomography := "uv run nzcvm tomography convert"
 surface := "uv run --extra raster nzcvm convert-tiff main"
 
-ep2020:
-    @test -d models/ep2020.zarr || {{ tomography }} ${NZCVM_DATA_ROOT}/tomography/EP2020/ep2020.csv models/ep2020.zarr
+# NZwide 2.2 (Eberhart-Phillips et al. 2020): velocity, Qp and Qs tables on
+# one grid, from https://doi.org/10.5281/zenodo.3779523. Checked against the
+# record's MD5s.
+ep2020_zenodo := "https://zenodo.org/records/3779523/files"
+ep2020_cache := "/var/tmp/ep2020"
+
+ep2020_download:
+    mkdir -p {{ ep2020_cache }}
+    cd {{ ep2020_cache }} && for table in vlnzw2p2dnxyzltln Qpnzw2p2xyzltln Qsnzw2p2xyzltln; do \
+        test -f $table.tbl.txt.gz || curl -fsSL -o $table.tbl.txt.gz {{ ep2020_zenodo }}/$table.tbl.txt.gz; \
+    done
+    cd {{ ep2020_cache }} && printf '%s  %s\n' \
+        15fd976ee7e468b601e195676cee1b9e vlnzw2p2dnxyzltln.tbl.txt.gz \
+        3de39d3529b4696ab6978f006cfc58ab Qpnzw2p2xyzltln.tbl.txt.gz \
+        2cfe70fba5d8a68f9f50d403afd12a4b Qsnzw2p2xyzltln.tbl.txt.gz \
+        | md5sum --check --quiet
+
+# The mesh is named after the velocity table's stem, hence ep2020.csv.
+ep2020: ep2020_download
+    @test -d models/ep2020.zarr || ( \
+        gunzip -c {{ ep2020_cache }}/vlnzw2p2dnxyzltln.tbl.txt.gz > {{ ep2020_cache }}/ep2020.csv && \
+        {{ tomography }} {{ ep2020_cache }}/ep2020.csv models/ep2020.zarr \
+            --qp {{ ep2020_cache }}/Qpnzw2p2xyzltln.tbl.txt.gz \
+            --qs {{ ep2020_cache }}/Qsnzw2p2xyzltln.tbl.txt.gz )
 
 models: ep2020 basins
     MODEL_PATH=$(realpath models) uv run pytest -svv tests/test_models.py
