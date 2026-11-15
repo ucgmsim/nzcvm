@@ -100,8 +100,8 @@ def _backus(media: list[Medium]) -> dict[str, float]:
         "rho": rho.mean(),
         "vp": 1.0 / np.sqrt(np.mean(1.0 / (rho * vp**2)) * rho.mean()),
         "vs": 1.0 / np.sqrt(np.mean(1.0 / (rho * vs**2)) * rho.mean()),
-        "qp": np.mean(1.0 / vp) / np.mean(1.0 / (vp * qp)),
-        "qs": np.mean(1.0 / vs) / np.mean(1.0 / (vs * qs)),
+        "qp": np.mean(1.0 / (rho * vp**2)) / np.mean(1.0 / (rho * vp**2 * qp)),
+        "qs": np.mean(1.0 / (rho * vs**2)) / np.mean(1.0 / (rho * vs**2 * qs)),
     }
 
 

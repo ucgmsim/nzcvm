@@ -32,8 +32,12 @@ class BackusAveragedLayer(
     combines the samples, weighted by their ``alpha``: ``rho`` is the
     arithmetic mean, ``vp`` and ``vs`` the Backus average
     ``sqrt(1 / (<1 / (rho v^2)> <rho>))``, ``qp`` and ``qs`` the
-    ``1 / v``-weighted harmonic mean ``<1 / v> / <1 / (v Q)>``, and ``alpha``
-    the fraction of covered samples.
+    compliance-weighted harmonic mean ``<1 / M> / <1 / (M Q)>`` with
+    ``M = rho v^2``, and ``alpha`` the fraction of covered samples.
+
+    The Q average is the Backus average of the complex modulus
+    ``M (1 + i / Q)`` to first order in ``1 / Q``, so it holds in the same
+    long-wavelength limit as the velocity average.
     """
 
     def __init__(
@@ -74,10 +78,8 @@ class BackusAveragedLayer(
         a_rho = xr.zeros_like(z)
         a_invm = xr.zeros_like(z)
         a_invmu = xr.zeros_like(z)
-        a_svp = xr.zeros_like(z)
-        a_svpq = xr.zeros_like(z)
-        a_svs = xr.zeros_like(z)
-        a_svsq = xr.zeros_like(z)
+        a_invmq = xr.zeros_like(z)
+        a_invmuq = xr.zeros_like(z)
 
         for m in range(n):
             sample_z = upper + ((m + 0.5) / n) * span
@@ -87,14 +89,12 @@ class BackusAveragedLayer(
             a = q.alpha
             w += a
             a_rho += a * q.rho
-            a_invm += a * np.reciprocal(q.rho * np.square(q.vp))
-            a_invmu += a * np.reciprocal(q.rho * np.square(q.vs))
-            inv_vp = np.reciprocal(q.vp)
-            a_svp += a * inv_vp
-            a_svpq += a * inv_vp * np.reciprocal(q.qp)
-            inv_vs = np.reciprocal(q.vs)
-            a_svs += a * inv_vs
-            a_svsq += a * inv_vs * np.reciprocal(q.qs)
+            inv_m = np.reciprocal(q.rho * np.square(q.vp))
+            inv_mu = np.reciprocal(q.rho * np.square(q.vs))
+            a_invm += a * inv_m
+            a_invmu += a * inv_mu
+            a_invmq += a * inv_m * np.reciprocal(q.qp)
+            a_invmuq += a * inv_mu * np.reciprocal(q.qs)
 
         covered = w > 0
         w_safe = w.where(covered, 1.0)
@@ -103,7 +103,7 @@ class BackusAveragedLayer(
         rho = xr.where(covered, a_rho / w_safe, 0.0)
         vp = xr.where(covered, w / np.sqrt((a_invm * a_rho).where(covered, 1.0)), 0.0)
         vs = xr.where(covered, w / np.sqrt((a_invmu * a_rho).where(covered, 1.0)), 0.0)
-        qp = xr.where(covered, a_svp / a_svpq.where(covered, 1.0), 0.0)
-        qs = xr.where(covered, a_svs / a_svsq.where(covered, 1.0), 0.0)
+        qp = xr.where(covered, a_invm / a_invmq.where(covered, 1.0), 0.0)
+        qs = xr.where(covered, a_invmu / a_invmuq.where(covered, 1.0), 0.0)
 
         return QualitiesSchema.new(rho=rho, vp=vp, vs=vs, qp=qp, qs=qs, alpha=alpha)
