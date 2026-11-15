@@ -59,25 +59,14 @@ class ElyLayer(Layer[ElyLayerConfig], config_cls=ElyLayerConfig):
             logger.debug("Chunk outside taper, skipping Ely taper calculation.")
             return self.next_layer(grid, model_range=model_range)
 
-        basins = None
-
-        if model_range == ModelRange.TOMOGRAPHY:
-            in_basin = xr.full_like(is_in_taper, False)
-        else:
-            surface_layer = grid_like_at_depth(grid, 0.0)
-            basin_at_surface = self.next_layer(
-                surface_layer, model_range=ModelRange.BASINS
-            ).squeeze()
-            in_basin = xr.apply_ufunc(np.isclose, basin_at_surface.alpha, 1.0)
-            if in_basin.all():
-                # Below the basin everywhere in the velocity model, skip the
-                # Ely taper and defer every quality to the layer underneath,
-                # preserving the impedance contrast between the basin and
-                # tomography layers.
-                logger.debug("Chunk inside basin, skipping Ely taper calculation.")
-                return self.next_layer(grid, model_range=model_range)
-            else:
-                basins = self.next_layer(grid, model_range=ModelRange.BASINS)
+        # Basins composite over the tapered tomography, so a column under a
+        # basin keeps the basin's own qualities and gets the taper only in
+        # the tomography beneath it.
+        basins = (
+            None
+            if model_range == ModelRange.TOMOGRAPHY
+            else self.next_layer(grid, model_range=ModelRange.BASINS)
+        )
 
         safe_depth = grid.depth.clip(max=depth_t)
 
@@ -93,7 +82,7 @@ class ElyLayer(Layer[ElyLayerConfig], config_cls=ElyLayerConfig):
             output_dtypes=[np.float32],
         )
         non_nan_vs30 = ~np.isnan(vs30)
-        is_in_taper = non_nan_vs30 & ~in_basin & is_in_taper
+        is_in_taper = non_nan_vs30 & is_in_taper
 
         # Select a z-layer of the block.
         # The array [0] as the selection is important because it preserves the k
@@ -119,14 +108,10 @@ class ElyLayer(Layer[ElyLayerConfig], config_cls=ElyLayerConfig):
         # Get background for all points in this chunk (becomes the out buffer).
         background = self.next_layer(grid, model_range=ModelRange.TOMOGRAPHY)
 
+        qualities.blend(
+            ely_qualities, background, out=background, where=is_in_taper.values
+        )
         if basins is not None:
             qualities.blend(basins, background, out=background)
-            qualities.blend(
-                ely_qualities, background, out=background, where=is_in_taper.values
-            )
-        else:
-            qualities.blend(
-                ely_qualities, background, out=background, where=is_in_taper.values
-            )
 
         return background

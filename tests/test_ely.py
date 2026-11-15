@@ -108,12 +108,16 @@ class _StubConfig(LayerConfig):
 class _Stub(Layer[_StubConfig]):
     """Constant tomography, with a basin in the columns ``i`` in *basin_columns*.
 
+    The basin fills each of those columns down to *basin_bottom*, exclusive.
     Records the model range of every call in :attr:`calls`.
     """
 
-    def __init__(self, basin_columns: tuple[int, ...] = ()) -> None:
+    def __init__(
+        self, basin_columns: tuple[int, ...] = (), basin_bottom: float = np.inf
+    ) -> None:
         super().__init__(_StubConfig(), None, None)  # ty: ignore[invalid-argument-type]
         self.basin_columns = basin_columns
+        self.basin_bottom = basin_bottom
         self.calls: list[ModelRange] = []
 
     def __call__(
@@ -121,9 +125,10 @@ class _Stub(Layer[_StubConfig]):
     ) -> Qualities:
         self.calls.append(model_range)
         like = xr.zeros_like(grid.z, dtype=np.float32)
-        basin = like.copy(data=np.zeros(like.shape, dtype=bool))
+        column = like.copy(data=np.zeros(like.shape, dtype=bool))
         for i in self.basin_columns:
-            basin[{Coordinate.I.value: i}] = True
+            column[{Coordinate.I.value: i}] = True
+        basin = column & (grid.depth < self.basin_bottom)
         values: dict[str, xr.DataArray] = {}
         for name, tomo, bas in zip(NAMES, TOMOGRAPHY, BASIN, strict=True):
             if model_range == ModelRange.TOMOGRAPHY:
@@ -237,13 +242,28 @@ def test_layer_basins_range_bypasses_taper(vs30_path: Path) -> None:
     np.testing.assert_allclose(_column(result, 0, "alpha"), 1.0)
 
 
-def test_layer_skips_chunk_all_in_basin(vs30_path: Path) -> None:
+def test_layer_keeps_basin_filling_the_taper(vs30_path: Path) -> None:
     stub = _Stub(basin_columns=(0, 1))
     result = _layer(vs30_path, stub)(_grid(coastline=[0.0, 0.0]))
-    assert stub.calls[-1] == ModelRange.ALL
     for i in range(2):
         for name, value in zip(NAMES, BASIN, strict=True):
             np.testing.assert_allclose(_column(result, i, name), value, rtol=1e-6)
+
+
+def test_layer_tapers_tomography_under_basin(vs30_path: Path) -> None:
+    # The basin covers the top two nodes of every column in the chunk; the
+    # taper still applies to the tomography beneath it, above depth_t.
+    stub = _Stub(basin_columns=(0,), basin_bottom=100.0)
+    result = _layer(vs30_path, stub)(_grid(coastline=[0.0]))
+    for name, value in zip(NAMES, BASIN, strict=True):
+        np.testing.assert_allclose(_column(result, 0, name)[:2], value, rtol=1e-6)
+    expected = _profile(Z[2:3])
+    for name in NAMES:
+        np.testing.assert_allclose(
+            _column(result, 0, name)[2:3], expected[name].values, rtol=1e-5
+        )
+    for name, value in zip(NAMES, TOMOGRAPHY, strict=True):
+        np.testing.assert_allclose(_column(result, 0, name)[3:], value, rtol=1e-6)
 
 
 def test_layer_blends_basins_and_tapers_the_rest(vs30_path: Path) -> None:
