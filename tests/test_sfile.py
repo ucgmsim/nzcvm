@@ -278,6 +278,44 @@ def test_emod3d_output_rejects_a_physical_grid(
         emod3d.to_emod3d(model, tmp_path / "emod3d")
 
 
+@pytest.mark.parametrize(
+    ("filename", "component"),
+    [
+        (emod3d.RHOFILE, "rho"),
+        (emod3d.VPFILE, "vp"),
+        (emod3d.VSFILE, "vs"),
+    ],
+)
+def test_emod3d_output_layout_flip_and_units(
+    tmp_path: Path, filename: str, component: str
+):
+    """Files are float32 (ny, nz, nx), y points south, values in km/s, g/cm^3."""
+    ni, nj, nk = shape = (2, 3, 4)
+    q = _qualities(shape=shape)
+    model = VelocityModel(
+        grids={
+            "g0": _grid("g0", resolution=100.0, base=0.0, shape=shape, solver="nominal")
+        },
+        qualities={"g0": q},
+        metadata=ModelMetadata(),
+    )
+    out = tmp_path / "emod3d"
+    emod3d.to_emod3d(model, out)
+
+    path = out / filename
+    assert path.stat().st_size == ni * nj * nk * 4
+    got = np.fromfile(path, dtype=np.float32).reshape(nj, nk, ni)
+    expected = q[component].values.transpose(1, 2, 0)[::-1] / 1000
+    np.testing.assert_allclose(got, expected, rtol=1e-6)
+
+
+def test_emod3d_output_rejects_mixed_resolutions(
+    tmp_path: Path, nominal_velocity_model: VelocityModel
+):
+    with pytest.raises(ValueError, match="one horizontal resolution"):
+        emod3d.to_emod3d(nominal_velocity_model, tmp_path / "emod3d")
+
+
 def _run_with_timeout(fn, timeout: float = 30.0) -> BaseException | None:
     """Run ``fn`` in a thread and return what it raised, failing on a hang."""
     raised = []
