@@ -33,18 +33,23 @@ def _prepare_component(qualities: Qualities, component: Component) -> da.Array:
 
 @register_format("emod3d")
 def to_emod3d(velocity_model: VelocityModel, directory: Path):
-    """Write a single-block velocity model to an EMOD3D binary directory.
+    """Write a velocity model to an EMOD3D binary directory.
+
+    The grids are stacked along depth into a single EMOD3D block.
 
     Parameters
     ----------
+    velocity_model :
+        Velocity model populated by the query pipeline, whose grids all use
+        the nominal solver.
     directory :
         Output directory, created if it doesn't exist.
 
     Raises
     ------
     ValueError
-        If *dtree* contains more or fewer than one block, or any grid
-        targets a physical solver.
+        If any grid targets a physical solver, or the grids don't all share
+        one horizontal resolution.
     """
 
     # The EMOD3D format expects the grid to have the form z, y, x (with y points
