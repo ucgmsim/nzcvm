@@ -32,7 +32,8 @@ impl Quality {
     /// Composite `self` over `rhs` using the Porter-Duff "over" operator.
     ///
     /// The resulting `alpha` is `self.alpha + rhs.alpha * (1 - self.alpha)`.
-    /// Material properties are blended proportionally.
+    /// Density and velocities are blended proportionally, and Q
+    /// consistently with the velocities (see [`velocity_weighted_q`]).
     ///
     /// # Examples
     ///
@@ -57,8 +58,9 @@ impl Quality {
         let alpha = self.alpha + rhs.alpha * (1.0 - self.alpha);
         let a0 = self.alpha / alpha;
         let a1 = rhs.alpha * (1.0 - self.alpha) / alpha;
-        let qp = (a0 * self.qp.recip() + a1 * rhs.qp.recip()).recip();
-        let qs = (a0 * self.qs.recip() + a1 * rhs.qs.recip()).recip();
+        let w = [a0, a1];
+        let qp = velocity_weighted_q(w, [self.vp, rhs.vp], [self.qp, rhs.qp]);
+        let qs = velocity_weighted_q(w, [self.vs, rhs.vs], [self.qs, rhs.qs]);
 
         Self {
             rho: a0 * self.rho + a1 * rhs.rho,
@@ -70,17 +72,40 @@ impl Quality {
         }
     }
 }
-/// Interpolates a tetrahedral cell's vertex properties.  Q is interpolated
-/// harmonically (through 1/Q), the rest linearly.
+/// The quality factor consistent with interpolating velocity linearly.
+///
+/// With weights `w`, velocities `v` and quality factors `q`, this is the
+/// `v`-weighted harmonic mean `Σ w v / Σ (w v / Q)`.  In the low-loss limit
+/// the complex velocity is `v (1 + i / 2Q)`, so interpolating it linearly
+/// interpolates `v` linearly and `v / Q` linearly, and `Q` is their ratio.
+/// A consequence is that `Q = c v` at every input gives `Q = c v` at the
+/// output.
+///
+/// When `Σ w v` is not positive (every weighted velocity is zero, as in
+/// water for `vs`) the attenuation is irrelevant, and this falls back to the
+/// plain weighted harmonic mean so the result stays finite.
+fn velocity_weighted_q<const N: usize>(w: [Real; N], v: [Real; N], q: [Real; N]) -> Real {
+    let wv: [Real; N] = std::array::from_fn(|i| w[i] * v[i]);
+    let total = wv.iter().copied().sum::<Real>();
+    if total > 0.0 {
+        total / interpolate(q.map(Real::recip), wv)
+    } else {
+        interpolate(q.map(Real::recip), w).recip()
+    }
+}
+
+/// Interpolates a tetrahedral cell's vertex properties.  Velocities, density
+/// and alpha are interpolated linearly, and Q consistently with the
+/// velocities (see [`velocity_weighted_q`]).
 pub fn barycentric_interpolate(q: [Quality; 4], w: [Real; 4]) -> Quality {
     let linear = |f: fn(&Quality) -> Real| interpolate(q.each_ref().map(f), w);
-    let harmonic = |f: fn(&Quality) -> Real| interpolate(q.map(|q| f(&q).recip()), w).recip();
+    let field = |f: fn(&Quality) -> Real| q.each_ref().map(f);
     Quality {
         rho: linear(|q| q.rho),
         vp: linear(|q| q.vp),
         vs: linear(|q| q.vs),
-        qp: harmonic(|q| q.qp),
-        qs: harmonic(|q| q.qs),
+        qp: velocity_weighted_q(w, field(|q| q.vp), field(|q| q.qp)),
+        qs: velocity_weighted_q(w, field(|q| q.vs), field(|q| q.qs)),
         alpha: linear(|q| q.alpha),
     }
 }
@@ -252,6 +277,7 @@ mod tests {
 
     #[test]
     fn test_blend_harmonic_mean_qp() {
+        // Equal vp, so the velocity weighting reduces to the plain harmonic mean:
         // alpha_a=0.5, alpha_b=0.5 → a0=2/3, a1=1/3, qp 100/300 → harmonic 900/7
         // Arithmetic mean would give 500/3 ≈ 166.667
         let a = Quality {
@@ -430,35 +456,100 @@ mod tests {
             prop_assert!((ab.alpha - 1.0).abs() < 1e-5);
         }
 
-        /// `qp`/`qs` are combined as a *harmonic* mean, which for distinct
-        /// inputs is **strictly** below the arithmetic mean of the same values.
-        ///
-        /// The strictness is the point: asserting only `<=` would be satisfied
-        /// by a plain weighted sum, so swapping the `recip()` chain for
-        /// arithmetic averaging would go unnoticed here.  The preconditions
-        /// keep the AM-HM gap comfortably above the f32 noise floor.
+        /// `qp`/`qs` follow the velocity-weighted harmonic mean
+        /// `Σ a v / Σ (a v / Q)`, the rule consistent with blending
+        /// velocities linearly.
         #[test]
-        fn prop_blend_q_is_strictly_harmonic(a in quality(), b in quality()) {
+        fn prop_blend_q_is_velocity_weighted(a in quality(), b in quality()) {
             let alpha = a.alpha + b.alpha * (1.0 - a.alpha);
-            prop_assume!(alpha > 1e-3);
+            prop_assume!(a.alpha >= TRANSPARENT_ALPHA && b.alpha >= TRANSPARENT_ALPHA);
             let a0 = a.alpha / alpha;
             let a1 = b.alpha * (1.0 - a.alpha) / alpha;
-
-            // Both operands must genuinely participate...
-            prop_assume!(a0 > 0.1 && a1 > 0.1);
-            // ...and the values must differ by at least 2x, which bounds the
-            // AM-HM gap below at ~4% of the arithmetic mean.
-            let (lo, hi) = (a.qp.min(b.qp), a.qp.max(b.qp));
-            prop_assume!(hi >= 2.0 * lo);
+            let expected = |va: Real, qa: Real, vb: Real, qb: Real| {
+                (a0 * va + a1 * vb) / (a0 * va / qa + a1 * vb / qb)
+            };
 
             let ab = a.blend(&b);
-            let arithmetic = a0 * a.qp + a1 * b.qp;
-
-            prop_assert!(ab.qp < arithmetic * 0.99,
-                         "qp {} is not strictly below the arithmetic mean {}",
-                         ab.qp, arithmetic);
-            // Still a mean: bounded by the inputs it averages.
-            prop_assert!(ab.qp >= lo - tol(hi) && ab.qp <= hi + tol(hi));
+            let qp = expected(a.vp, a.qp, b.vp, b.qp);
+            let qs = expected(a.vs, a.qs, b.vs, b.qs);
+            prop_assert!((ab.qp - qp).abs() <= 1e-4 * qp, "qp {} != {}", ab.qp, qp);
+            prop_assert!((ab.qs - qs).abs() <= 1e-4 * qs, "qs {} != {}", ab.qs, qs);
         }
+
+        /// A medium whose Q is proportional to velocity (as in the Ely
+        /// taper) keeps that proportion through a blend, which the plain
+        /// harmonic mean of Q does not.
+        #[test]
+        fn prop_blend_preserves_q_proportional_to_v(
+            a in quality(), b in quality(), c in (0.001 as Real)..1.0,
+        ) {
+            let a = Quality { qp: c * a.vp, qs: c * a.vs, ..a };
+            let b = Quality { qp: c * b.vp, qs: c * b.vs, ..b };
+            let ab = a.blend(&b);
+            prop_assert!((ab.qp - c * ab.vp).abs() <= 1e-4 * ab.qp);
+            prop_assert!((ab.qs - c * ab.vs).abs() <= 1e-4 * ab.qs);
+        }
+
+        /// Barycentric interpolation preserves `Q = c v` in the same way.
+        #[test]
+        fn prop_barycentric_preserves_q_proportional_to_v(
+            q in proptest::array::uniform4(quality()),
+            raw in proptest::array::uniform4((0.01 as Real)..1.0),
+            c in (0.001 as Real)..1.0,
+        ) {
+            let total: Real = raw.iter().sum();
+            let w = raw.map(|x| x / total);
+            let q = q.map(|q| Quality { qp: c * q.vp, qs: c * q.vs, ..q });
+            let r = barycentric_interpolate(q, w);
+            prop_assert!((r.qp - c * r.vp).abs() <= 1e-4 * r.qp);
+            prop_assert!((r.qs - c * r.vs).abs() <= 1e-4 * r.qs);
+        }
+    }
+
+    #[test]
+    fn test_blend_q_weights_by_velocity() {
+        // Equal weights, vs 300/2900, Qs 15/145: Σ v / Σ (v / Q) = 3200 / 40 = 80.
+        let a = Quality {
+            rho: 1800.0,
+            vp: 1700.0,
+            vs: 300.0,
+            qp: 30.0,
+            qs: 15.0,
+            alpha: 0.5,
+        };
+        let b = Quality {
+            rho: 2600.0,
+            vp: 5000.0,
+            vs: 2900.0,
+            qp: 290.0,
+            qs: 145.0,
+            alpha: 1.0,
+        };
+        // a0 = 0.5, a1 = 0.5.
+        let blended = a.blend(&b);
+        assert_relative_eq!(blended.qs, 80.0, max_relative = 1e-5);
+    }
+
+    #[test]
+    fn test_q_with_zero_velocity_falls_back_to_harmonic() {
+        // Water has vs = 0 at every input, so Qs falls back to the plain
+        // harmonic mean rather than 0 / 0.
+        let a = Quality {
+            rho: 1000.0,
+            vp: 1500.0,
+            vs: 0.0,
+            qp: 100.0,
+            qs: 100.0,
+            alpha: 0.5,
+        };
+        let b = Quality {
+            qs: 300.0,
+            alpha: 1.0,
+            ..a
+        };
+        let blended = a.blend(&b);
+        assert_relative_eq!(blended.qs, 150.0, max_relative = 1e-5);
+        let r = barycentric_interpolate([a, b, a, b], [0.25; 4]);
+        assert_relative_eq!(r.qs, 150.0, max_relative = 1e-5);
     }
 }
