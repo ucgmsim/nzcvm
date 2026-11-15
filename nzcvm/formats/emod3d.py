@@ -35,7 +35,7 @@ def _prepare_component(qualities: Qualities, component: Component) -> da.Array:
 def to_emod3d(velocity_model: VelocityModel, directory: Path):
     """Write a velocity model to an EMOD3D binary directory.
 
-    The grids are stacked along depth into a single EMOD3D block.
+    Stacks the grids along depth into one EMOD3D block.
 
     Parameters
     ----------

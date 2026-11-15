@@ -27,9 +27,12 @@ def _ramp(shape: tuple[int, int, int] = SHAPE, offset: float = 0.0) -> np.ndarra
     return (100 * ii + 10 * jj + kk + offset).astype(np.float32)
 
 
+_DEFAULT_GEOMETRY = shapely.box(170.0, -43.0, 171.0, -42.0)
+
+
 def _grid(
     name: str,
-    geometry: shapely.Geometry = shapely.box(170.0, -43.0, 171.0, -42.0),
+    geometry: shapely.Geometry = _DEFAULT_GEOMETRY,
     shape: tuple[int, int, int] = SHAPE,
 ) -> Grid:
     ramp = _ramp(shape)
@@ -143,7 +146,7 @@ def test_flip_reverses_every_dataset_along_one_axis(
             (model.grids[name], flipped.grids[name], "x"),
             (model.qualities[name], flipped.qualities[name], "vs"),
         ):
-            # Same shape: every point is kept, none dropped.
+            # Same shape: the flip keeps every point and drops none.
             assert result[var].shape == original[var].shape
             np.testing.assert_array_equal(
                 result[var].values, np.flip(original[var].values, axis=axis)
