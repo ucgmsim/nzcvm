@@ -5,19 +5,28 @@ run-name: >-
   ${{ github.event.release.tag_name || github.ref_name }}
 
 # Builds every basin and tomography model from ucgmsim/nzcvm_data, tests
-# them, builds the site database from them, and uploads both to the public
-# Dropbox folder:
+# them, builds the site database from them, and publishes both as GitHub
+# release assets, which anyone can download without credentials:
 #
-#   resources.zip         Vs30, DEM and coastline. Fixed; uploaded by hand.
+#   models-vX.Y.Z.zip     Built once per release, attached to that release
+#   sites-vX.Y.Z.zip      and linked from its description with their SHA-256.
+#   models-master.zip     Rebuilt on every push to master, and attached to
+#   sites-master.zip      the one rolling `vm-data-master` prerelease.
+#
+# Each zip has a `.sha256` sidecar. A dispatch from any other branch uploads
+# the zips as a workflow artifact for a week instead, so it can't overwrite
+# master's files or a release's.
+#
+# The inputs still come from a public Dropbox folder, where they are uploaded
+# by hand:
+#
+#   resources.zip         Vs30, DEM and coastline. Fixed.
 #   stations.csv          Station list. The site database covers its
-#                         observational stations. Uploaded by hand.
-#   models-master.zip     Rebuilt on every push to master.
-#   sites-master.zip
-#   models-vX.Y.Z.zip     Built once per release, and linked from the
-#   sites-vX.Y.Z.zip      release description with their SHA-256.
+#                         observational stations.
 #
 # Needs a RCLONE_CONFIG secret holding an rclone config with a `dropbox`
-# remote that can write to and share from the folder below.
+# remote that can read from and share from the folder below. Nothing is
+# written to Dropbox.
 
 on:
   push:
@@ -35,11 +44,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'release' }}
 
 permissions:
-  # Editing the release description.
+  # Attaching assets to releases, creating and editing the rolling one, and
+  # moving its tag.
   contents: write
 
 env:
   DROPBOX_DIR: "dropbox:/QuakeCoRE/Public/VM Data"
+  # The rolling prerelease that holds master's build. The tag has no digits,
+  # so it can't be read as a version: setuptools-scm only looks at tags
+  # matching `*[0-9]*`, and its tag regex needs a digit after any prefix.
+  # Never rename it to something version-like (`master-2026`, `v2-latest`).
+  ROLLING_TAG: vm-data-master
   DATA_REPO: https://github.com/ucgmsim/nzcvm_data.git
   NZCVM_DATA_ROOT: ${{ github.workspace }}/nzcvm_data
   # Only the LFS files the Justfile recipes read: the basin surfaces, and the
@@ -51,6 +66,12 @@ env:
 
 jobs:
   publish:
+    # The rolling prerelease is created by this workflow. Events caused by
+    # the workflow's own GITHUB_TOKEN don't start other workflows, so this
+    # would not loop, but a token swapped for a PAT someday would.
+    if: >-
+      github.event_name != 'release'
+      || github.event.release.tag_name != 'vm-data-master'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -113,7 +134,8 @@ jobs:
         # Also zips sites/ into sites.zip.
         run: just sites --n-threads "$(nproc)"
 
-      - name: Upload to Dropbox
+      - name: Checksum and describe the outputs
+        id: pkg
         env:
           TAG: ${{ github.event.release.tag_name }}
           DATA_SHA: ${{ steps.data.outputs.sha }}
@@ -122,23 +144,49 @@ jobs:
             Site database: profiles, and Vs30, Z1.0 and Z2.5 per station
           RESOURCES_ABOUT: Vs30, DEM and coastline that the models build from
         run: |
-          # A dispatch from another branch mustn't overwrite master's files.
-          suffix="${GITHUB_REF_NAME//\//-}"
-          if [ -n "$TAG" ]; then suffix="v${TAG#v}"; fi
-          row() { printf '| [%s](%s) | %s | `%s` |\n' "$@"; }
+          # Where the files go decides their names. Only a release or master
+          # may publish: a dispatch from another branch gets a workflow
+          # artifact, so it can't overwrite master's files or a release's.
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            mode=release; release_tag="$TAG"; suffix="v${TAG#v}"
+          elif [ "$GITHUB_REF" = refs/heads/master ]; then
+            mode=rolling; release_tag="$ROLLING_TAG"; suffix=master
+          else
+            mode=artifact; release_tag=""; suffix="${GITHUB_REF_NAME//\//-}"
+          fi
+          {
+            echo "mode=$mode"
+            echo "release_tag=$release_tag"
+            echo "suffix=$suffix"
+          } >> "$GITHUB_OUTPUT"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download"
+
+          # A file published as a release asset links to its download URL.
+          # An artifact has no stable one, so it is named without a link.
+          # The backticks are Markdown, not command substitution.
+          # shellcheck disable=SC2016
+          row() {
+            if [ -n "$2" ]; then
+              printf '| [%s](%s) | %s | `%s` |\n' "$@"
+            else
+              printf '| %s | %s | `%s` |\n' "$1" "$3" "$4"
+            fi
+          }
           rows=()
+          mkdir -p publish
           for kind in models sites; do
             name="$kind-$suffix.zip"
             sha=$(sha256sum "$kind.zip" | cut -d' ' -f1)
+            mv "$kind.zip" "publish/$name"
             # The checksum sits beside each zip too, since only releases
             # record it in their description.
-            echo "$sha  $name" > "$name.sha256"
-            rclone copyto "$kind.zip" "$DROPBOX_DIR/$name"
-            rclone copyto "$name.sha256" "$DROPBOX_DIR/$name.sha256"
+            echo "$sha  $name" > "publish/$name.sha256"
             about="${kind^^}_ABOUT"
-            link=$(rclone link "$DROPBOX_DIR/$name")
+            link=""
+            if [ -n "$release_tag" ]; then link="$base/$release_tag/$name"; fi
             rows+=("$(row "$name" "$link" "${!about}" "$sha")")
           done
+          # resources.zip is an input, so its link is still Dropbox's.
           link=$(rclone link "$DROPBOX_DIR/resources.zip")
           sha=$(sha256sum resources.zip | cut -d' ' -f1)
           rows+=("$(row resources.zip "$link" "$RESOURCES_ABOUT" "$sha")")
@@ -156,12 +204,15 @@ jobs:
           } > downloads.md
           cat downloads.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Add the links to the release
-        if: github.event_name == 'release'
+      - name: Attach to the release
+        if: steps.pkg.outputs.mode == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ steps.pkg.outputs.release_tag }}
         run: |
+          # --clobber replaces an asset of the same name, so a re-run of the
+          # workflow for this release replaces the files rather than failing.
+          gh release upload "$TAG" publish/* --clobber
           # Drop any table from an earlier run of this release, so a re-run
           # replaces it rather than adding a second.
           gh release view "$TAG" --json body --jq .body \
@@ -169,3 +220,50 @@ jobs:
           printf '\n' >> body.md
           cat downloads.md >> body.md
           gh release edit "$TAG" --notes-file body.md
+
+      - name: Update the rolling master release
+        if: steps.pkg.outputs.mode == 'rolling'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pkg.outputs.release_tag }}
+        run: |
+          # Unlike a release, this one is replaced rather than versioned, so
+          # its description is rewritten whole.
+          {
+            echo "Automated, mutable build of master. It is replaced on every"
+            echo "push to master, so its files change without notice. Use a"
+            echo "versioned release for anything that needs to be reproduced"
+            echo "or cited."
+            echo
+            echo "Built from [nzcvm@${GITHUB_SHA:0:7}]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
+            echo
+            cat downloads.md
+          } > body.md
+          title="Model data from master"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # Assets first, so the release is never left without files, then
+            # the tag, then the description that names the commit.
+            gh release upload "$TAG" publish/* --clobber
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            gh release edit "$TAG" --title "$title" --notes-file body.md \
+              --prerelease --latest=false
+          else
+            # Creates the tag at this commit. It's a prerelease, and never
+            # Latest, so the releases page and `releases/latest` still point
+            # at the newest version.
+            gh release create "$TAG" publish/* --target "$GITHUB_SHA" \
+              --title "$title" --notes-file body.md \
+              --prerelease --latest=false
+          fi
+
+      - name: Upload as a workflow artifact
+        if: steps.pkg.outputs.mode == 'artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-data-${{ steps.pkg.outputs.suffix }}
+          path: publish/*
+          # Zips are already compressed.
+          compression-level: 0
+          # A branch test, not a release: let it expire.
+          retention-days: 7

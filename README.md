@@ -82,6 +82,22 @@ The config selects the grid, the layer chain, and the models to query. The
 output extension selects the writer. The preceding example needs `resources/`
 (DEM, Vs30, coastline) and `models/` to be present.
 
+The built `models/` directory is a release asset. Each
+[release](https://github.com/ucgmsim/nzcvm/releases) has
+`models-vX.Y.Z.zip` and `sites-vX.Y.Z.zip` (the site database) as assets, each
+with a `.sha256` checksum file, and its description links `resources.zip`. The
+[`vm-data-master` prerelease](https://github.com/ucgmsim/nzcvm/releases/tag/vm-data-master)
+holds `models-master.zip` and `sites-master.zip`, rebuilt on every push to
+master. Its files change without notice, so use a versioned release for
+anything you need to reproduce.
+
+```sh
+tag=vX.Y.Z   # a release tag
+gh release download "$tag" --repo ucgmsim/nzcvm --pattern 'models-*'
+sha256sum --check "models-$tag.zip.sha256"
+unzip "models-$tag.zip"
+```
+
 With no data to hand, build the synthetic dataset instead, then run against
 it:
 
