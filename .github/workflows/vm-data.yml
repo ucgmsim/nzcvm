@@ -10,12 +10,14 @@ run-name: >-
 #
 #   models-vX.Y.Z.zip     Built once per release, attached to that release
 #   sites-vX.Y.Z.zip      and linked from its description with their SHA-256.
-#   models-master.zip     Rebuilt on every push to master, and attached to
-#   sites-master.zip      the one rolling `vm-data-master` prerelease.
+#   models-master.zip     Rebuilt on every push to master, and replaced on
+#   sites-master.zip      the one rolling `vm-data-tip` prerelease.
+#   models-<branch>.zip   Built when the workflow is dispatched on another
+#   sites-<branch>.zip    branch, and replaced on the same prerelease.
 #
-# Each zip has a `.sha256` sidecar. A dispatch from any other branch uploads
-# the zips as a workflow artifact for a week instead, so it can't overwrite
-# master's files or a release's.
+# Each zip has a `.sha256` sidecar. The prerelease holds the newest build of
+# each branch and nothing older. Its files don't expire, and a branch's files
+# are named for it, so it can't overwrite master's or a release's.
 #
 # The inputs still come from a public Dropbox folder, where they are uploaded
 # by hand:
@@ -50,11 +52,13 @@ permissions:
 
 env:
   DROPBOX_DIR: "dropbox:/QuakeCoRE/Public/VM Data"
-  # The rolling prerelease that holds master's build. The tag has no digits,
-  # so it can't be read as a version: setuptools-scm only looks at tags
-  # matching `*[0-9]*`, and its tag regex needs a digit after any prefix.
-  # Never rename it to something version-like (`master-2026`, `v2-latest`).
-  ROLLING_TAG: vm-data-master
+  # The rolling prerelease that holds each branch's newest build. The tag has
+  # no digits, so it can't be read as a version: setuptools-scm only looks at
+  # tags matching `*[0-9]*`, and its tag regex needs a digit after any prefix.
+  # Never rename it to something version-like (`tip-2026`, `v2-latest`). The
+  # job conditions here and in publish-PyPI.yml repeat the name, since `env`
+  # can't be read there.
+  ROLLING_TAG: vm-data-tip
   DATA_REPO: https://github.com/ucgmsim/nzcvm_data.git
   NZCVM_DATA_ROOT: ${{ github.workspace }}/nzcvm_data
   # Only the LFS files the Justfile recipes read: the basin surfaces, and the
@@ -71,7 +75,7 @@ jobs:
     # would not loop, but a token swapped for a PAT someday would.
     if: >-
       github.event_name != 'release'
-      || github.event.release.tag_name != 'vm-data-master'
+      || github.event.release.tag_name != 'vm-data-tip'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -144,34 +148,24 @@ jobs:
             Site database: profiles, and Vs30, Z1.0 and Z2.5 per station
           RESOURCES_ABOUT: Vs30, DEM and coastline that the models build from
         run: |
-          # Where the files go decides their names. Only a release or master
-          # may publish: a dispatch from another branch gets a workflow
-          # artifact, so it can't overwrite master's files or a release's.
+          # A release's files go on that release. Any branch's go on the
+          # rolling prerelease under the branch's name, so a dispatch from
+          # another branch can't overwrite master's files or a release's.
           if [ "$GITHUB_EVENT_NAME" = release ]; then
             mode=release; release_tag="$TAG"; suffix="v${TAG#v}"
-          elif [ "$GITHUB_REF" = refs/heads/master ]; then
-            mode=rolling; release_tag="$ROLLING_TAG"; suffix=master
           else
-            mode=artifact; release_tag=""; suffix="${GITHUB_REF_NAME//\//-}"
+            mode=rolling; release_tag="$ROLLING_TAG"
+            suffix="${GITHUB_REF_NAME//\//-}"
           fi
           {
             echo "mode=$mode"
             echo "release_tag=$release_tag"
-            echo "suffix=$suffix"
           } >> "$GITHUB_OUTPUT"
           base="https://github.com/$GITHUB_REPOSITORY/releases/download"
 
-          # A file published as a release asset links to its download URL.
-          # An artifact has no stable one, so it is named without a link.
           # The backticks are Markdown, not command substitution.
           # shellcheck disable=SC2016
-          row() {
-            if [ -n "$2" ]; then
-              printf '| [%s](%s) | %s | `%s` |\n' "$@"
-            else
-              printf '| %s | %s | `%s` |\n' "$1" "$3" "$4"
-            fi
-          }
+          row() { printf '| [%s](%s) | %s | `%s` |\n' "$@"; }
           rows=()
           mkdir -p publish
           for kind in models sites; do
@@ -182,8 +176,7 @@ jobs:
             # record it in their description.
             echo "$sha  $name" > "publish/$name.sha256"
             about="${kind^^}_ABOUT"
-            link=""
-            if [ -n "$release_tag" ]; then link="$base/$release_tag/$name"; fi
+            link="$base/$release_tag/$name"
             rows+=("$(row "$name" "$link" "${!about}" "$sha")")
           done
           # resources.zip is an input, so its link is still Dropbox's.
@@ -221,49 +214,48 @@ jobs:
           cat downloads.md >> body.md
           gh release edit "$TAG" --notes-file body.md
 
-      - name: Update the rolling master release
+      - name: Update the rolling release
         if: steps.pkg.outputs.mode == 'rolling'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.pkg.outputs.release_tag }}
         run: |
-          # Unlike a release, this one is replaced rather than versioned, so
-          # its description is rewritten whole.
+          # Unlike a release, this one is replaced rather than versioned.
+          # Its description describes master's build, so only a master build
+          # rewrites it, and rewrites it whole.
           {
-            echo "Automated, mutable build of master. It is replaced on every"
-            echo "push to master, so its files change without notice. Use a"
-            echo "versioned release for anything that needs to be reproduced"
-            echo "or cited."
-            echo
-            echo "Built from [nzcvm@${GITHUB_SHA:0:7}]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
-            echo
-            cat downloads.md
+            echo "Automated, mutable builds. \`models-master.zip\` and"
+            echo "\`sites-master.zip\` are replaced on every push to master,"
+            echo "and a branch's files whenever the workflow is dispatched on"
+            echo "it, so files here change without notice. Use a versioned"
+            echo "release for anything that needs to be reproduced or cited."
           } > body.md
-          title="Model data from master"
+          if [ "$GITHUB_REF" = refs/heads/master ]; then
+            {
+              echo
+              echo "Master's files were built from [nzcvm@${GITHUB_SHA:0:7}]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)."
+              echo
+              cat downloads.md
+            } >> body.md
+          fi
+          title="Model data from the tip of each branch"
           if gh release view "$TAG" > /dev/null 2>&1; then
-            # Assets first, so the release is never left without files, then
-            # the tag, then the description that names the commit.
+            # --clobber replaces this branch's earlier files. Assets first,
+            # so the release is never left without files.
             gh release upload "$TAG" publish/* --clobber
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
-              -f sha="$GITHUB_SHA" -F force=true > /dev/null
-            gh release edit "$TAG" --title "$title" --notes-file body.md \
-              --prerelease --latest=false
+            if [ "$GITHUB_REF" = refs/heads/master ]; then
+              # Then the tag, then the description that names the commit.
+              gh api --method PATCH \
+                "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+                -f sha="$GITHUB_SHA" -F force=true > /dev/null
+              gh release edit "$TAG" --title "$title" --notes-file body.md \
+                --prerelease --latest=false
+            fi
           else
-            # Creates the tag at this commit. It's a prerelease, and never
-            # Latest, so the releases page and `releases/latest` still point
-            # at the newest version.
+            # Creates the tag at this commit; the next master build moves it
+            # to master. It's a prerelease, and never Latest, so the releases
+            # page and `releases/latest` still point at the newest version.
             gh release create "$TAG" publish/* --target "$GITHUB_SHA" \
               --title "$title" --notes-file body.md \
               --prerelease --latest=false
           fi
-
-      - name: Upload as a workflow artifact
-        if: steps.pkg.outputs.mode == 'artifact'
-        uses: actions/upload-artifact@v4
-        with:
-          name: vm-data-${{ steps.pkg.outputs.suffix }}
-          path: publish/*
-          # Zips are already compressed.
-          compression-level: 0
-          # A branch test, not a release: let it expire.
-          retention-days: 7

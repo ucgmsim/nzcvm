@@ -86,7 +86,7 @@ The built `models/` directory is a release asset. Each
 [release](https://github.com/ucgmsim/nzcvm/releases) has
 `models-vX.Y.Z.zip` and `sites-vX.Y.Z.zip` (the site database) as assets, each
 with a `.sha256` checksum file, and its description links `resources.zip`. The
-[`vm-data-master` prerelease](https://github.com/ucgmsim/nzcvm/releases/tag/vm-data-master)
+[`vm-data-tip` prerelease](https://github.com/ucgmsim/nzcvm/releases/tag/vm-data-tip)
 holds `models-master.zip` and `sites-master.zip`, rebuilt on every push to
 master. Its files change without notice, so use a versioned release for
 anything you need to reproduce.
