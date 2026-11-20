@@ -15,6 +15,10 @@ jobs:
   # sdist plus a cibuildwheel matrix (Linux, macOS, Windows) over every CPython
   # that requires-python allows. See ucgmsim/meta-ci-action's README.
   build:
+    # vm-data.yml keeps a rolling prerelease tagged vm-data-tip. It is
+    # created with GITHUB_TOKEN, which can't start this workflow, but skip it
+    # by name too in case that ever changes. `publish-to-pypi` needs `build`.
+    if: github.event.release.tag_name != 'vm-data-tip'
     uses: ucgmsim/meta-ci-action/.github/workflows/build-dist.yml@v2.3
     with:
       ref: ${{ inputs.tag_name }} # empty on a release: builds the release tag
