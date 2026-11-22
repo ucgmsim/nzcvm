@@ -309,6 +309,33 @@ def test_clamp_config_accepts_relative_bounds(bound: Bound) -> None:
     assert cfg.clamps[Component.QS] == bound
 
 
+@pytest.mark.parametrize(
+    "clamps",
+    [
+        # Qs bounded by itself.
+        {Component.QS: Bound(min=0.5, min_ref=Component.QS)},
+        # Qs and Qp bounded by each other.
+        {
+            Component.QS: Bound(min=0.5, min_ref=Component.QP),
+            Component.QP: Bound(max=4.0, max_ref=Component.QS),
+        },
+    ],
+)
+def test_clamp_config_rejects_cyclic_references(clamps: dict) -> None:
+    with pytest.raises(InvalidFieldValue, match="cycle"):
+        ClampLayerConfig(clamps=clamps)
+
+
+def test_clamp_config_accepts_acyclic_reference_chain() -> None:
+    clamps = {
+        Component.VS: Bound(min=500.0),
+        Component.QS: Bound(min=0.05, min_ref=Component.VS),
+        Component.QP: Bound(min=2.0, min_ref=Component.QS),
+    }
+    cfg = ClampLayerConfig(clamps=clamps)
+    assert cfg.clamps == clamps
+
+
 def test_clamp_config_accepts_valid_vp_vs_ratio() -> None:
     c = ClampLayerConfig(min_vp_vs_ratio=1.5, max_vp_vs_ratio=2.5)
     assert c.min_vp_vs_ratio == 1.5
