@@ -16,6 +16,7 @@ library's responsibility.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from hypothesis import given
@@ -339,6 +340,172 @@ def test_clamp_config_accepts_acyclic_reference_chain() -> None:
 def test_clamp_config_accepts_valid_vp_vs_ratio() -> None:
     c = ClampLayerConfig(min_vp_vs_ratio=1.5, max_vp_vs_ratio=2.5)
     assert c.min_vp_vs_ratio == 1.5
+
+
+# ---------------------------------------------------------------------------
+# Clamp config error reporting: which field is blamed, with what value
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min": 1000.0},
+        {"min": 1000.0, "depth": 100.0, "elevation": 100.0},
+    ],
+)
+def test_clamp_floor_needs_exactly_one_of_depth_or_elevation(kwargs) -> None:
+    with pytest.raises(InvalidFieldValue) as excinfo:
+        Floor(**kwargs)
+    err = excinfo.value
+    assert err.field_name == "depth"
+    assert err.field_type is float
+    assert err.holder_class is Floor
+    assert err.field_value == {
+        "depth": kwargs.get("depth"),
+        "elevation": kwargs.get("elevation"),
+    }
+    assert err.msg == "Set exactly one of depth or elevation."
+
+
+def test_clamp_floor_rejects_negative_depth_reporting_the_depth() -> None:
+    with pytest.raises(InvalidFieldValue) as excinfo:
+        Floor(min=1000.0, depth=-100.0)
+    err = excinfo.value
+    assert err.field_name == "depth"
+    assert err.field_type is float
+    assert err.field_value == -100.0
+    assert err.holder_class is Floor
+    assert err.msg == "Depth must be non-negative (>= 0), got -100.0."
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"min": 1000.0, "depth": 0.0},
+        # Elevations are positive down, so a negative one is above sea level.
+        {"min": 1000.0, "elevation": -500.0},
+    ],
+)
+def test_clamp_floor_accepts_boundary_positions(kwargs) -> None:
+    floor = Floor(**kwargs)
+    assert floor.depth == kwargs.get("depth")
+    assert floor.elevation == kwargs.get("elevation")
+
+
+@pytest.mark.parametrize(
+    "kwargs, field_name, msg",
+    [
+        # Constant bounds.
+        ({"min": 0.0}, "min", "Minimum Component must be > 0, have: 0.0."),
+        ({"min": -1.0}, "min", "Minimum Component must be > 0, have: -1.0."),
+        (
+            {"min": 5.0, "max": 1.0},
+            "max",
+            "bounds make no sense",
+        ),
+        # Relative bounds.
+        (
+            {"min": 0.0, "min_ref": Component.VS},
+            "min",
+            "Minimum multiplier must be > 0, have: 0.0.",
+        ),
+        (
+            {"min": 0.5, "min_ref": Component.VS, "max": -1.0, "max_ref": Component.VP},
+            "max",
+            "Maximum multiplier must be > 0, have: -1.0.",
+        ),
+        (
+            {"min": 0.5, "min_ref": Component.VS, "max": 0.1, "max_ref": Component.VS},
+            "max",
+            "Bounds make no sense: min (0.5) must be <= max (0.1).",
+        ),
+        # A reference without its multiplier.
+        (
+            {"min_ref": Component.VS},
+            "min",
+            "min_ref is set but min multiplier is missing.",
+        ),
+        (
+            {"max_ref": Component.VS},
+            "max",
+            "max_ref is set but max multiplier is missing.",
+        ),
+        # A floor that can never be satisfied under the max.
+        (
+            {"max": 800.0, "floors": [Floor(min=1000.0, depth=100.0)]},
+            "floors",
+            "Floor minimums must be <= max (800.0).",
+        ),
+    ],
+)
+def test_clamp_bound_errors_name_the_faulty_field(kwargs, field_name, msg) -> None:
+    with pytest.raises(InvalidFieldValue) as excinfo:
+        Bound(**kwargs)
+    err = excinfo.value
+    assert err.field_name == field_name
+    assert err.field_type is float
+    assert err.holder_class is Bound
+    assert msg in str(err)
+    assert err.field_value["min"] == kwargs.get("min")
+    assert err.field_value["max"] == kwargs.get("max")
+
+
+@pytest.mark.parametrize("side", ["min", "max"])
+def test_clamp_bound_rejects_unknown_reference(side: str) -> None:
+    with pytest.raises(InvalidFieldValue) as excinfo:
+        # A misspelt component name, as a TOML/dict value would carry it.
+        kwargs: dict[str, Any] = {side: 0.5, f"{side}_ref": "vsx"}
+        Bound(**kwargs)
+    err = excinfo.value
+    assert err.field_name == f"{side}_ref"
+    assert err.field_type is float
+    assert "'vsx'" in str(err)
+    assert all(f"'{c}'" in str(err) for c in Component)
+
+
+def test_clamp_bound_coerces_reference_strings_to_components() -> None:
+    bound = Bound(min=0.05, min_ref="vs", max=0.5, max_ref="vp")  # ty: ignore[invalid-argument-type] -- a TOML/dict value arrives as a plain string
+    assert bound.min_ref is Component.VS
+    assert bound.max_ref is Component.VP
+
+
+def test_clamp_bound_same_reference_allows_equal_multipliers() -> None:
+    bound = Bound(min=0.1, min_ref=Component.VS, max=0.1, max_ref=Component.VS)
+    assert bound.min == bound.max == 0.1
+
+
+def test_clamp_bound_relative_max_ignores_floors_above_multiplier() -> None:
+    # A relative max is a multiplier, so it can't be compared to a floor's min.
+    floors = [Floor(min=1000.0, depth=100.0)]
+    bound = Bound(max=2.0, max_ref=Component.VS, floors=floors)
+    assert bound.floors == floors
+
+
+@pytest.mark.parametrize(
+    "kwargs, field_name",
+    [
+        ({"min_vp_vs_ratio": 0.0}, "min_vp_vs_ratio"),
+        ({"min_vp_vs_ratio": -1.0, "max_vp_vs_ratio": 2.0}, "min_vp_vs_ratio"),
+        ({"max_vp_vs_ratio": 0.0}, "max_vp_vs_ratio"),
+        ({"min_vp_vs_ratio": 3.0, "max_vp_vs_ratio": 1.0}, "max_vp_vs_ratio"),
+    ],
+)
+def test_clamp_config_vp_vs_ratio_errors_name_the_faulty_field(
+    kwargs, field_name
+) -> None:
+    with pytest.raises(InvalidFieldValue) as excinfo:
+        ClampLayerConfig(**kwargs)
+    err = excinfo.value
+    assert err.field_name == field_name
+    assert err.field_value == kwargs[field_name]
+    assert err.holder_class is ClampLayerConfig
+    assert "Vp/Vs ratio" in str(err)
+
+
+def test_clamp_config_accepts_equal_vp_vs_ratio_bounds() -> None:
+    c = ClampLayerConfig(min_vp_vs_ratio=1.8, max_vp_vs_ratio=1.8)
+    assert c.min_vp_vs_ratio == c.max_vp_vs_ratio == 1.8
 
 
 # ---------------------------------------------------------------------------
