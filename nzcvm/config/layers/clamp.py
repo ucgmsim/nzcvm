@@ -1,3 +1,4 @@
+import graphlib
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -197,6 +198,8 @@ class ClampLayerConfig(LayerConfig):
     another component via ``min_ref``/``max_ref`` on the :class:`Bound`.
     Writing ``[layers.clamps.qs] min = 0.05, min_ref = "vs"`` floors Qs at
     ``50 * Vs`` (Vs in m/s), and ``qp`` bounds against ``vp`` the same way.
+    References must not form a cycle (e.g. ``qs`` referring to ``qs``, or
+    ``qs`` and ``qp`` referring to each other); such a config is rejected.
 
     A bound's ``floors`` raise its minimum with depth.  The Vs floors below
     keep a global 500 m/s minimum, but tolerate nothing under 1000 m/s from
@@ -235,4 +238,20 @@ class ClampLayerConfig(LayerConfig):
                 field_value=getattr(self, faulty_field),
                 holder_class=self.__class__,
                 msg=str(e),
+            ) from e
+
+        graph = {
+            c: {ref for ref in (bound.min_ref, bound.max_ref) if ref}
+            for c, bound in self.clamps.items()
+        }
+        try:
+            graphlib.TopologicalSorter(graph).prepare()
+        except graphlib.CycleError as e:
+            cycle = " -> ".join(str(c) for c in e.args[1])
+            raise InvalidFieldValue(
+                field_name="clamps",
+                field_type=dict,
+                field_value=self.clamps,
+                holder_class=self.__class__,
+                msg=f"Clamp bounds reference each other in a cycle: {cycle}.",
             ) from e
