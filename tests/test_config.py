@@ -523,3 +523,45 @@ def test_register_grid_config_imports_every_grid_submodule(
         assert name in sys.modules
     # The imported modules register their configs as GridConfig subclasses.
     assert issubclass(RegularGridConfig, grids.GridConfig)
+
+
+# ---------------------------------------------------------------------------
+# Layer config registration
+# ---------------------------------------------------------------------------
+
+
+def test_register_layer_config_imports_every_layer_submodule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``register_layer_config`` imports each layer config module by full name.
+
+    It must import exactly the submodules of :mod:`nzcvm.config.layers`, under
+    their fully qualified names, so that each ``LayerConfig`` subclass is
+    registered with the ``type`` discriminator.
+    """
+    import importlib
+    import sys
+
+    from nzcvm.config import layers
+
+    real_import_module = importlib.import_module
+    imported: list[str] = []
+
+    def recording_import_module(name: str, package: str | None = None):
+        imported.append(name)
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", recording_import_module)
+    layers.register_layer_config()
+
+    expected = {
+        f"nzcvm.config.layers.{name}"
+        for name in ("backus", "clamp", "coastline", "core", "ely", "offshore", "query")
+    }
+    assert set(imported) == expected
+    assert len(imported) == len(expected)
+    for name in expected:
+        assert name in sys.modules
+    # The imported modules register their configs as LayerConfig subclasses.
+    assert issubclass(ClampLayerConfig, layers.LayerConfig)
+    assert issubclass(ElyLayerConfig, layers.LayerConfig)
