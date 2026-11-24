@@ -135,7 +135,7 @@ class Bound(ConfigObject):
                     )
         except ValueError as e:
             self._raise(
-                "max" if self.max and self.min and self.max < self.min else "min",
+                "min" if self.min is not None and self.min <= 0 else "max",
                 str(e),
             )
 
