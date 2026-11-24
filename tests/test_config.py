@@ -447,8 +447,14 @@ def test_clamp_bound_errors_name_the_faulty_field(kwargs, field_name, msg) -> No
     assert err.field_type is float
     assert err.holder_class is Bound
     assert msg in str(err)
-    assert err.field_value["min"] == kwargs.get("min")
-    assert err.field_value["max"] == kwargs.get("max")
+    # The error reports the whole bound, keyed by its field names.
+    assert err.field_value == {
+        "min": kwargs.get("min"),
+        "max": kwargs.get("max"),
+        "min_ref": kwargs.get("min_ref"),
+        "max_ref": kwargs.get("max_ref"),
+        "floors": kwargs.get("floors", []),
+    }
 
 
 @pytest.mark.parametrize("side", ["min", "max"])
@@ -460,6 +466,9 @@ def test_clamp_bound_rejects_unknown_reference(side: str) -> None:
     err = excinfo.value
     assert err.field_name == f"{side}_ref"
     assert err.field_type is float
+    # The unparsed reference is reported as given, under its own key.
+    assert err.field_value[f"{side}_ref"] == "vsx"
+    assert err.field_value[side] == 0.5
     assert "'vsx'" in str(err)
     assert all(f"'{c}'" in str(err) for c in Component)
 
