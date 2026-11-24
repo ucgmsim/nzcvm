@@ -399,6 +399,8 @@ def test_clamp_floor_accepts_boundary_positions(kwargs) -> None:
         # Constant bounds.
         ({"min": 0.0}, "min", "Minimum Component must be > 0, have: 0.0."),
         ({"min": -1.0}, "min", "Minimum Component must be > 0, have: -1.0."),
+        ({"max": -1.0}, "max", "Maximum Component must be > 0, have: -1.0."),
+        ({"min": -2.0, "max": -3.0}, "min", "bounds make no sense"),
         (
             {"min": 5.0, "max": 1.0},
             "max",
@@ -419,6 +421,11 @@ def test_clamp_floor_accepts_boundary_positions(kwargs) -> None:
             {"min": 0.5, "min_ref": Component.VS, "max": 0.1, "max_ref": Component.VS},
             "max",
             "Bounds make no sense: min (0.5) must be <= max (0.1).",
+        ),
+        (
+            {"max": -1.0, "max_ref": Component.VS},
+            "max",
+            "Maximum multiplier must be > 0, have: -1.0.",
         ),
         # A reference without its multiplier.
         (
