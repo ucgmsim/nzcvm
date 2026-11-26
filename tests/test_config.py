@@ -44,6 +44,7 @@ from nzcvm.config.validation import (
     lt,
     max_len,
     min_len,
+    path_type,
     regex,
     validate_non_negative,
     validate_positive,
@@ -748,3 +749,35 @@ def test_register_layer_config_imports_every_layer_submodule(
     # The imported modules register their configs as LayerConfig subclasses.
     assert issubclass(ClampLayerConfig, layers.LayerConfig)
     assert issubclass(ElyLayerConfig, layers.LayerConfig)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"file_okay": True, "dir_okay": False},
+        {"file_okay": False, "dir_okay": True},
+        {"resolve": False},
+    ],
+)
+def test_path_type_exists_rejects_missing_path(tmp_path: Path, kwargs: dict[str, Any]):
+    """``path_type(exists=True)`` must reject a path that does not exist."""
+    missing = tmp_path / "missing.h5"
+    with pytest.raises(ValueError, match="Path does not exist"):
+        path_type(exists=True, **kwargs)(missing)
+
+
+def test_path_type_exists_false_accepts_missing_path(tmp_path: Path):
+    """``path_type(exists=False)`` lets a missing path through."""
+    missing = tmp_path / "missing.h5"
+    assert path_type(exists=False)(missing) == missing
+
+
+def test_path_type_exists_checks_expanded_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The existence check uses the path after ``~`` and ``$VAR`` expansion."""
+    (tmp_path / "data.h5").touch()
+    monkeypatch.setenv("NZCVM_TEST_DIR", str(tmp_path))
+    result = path_type(exists=True, dir_okay=False)(Path("$NZCVM_TEST_DIR/data.h5"))
+    assert result == tmp_path / "data.h5"

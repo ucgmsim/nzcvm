@@ -25,9 +25,15 @@ def path_type(
     resolve: bool = True,
     exists: bool = True,
 ) -> Callable[[Path], Path]:
-    """Ensures a path points to a file, directory, or either."""
+    """Ensures a path points to a file, directory, or either.
+
+    If ``exists`` is true, the path (after ``~`` and ``$VAR`` expansion when
+    ``resolve`` is true) must exist on the filesystem.
+    """
 
     def validator(p: Path) -> Path:
+        if exists:
+            validate_path_exists(resolve_path(p) if resolve and p is not None else p)
         if p is not None and p.exists():
             if not file_okay and p.is_file():
                 raise ValueError(f"Path must be a directory, but it is a file: '{p}'")
