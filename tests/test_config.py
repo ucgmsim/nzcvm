@@ -35,6 +35,7 @@ from nzcvm.config.layers.ely import ElyLayerConfig
 from nzcvm.config.layers.offshore import VelocityModel1D
 from nzcvm.config.metadata import ModelMetadata
 from nzcvm.config.validation import (
+    CRSStrategy,
     ge,
     gt,
     in_choices,
@@ -46,7 +47,9 @@ from nzcvm.config.validation import (
     min_len,
     path_type,
     regex,
+    resolve_path,
     validate_non_negative,
+    validate_path_exists,
     validate_positive,
 )
 from nzcvm.layers.clamp import ClampLayer
@@ -226,6 +229,120 @@ def test_in_choices_accepts_member(v: str) -> None:
 def test_in_choices_rejects_non_member() -> None:
     with pytest.raises(ValueError):
         in_choices(["a", "b"])("z")
+
+
+# ---------------------------------------------------------------------------
+# Error messages
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "validator, value, msg",
+    [
+        (gt(5), 5, "Must be strictly greater than 5, got 5"),
+        (ge(5), 4, "Must be greater than or equal to 5, got 4"),
+        (lt(5), 5, "Must be strictly less than 5, got 5"),
+        (le(5), 6, "Must be less than or equal to 5, got 6"),
+        (min_len(3), "ab", "Minimum allowed length/size is 3, got length 2"),
+    ],
+)
+def test_validator_errors_state_limit_and_value(validator, value, msg) -> None:
+    with pytest.raises(ValueError) as excinfo:
+        validator(value)
+    assert str(excinfo.value) == msg
+
+
+# ---------------------------------------------------------------------------
+# Path validators
+# ---------------------------------------------------------------------------
+
+
+def test_validate_path_exists_accepts_existing_and_none(tmp_path: Path) -> None:
+    f = tmp_path / "f.txt"
+    f.write_text("x")
+    assert validate_path_exists(f) == f
+    assert validate_path_exists(tmp_path) == tmp_path
+    assert validate_path_exists(None) is None  # ty: ignore[invalid-argument-type] None is documented as passing through
+
+
+def test_validate_path_exists_rejects_missing(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    with pytest.raises(ValueError) as excinfo:
+        validate_path_exists(missing)
+    assert str(excinfo.value) == f"Path does not exist: '{missing}'"
+
+
+def test_resolve_path_expands_user_and_env_vars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("NZCVM_TEST_DIR", "data")
+    assert resolve_path(Path("~/models")) == tmp_path / "models"
+    assert resolve_path(Path("/root/$NZCVM_TEST_DIR/x.h5")) == Path("/root/data/x.h5")
+    assert resolve_path(Path("plain/rel")) == Path("plain/rel")
+
+
+@pytest.fixture
+def file_and_dir(tmp_path: Path) -> tuple[Path, Path]:
+    f = tmp_path / "file.txt"
+    f.write_text("x")
+    d = tmp_path / "subdir"
+    d.mkdir()
+    return f, d
+
+
+def test_path_type_defaults_accept_files_and_dirs(file_and_dir) -> None:
+    f, d = file_and_dir
+    check = path_type()
+    assert check(f) == f
+    assert check(d) == d
+
+
+def test_path_type_defaults_resolve_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file_and_dir
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert path_type()(Path("~/file.txt")) == tmp_path / "file.txt"
+    assert path_type(resolve=False)(Path("~/file.txt")) == Path("~/file.txt")
+
+
+def test_path_type_dir_only_rejects_file(file_and_dir) -> None:
+    f, d = file_and_dir
+    check = path_type(file_okay=False, dir_okay=True)
+    assert check(d) == d
+    with pytest.raises(ValueError) as excinfo:
+        check(f)
+    assert str(excinfo.value) == f"Path must be a directory, but it is a file: '{f}'"
+
+
+def test_path_type_file_only_rejects_dir(file_and_dir) -> None:
+    f, d = file_and_dir
+    check = path_type(file_okay=True, dir_okay=False)
+    assert check(f) == f
+    with pytest.raises(ValueError) as excinfo:
+        check(d)
+    assert str(excinfo.value) == f"Path must be a file, but it is a directory: '{d}'"
+
+
+def test_path_type_unresolved_passes_none() -> None:
+    assert path_type(resolve=False)(None) is None  # ty: ignore[invalid-argument-type] optional fields pass None through
+
+
+# ---------------------------------------------------------------------------
+# CRS serialisation
+# ---------------------------------------------------------------------------
+
+
+def test_crs_strategy_round_trips_through_model_dict() -> None:
+    from pyproj import CRS
+
+    model = Model(
+        origin_lon=172.0, origin_lat=-43.5, azimuth=0.0, crs=CRS.from_epsg(2193)
+    )
+    serialised = model.to_dict()
+    assert serialised["crs"] == "EPSG:2193"
+    assert Model.from_dict(serialised) == model
+    assert CRSStrategy().deserialize(2193) == CRS.from_epsg(2193)
 
 
 # ---------------------------------------------------------------------------
